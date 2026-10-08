@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<!-- Content-Security-Policy: every script, stylesheet, image and font this page loads is same-origin and referenced relatively, so 'self' is the whole allow-list for external resources — which on an IPFS gateway means the entire gateway origin, not just this CID's directory, so a markup-injection point could load /ipfs/<other-cid>/x.js as same-origin.
+		     script-src stays 'self' and script-src-attr stays 'none', but one directive is deliberately relaxed: script-src-elem 'self' 'unsafe-inline' lets the page carry an inline script element.
+		     That exception exists for one reason — Mozilla bug 1267027, open for about a decade: when a browser wallet injects its provider into the page as an inline script element, Firefox checks that element against the page's script-src/script-src-elem policy instead of exempting the extension's injection, so a policy without inline script blocks the provider stub and the wallet never appears.
+		     That mechanism — Firefox resolving the injected element against script-src-elem rather than script-src — is the load-bearing premise of this workaround, and the scoped allowance is unverified pending the manual Firefox acceptance check in README.md's "Testing with a real wallet" section.
+		     Scoping 'unsafe-inline' to script-src-elem — the directive that governs script elements and overrides script-src for them when present — unblocks that one injection vector while leaving script-src and script-src-attr untouched.
+		     The workaround only functions because script-src-elem itself carries no nonce and no hash source: a nonce or hash in script-src-elem would make its 'unsafe-inline' ignored per the CSP spec and the allowance would silently stop applying, whereas a nonce or hash in script-src alone would not.
+		     Browsers that ignore script-src-elem (Firefox before 108) simply keep blocking the injection — a missed workaround, not a widened policy.
+		     The price is real and worth stating plainly: in every engine that honors script-src-elem the old blanket guarantee that no inline script element anywhere can execute is gone, so a markup-injection point would become a script execution point.
+		     The allowance is not confined to elements either: in CSP3 a javascript: URL is checked against the same script-src-elem effective directive, so 'unsafe-inline' there could also re-allow a javascript: navigation — not exploitable here only because the app never produces one (the acceptance sweep forbids it in index.html and safeUrl refuses it in every href).
+		     That is acceptable only because the app has no markup-injection point, and everything else here still stands as defense-in-depth — script-src-attr 'none' keeps inline event handlers blocked, require-trusted-types-for 'script' (enforced by Chromium) turns the markup sinks this app never uses — innerHTML, insertAdjacentHTML, eval — into loud failures rather than silent injection points, 'unsafe-eval' is still absent so eval and new Function stay blocked, external scripts are still confined to 'self' (the whole gateway origin, as noted above), and object-src, base-uri, frame-src, child-src, worker-src, form-action and connect-src all stay 'none'.
+		     That defense-in-depth is thinner in the engine this workaround targets: Firefox does not enforce require-trusted-types-for, so there the residual risk rests only on the source-level acceptance sweep that forbids the markup sinks and on the h() builder's allow-list, both outside CSP.
+		     The acceptance sweep in tests/acceptance.test.mjs proves none of those sinks appears in the served tree.
+		     connect-src 'none' forbids every page-origin outbound channel — fetch, XHR, WebSocket, EventSource, beacon — and costs the app nothing, because its only outbound path is the injected wallet's own transport (window.ethereum, or an EIP-6963 provider), which runs in the wallet extension's context and is not a page-origin request, so CSP never sees it.
+		     A wallet that reaches the chain over a relay or RPC endpoint instead (a QR/WalletConnect wallet, an embedded provider that does its own HTTP) would need the minimum connect-src entries for those endpoints; that is the one place to widen this policy, and widening it should stay a conscious decision because the no-network guarantee is what it rests on.
+		     frame-ancestors and sandbox are deliberately absent: a meta-delivered policy ignores both, and this file is the only delivery a static IPFS gateway supports. -->
+		<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none'; media-src 'none'; form-action 'none'; script-src 'self'; script-src-elem 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self'; style-src-attr 'none'; img-src 'self'; font-src 'none'; connect-src 'none'; require-trusted-types-for 'script'">
+		<!-- The invoice being viewed lives in this page's own URL fragment, and browsers already protect it: the fragment is excluded from the Referer header and never sent in a form submission.
+		     no-referrer and form-action 'none' above are cheap belt-and-braces on top of that browser behavior, not the load-bearing control. -->
+		<meta name="referrer" content="no-referrer">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Invoicing &amp; Payment SPA</title>
+		<link rel="icon" type="image/svg+xml" href="images/favicon.svg">
+		<link rel="stylesheet" href="stylesheets/app.css">
+		<link rel="stylesheet" href="stylesheets/invoice.css">
+		<link rel="stylesheet" href="stylesheets/print.css">
+	</head>
+	<body>
+		<main>
+			<div id="app"></div>
+			<noscript>
+				<p class="fallback">This app needs JavaScript to run. Enable JavaScript in your browser, then reload the page.</p>
+			</noscript>
+		</main>
+		<script type="module" src="js/main.js"></script>
+	</body>
+</html>

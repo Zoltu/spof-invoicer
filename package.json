@@ -1,0 +1,20 @@
+{
+	"name": "invoicing-spa",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Client-side invoicing and payment SPA: static, no bundler, IPFS-ready.",
+	"scripts": {
+		"build": "bun build.mjs",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "bun test tests/",
+		"serve": "bun serve.mjs",
+		"vendor": "bun scripts/fetch-vendor.mjs"
+	},
+	"devDependencies": {
+		"@noble/hashes": "2.4.0",
+		"@scure/base": "2.4.0",
+		"pdf-lib": "1.17.1",
+		"typescript": "^5.6.3"
+	}
+}

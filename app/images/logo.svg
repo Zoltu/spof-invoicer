@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Invoicing">
+	<rect width="64" height="64" rx="13" fill="#10233f"/>
+	<path d="M21 15h15.5L45 23.5V45a4 4 0 0 1-4 4H21a4 4 0 0 1-4-4V19a4 4 0 0 1 4-4Z" fill="#ffffff"/>
+	<path d="M36.5 15v8.5H45" fill="none" stroke="#10233f" stroke-width="2.4" stroke-linejoin="round"/>
+	<path d="M24 33h15M24 40h9" stroke="#1f5eff" stroke-width="2.6" stroke-linecap="round"/>
+</svg>

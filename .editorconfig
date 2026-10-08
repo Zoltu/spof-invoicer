@@ -1,0 +1,42 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# The style gate enforces `indent_style = tab` more strictly than an editor does: a line's leading indentation must be tabs only, so a line carrying alignment spaces (outside a block- or HTML-comment continuation) is rejected even though this setting alone permits it.
+[*.{ts,js,mjs,html,css,json,svg}]
+indent_style = tab
+
+# The SHA256-pinned vendor trees, the committed compiler output, the copied image assets and the installed node_modules tree are byte-for-byte artifacts: the build and its gates require their exact bytes.
+# The vendor trees and the committed compiler output mix line endings and final-newline conventions, so no single explicit value fits them; unset every rule the config sets on all four, `charset` included, so the guard treats the whole tree as out of scope.
+# `unset` only removes the property, so an editor falls back to its own defaults and may still rewrite these bytes; the SHA256SUMS verification and the fresh-build byte comparison are what actually hold them.
+[vendor-src/**]
+charset = unset
+indent_style = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+
+[app/js/**]
+charset = unset
+indent_style = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+
+[app/images/**]
+charset = unset
+indent_style = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+
+[node_modules/**]
+charset = unset
+indent_style = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset

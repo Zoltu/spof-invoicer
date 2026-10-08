@@ -1,0 +1,433 @@
+/*
+ * The official invoice document.
+ *
+ * Loaded on every route, but it cannot reach the create form: the seven generic-looking names it uses — status badge, party role, meta label, section title, note line, document actions, totals table — are scoped under `.view-invoice`, and every other selector names a class only this view renders.
+ * A serif face carries the document text for an official, paper-like feel, while the tabular data — parties, dates, item amounts, totals, payment details — uses a sans stack with tabular figures so currency columns line up.
+ * The palette is restrained: deep navy ink, one blue accent for the total, and light rules.
+ */
+
+.view-invoice {
+	--inv-ink: #10233f;
+	--inv-ink-soft: #4a5a72;
+	--inv-muted: var(--ink-muted);
+	--inv-rule: #dfe4ec;
+	--inv-rule-soft: #eceff4;
+	--inv-accent: var(--accent);
+	--inv-accent-surface: var(--accent-surface);
+	--inv-paper: var(--surface);
+
+	--inv-status-open-ink: #41506b;
+	--inv-status-open-line: #c7cedb;
+	--inv-status-open-surface: #eef1f6;
+	--inv-status-due-ink: #8a5300;
+	--inv-status-due-line: #eccb8f;
+	--inv-status-due-surface: #fdf3e2;
+	--inv-status-overdue-ink: #a3261e;
+	--inv-status-overdue-line: #f0bab4;
+	--inv-status-overdue-surface: #fdeceb;
+	--inv-zebra: #fafbfd;
+
+	--inv-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+	--inv-serif: Georgia, "Times New Roman", Times, serif;
+	--inv-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+	margin: 0 auto;
+}
+
+/* The chrome around the document is hidden in print via `.no-print`. */
+.view-invoice .document-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+	margin-bottom: 1rem;
+}
+
+.document-actions-spacer {
+	margin-left: auto;
+}
+
+.invoice-document {
+	position: relative;
+	background: var(--inv-paper);
+	border: 1px solid var(--inv-rule);
+	border-radius: var(--radius);
+	box-shadow:
+		0 1px 2px rgba(16, 35, 63, 0.06),
+		0 14px 34px -20px rgba(16, 35, 63, 0.4);
+	padding: 2.5rem 2.75rem 2rem;
+	color: var(--inv-ink);
+	font-family: var(--inv-serif);
+	line-height: 1.5;
+}
+
+/* Letterhead ------------------------------------------------------------------------------------- */
+
+.invoice-letterhead {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 1.5rem;
+	padding-bottom: 1.25rem;
+	border-bottom: 3px solid var(--inv-ink);
+}
+
+.letterhead-brand {
+	display: flex;
+	align-items: center;
+	gap: 0.9rem;
+}
+
+.invoice-logo {
+	display: inline-block;
+	width: 3rem;
+	height: 3rem;
+	flex: 0 0 auto;
+	background-image: url("../images/logo.svg");
+	background-repeat: no-repeat;
+	background-position: center;
+	background-size: contain;
+}
+
+.letterhead-title {
+	display: block;
+	font-size: 1.35rem;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+	color: var(--inv-ink);
+}
+
+.letterhead-tagline {
+	display: block;
+	font-family: var(--inv-sans);
+	font-size: 0.75rem;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	color: var(--inv-muted);
+}
+
+.letterhead-meta {
+	display: grid;
+	gap: 0.3rem;
+	justify-items: end;
+	text-align: right;
+}
+
+/* The negative right margin trims the letter-spacing's trailing space so the title meets the edge. */
+.document-kind {
+	margin: 0 -0.2em 0 0;
+	font-family: var(--inv-sans);
+	font-size: 1.7rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.2em;
+	color: var(--inv-ink);
+}
+
+.document-number {
+	font-family: var(--inv-sans);
+	font-size: 0.875rem;
+	color: var(--inv-muted);
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+
+.view-invoice .status-badge {
+	font-family: var(--inv-sans);
+	font-size: 0.75rem;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	padding: 0.2rem 0.6rem;
+	border-radius: 999px;
+	border: 1px solid;
+}
+
+.view-invoice .status-open {
+	color: var(--inv-status-open-ink);
+	border-color: var(--inv-status-open-line);
+	background: var(--inv-status-open-surface);
+}
+
+.view-invoice .status-due {
+	color: var(--inv-status-due-ink);
+	border-color: var(--inv-status-due-line);
+	background: var(--inv-status-due-surface);
+}
+
+.view-invoice .status-overdue {
+	color: var(--inv-status-overdue-ink);
+	border-color: var(--inv-status-overdue-line);
+	background: var(--inv-status-overdue-surface);
+}
+
+/* Parties and dates ------------------------------------------------------------------------------ */
+
+.invoice-parties {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+	gap: 1.5rem;
+	padding: 1.5rem 0;
+	border-bottom: 1px solid var(--inv-rule);
+}
+
+.party {
+	display: grid;
+	gap: 0.2rem;
+	align-content: start;
+}
+
+.view-invoice .party-role {
+	font-family: var(--inv-sans);
+	font-size: 0.75rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--inv-muted);
+}
+
+.party-name {
+	font-size: 1.0625rem;
+	font-weight: 700;
+	color: var(--inv-ink);
+	overflow-wrap: anywhere;
+}
+
+.party-detail {
+	font-family: var(--inv-sans);
+	font-size: 0.875rem;
+	color: var(--inv-ink-soft);
+	overflow-wrap: anywhere;
+}
+
+.party-dates {
+	gap: 0.6rem;
+}
+
+.meta-field {
+	display: flex;
+	flex-direction: column;
+}
+
+.view-invoice .meta-label {
+	font-family: var(--inv-sans);
+	font-size: 0.75rem;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--inv-muted);
+}
+
+.meta-value {
+	font-family: var(--inv-sans);
+	font-size: 0.9375rem;
+	color: var(--inv-ink);
+	font-variant-numeric: tabular-nums;
+}
+
+/* Itemized table --------------------------------------------------------------------------------- */
+
+/*
+ * The four itemized columns cannot fit a phone: the fixed numeric rails plus the unbreakable "Description" header give the table a minimum wider than the card.
+ * Scrolling the table inside its own box keeps that overflow off the page, so the document never moves the viewport itself.
+ */
+.invoice-items-scroll {
+	overflow-x: auto;
+}
+
+/*
+ * The scroll box carries a `tabindex` so a keyboard user can reach the clipped columns (Safari does not auto-focus scrollers), so it needs its own focus ring; app.css only rings a/button/input/select/textarea.
+ */
+.invoice-items-scroll:focus-visible {
+	outline: 2px solid var(--inv-accent);
+	outline-offset: 2px;
+}
+
+.invoice-items {
+	width: 100%;
+	border-collapse: collapse;
+	margin-top: 1.5rem;
+	font-family: var(--inv-sans);
+}
+
+.invoice-items th {
+	font-size: 0.75rem;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--inv-muted);
+	text-align: left;
+	padding: 0.5rem 0.6rem;
+	border-bottom: 2px solid var(--inv-ink);
+}
+
+.invoice-items td {
+	padding: 0.65rem 0.6rem;
+	border-bottom: 1px solid var(--inv-rule-soft);
+	vertical-align: top;
+	font-size: 0.9375rem;
+	overflow-wrap: anywhere;
+}
+
+.invoice-items tbody tr:nth-child(even) td {
+	background: var(--inv-zebra);
+}
+
+.invoice-items .num {
+	text-align: right;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Trim the trailing letter-space so a right-aligned header label meets the data rail exactly. */
+.invoice-items th.num {
+	padding-right: calc(0.6rem - 0.1em);
+}
+
+.invoice-items .item-description {
+	color: var(--inv-ink);
+}
+
+.invoice-items .col-qty,
+.invoice-items .col-price {
+	width: 6.5rem;
+}
+
+.invoice-items .col-amount {
+	width: 8rem;
+}
+
+/* Totals ----------------------------------------------------------------------------------------- */
+
+.view-invoice .invoice-totals {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: 1.25rem;
+}
+
+.view-invoice .totals-table {
+	border-collapse: collapse;
+	min-width: 17rem;
+	font-family: var(--inv-sans);
+}
+
+.view-invoice .totals-table th,
+.view-invoice .totals-table td {
+	padding: 0.45rem 0.6rem;
+}
+
+.view-invoice .totals-table th {
+	font-weight: 500;
+	font-size: 0.875rem;
+	color: var(--inv-muted);
+	text-align: left;
+}
+
+.view-invoice .totals-table .num {
+	text-align: right;
+	color: var(--inv-ink);
+	font-variant-numeric: tabular-nums;
+}
+
+.view-invoice .totals-due {
+	background: var(--inv-accent-surface);
+}
+
+.view-invoice .totals-due th,
+.view-invoice .totals-due td {
+	border-top: 2px solid var(--inv-accent);
+	padding-top: 0.7rem;
+	font-size: 1.0625rem;
+	font-weight: 700;
+	color: var(--inv-ink);
+}
+
+/* Match `.totals-table .num` on specificity so, later in source, the total due carries the accent. */
+.view-invoice .totals-due .num {
+	color: var(--inv-accent);
+}
+
+/* Notes and payment details ---------------------------------------------------------------------- */
+
+.view-invoice .section-title {
+	margin: 1.5rem 0 0.4rem;
+	font-family: var(--inv-sans);
+	font-size: 0.75rem;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--inv-muted);
+}
+
+.invoice-notes {
+	border-top: 1px solid var(--inv-rule);
+	margin-top: 1.5rem;
+	padding-top: 1rem;
+}
+
+.view-invoice .note-line {
+	margin: 0.2rem 0;
+	font-size: 0.9375rem;
+	color: var(--inv-ink-soft);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.invoice-payment {
+	border-top: 3px solid var(--inv-ink);
+	margin-top: 1.5rem;
+	padding-top: 1rem;
+}
+
+.payment-list {
+	display: grid;
+	gap: 0.5rem;
+	margin: 0;
+}
+
+.payment-term {
+	display: grid;
+	grid-template-columns: 7rem 1fr;
+	gap: 0.5rem;
+	align-items: baseline;
+}
+
+.payment-term dt {
+	font-family: var(--inv-sans);
+	font-size: 0.75rem;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--inv-muted);
+}
+
+.payment-term dd {
+	margin: 0;
+	font-family: var(--inv-sans);
+	font-size: 0.9375rem;
+	color: var(--inv-ink);
+	overflow-wrap: anywhere;
+}
+
+.payment-term dd.mono {
+	font-family: var(--inv-mono);
+	font-size: 0.8125rem;
+}
+
+@media (max-width: 640px) {
+	.invoice-document {
+		padding: 1.5rem 1.25rem;
+	}
+
+	.document-kind {
+		font-size: 1.3rem;
+		letter-spacing: 0.14em;
+		margin-right: -0.14em;
+	}
+
+	.invoice-parties {
+		gap: 1rem;
+	}
+
+	.payment-term {
+		grid-template-columns: 5.5rem 1fr;
+	}
+}

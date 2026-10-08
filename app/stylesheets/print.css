@@ -1,0 +1,149 @@
+/*
+ * Print treatment for the official invoice.
+ *
+ * The on-screen document is the source of truth; this only makes it print cleanly.
+ * Wrapped in `@media print`, it strips the app chrome, drops the screen card's depth, forces black on white, and keeps rows, totals, and the payment block from splitting across a page.
+ * Page geometry is US Letter with comfortable margins.
+ * This stylesheet serves the browser's own print path; the `Save as PDF` button is a separate route that hands the invoice to the pdf-lib renderer, which lays out its own pages rather than printing this DOM.
+ */
+
+@media print {
+	@page {
+		size: Letter;
+		margin: 0.75in;
+	}
+
+	html,
+	body {
+		background: #fff !important;
+	}
+
+	body {
+		color: #000;
+	}
+
+	#app {
+		max-width: none;
+		margin: 0;
+		padding: 0;
+	}
+
+	/* Chrome: navigation, notices, and the document actions are for the screen only. */
+	.app-header,
+	.app-nav,
+	.app-open,
+	.notice-region,
+	.no-print,
+	.fallback {
+		display: none !important;
+	}
+
+	.app-content {
+		margin: 0;
+	}
+
+	.view-invoice {
+		margin: 0;
+	}
+
+	.invoice-document {
+		border: none;
+		border-radius: 0;
+		box-shadow: none;
+		padding: 0;
+		background: #fff;
+		color: #000;
+	}
+
+	.invoice-document a {
+		color: #000;
+		text-decoration: none;
+	}
+
+	/* Both heavy rules — the letterhead underline and the payment block's top rule — print black. */
+	.invoice-letterhead {
+		border-bottom-color: #000;
+	}
+
+	.invoice-payment {
+		border-top-color: #000;
+	}
+
+	/* Force legibility on a monochrome printer regardless of screen palette. */
+	.letterhead-title,
+	.document-kind,
+	.party-name,
+	.meta-value,
+	.party-detail,
+	.invoice-items .item-description,
+	.view-invoice .totals-table .num,
+	.view-invoice .totals-due th,
+	.view-invoice .totals-due td,
+	.note-line,
+	.payment-term dd,
+	.section-title,
+	.party-role,
+	.meta-label,
+	.document-number,
+	.invoice-items th,
+	.view-invoice .totals-table th,
+	.payment-term dt {
+		color: #000 !important;
+	}
+
+	.status-badge {
+		color: #000 !important;
+		background: transparent !important;
+		border-color: #000 !important;
+	}
+
+	.view-invoice .totals-due {
+		background: transparent !important;
+	}
+
+	.view-invoice .totals-due th,
+	.view-invoice .totals-due td {
+		border-top: 2px solid #000;
+	}
+
+	.invoice-items thead {
+		display: table-header-group;
+	}
+
+	.invoice-items th {
+		border-bottom-color: #000;
+	}
+
+	.invoice-items td {
+		border-bottom-color: #bbb;
+	}
+
+	.invoice-items tbody tr:nth-child(even) td {
+		background: transparent;
+	}
+
+	/* Keep a row, the totals block, and each document section whole on one page. */
+	.invoice-item-row,
+	.view-invoice .totals-table tr,
+	.invoice-letterhead,
+	.invoice-parties,
+	.invoice-totals,
+	.invoice-notes,
+	.invoice-payment {
+		break-inside: avoid;
+		page-break-inside: avoid;
+	}
+}
+
+@media print {
+	/* A dialog must never appear on the printed page, even if print is triggered while it is open. */
+	.dialog-backdrop {
+		display: none !important;
+	}
+
+	/* Best effort so the letterhead mark survives print: browsers may still drop background images. */
+	.invoice-logo {
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+	}
+}

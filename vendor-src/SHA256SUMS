@@ -1,0 +1,22 @@
+# Provenance for vendor-src/ — `bun run vendor` rewrites this only over an unchanged tree;
+# a changed tree needs an explicit re-bless with `bun run vendor -- --force`.
+# Pinned packages (version and tarball sha512 as recorded in bun.lock):
+#   @noble/hashes@2.4.0 sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==
+#   @scure/base@2.4.0 sha512-thZ1TuJwFwBblOhgsjDKvvGirBxNp+wSvY/DR6tJBJOTDhdAAcHJ8Vbr2eFnqaxeca4+t0i9KBf+uHYGWwZORg==
+#   pdf-lib@1.17.1 sha512-V/mpyJAoTsN4cnP31vc0wfNA1+p20evqqnap0KLoRUN0Yk/p3wN52DOEsL4oBFcLdb76hlpKPtzJIgo67j/XLw==
+# Format: <sha256>  <path relative to vendor-src/>
+
+cc1bb214616087dbc0237ebd35a34383df170fcdc0cf980883dec5b08ed5c366  THIRD-PARTY-NOTICES
+4f221aee6e072336700c408c68ab3b96a3fc09f6aebe6f48f1bd99e5ef13faec  noble-hashes/LICENSE
+b09da8c07fe8187c07649494cdb7cd0bcf13df90b506a9473d19e4d5f8c2e102  noble-hashes/_u64.js
+78d2ba1fe22b8da047149ffa2521cad5689779821c0193fcbc41cffff1a236e6  noble-hashes/sha3.d.ts
+9a81e1edb24eae27b335533220167609cfb58008c5690e140ce478acdc669f32  noble-hashes/sha3.js
+d46552c90f84b9f9365f681286126adc096fac330f9f8071b9cbee578d31ba01  noble-hashes/utils.d.ts
+037ad49adb78168b6b699598fd33f85f7877456b1d28b4d032e2a1a16807947c  noble-hashes/utils.js
+f2c9fc00fdb66eb99ac156ba52d734af66d8d309f65753ae809ad34ee2883bcb  pdf-lib/LICENSE.md
+f55f07b533d9a8784f15a09614c9175195110c228a3875ab6504c1c39fc4222e  pdf-lib/pdf-lib.esm.d.ts
+4bd8dd3155d7b1062a161567bf68168c55283bd5fad6a638b16ae028846b52c5  pdf-lib/pdf-lib.esm.js
+de2d5d61509c9421fa728fd7a3c473a061a091acf255a87385fcb15ddd2c08f8  pdf-lib/pdf-lib.esm.js.map
+3239e134eb6e6d64538ca76498c7fcb08a395249dd9d4af9927bf6d0169ee429  scure-base/LICENSE
+0ea0719f03cdcd5538302acc954cab2827cd6dec427762a9e397626223b2c27a  scure-base/index.d.ts
+4bd334e6606db7216143c7bffbc5c00716d2c137744a0c48b51495fa6d05444a  scure-base/index.js

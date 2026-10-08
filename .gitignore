@@ -1,0 +1,31 @@
+node_modules/
+*.log
+.DS_Store
+
+# Secrets, credentials, and wallet material — never commit, never pin to IPFS.
+.env
+.env.*
+*.pem
+*.key
+*.keystore
+*.p12
+*.pfx
+*.jks
+*.seed
+*.mnemonic
+mnemonic*
+wallet.json
+*.wallet
+secrets/
+.npmrc
+
+# Editor, OS, and temporary junk.
+.vscode/
+.idea/
+Thumbs.db
+*.swp
+*.swo
+*~
+*.tmp
+.history/
+.orchestration/
