@@ -4,11 +4,11 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { cp, mkdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MANIFEST_FILE, verifyTree } from "./scripts/vendor-manifest.mjs";
 
@@ -69,11 +69,30 @@ export async function vendorTreeProblems(dir = resolve(root, "vendor-src")) {
 	return verifyTree(dir);
 }
 
+// `cp` re-creates a symlink as a symlink, so a linked entry would be published into app/ pointing outside the copied tree rather than as the pinned file; the build refuses one instead of carrying it into the served output.
+// `lstat` tests the source entry itself — a directory symlink reads as a link, not a directory — so the walk reports it before descending through it.
+function findSymlink(path) {
+	if (lstatSync(path).isSymbolicLink()) return path;
+	if (!lstatSync(path).isDirectory()) return null;
+	for (const entry of readdirSync(path, { withFileTypes: true })) {
+		if (entry.isSymbolicLink()) return join(path, entry.name);
+		if (entry.isDirectory()) {
+			const nested = findSymlink(join(path, entry.name));
+			if (nested !== null) return nested;
+		}
+	}
+	return null;
+}
+
 async function copyInto({ from, to, label, filter }, outRoot) {
 	const source = resolve(root, from);
 	if (!existsSync(source)) {
 		console.log(`build: no ${label} source (${from}/), skipping`);
 		return;
+	}
+	const linked = findSymlink(source);
+	if (linked !== null) {
+		throw new Error(`build: ${label} source holds a symlink (${relative(root, linked)}) — refusing to publish a link that points outside the tree; replace it with the regular file`);
 	}
 	const target = resolve(outRoot, to);
 	// Replace rather than merge, so files excluded by the filter cannot linger from a previous build.
@@ -114,10 +133,11 @@ function compile(outRoot) {
 	console.log("build: compiled app/ts/**/*.ts -> app/js/**/*.js");
 }
 
-// Importing this module (e.g. from the tests, to reuse servedVendorFile) must not run the build.
+// Importing this module (e.g., from the tests, to reuse servedVendorFile) must not run the build.
 if (import.meta.main) {
 	try {
 		const outRoot = resolveOutRoot();
+		// This manifest check is a drift guard, not the trust anchor: `bun run vendor` anchors an acquisition to the pinned tarball, so the build deliberately reads nothing but the committed tree.
 		const problems = await vendorTreeProblems();
 		if (problems.length > 0) {
 			throw new Error(`build: vendor-src/ failed its SHA256 provenance check — run \`bun run vendor\`:\n  ${problems.join("\n  ")}`);

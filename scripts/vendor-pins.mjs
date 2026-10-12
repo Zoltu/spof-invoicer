@@ -32,6 +32,11 @@ export function pinFor(name, pins = VENDOR_PINS) {
 	return pin;
 }
 
+/** The pin whose pinned tarball integrity is `integrity`, or undefined when no pin matches; the reverse lookup of `pinFor`. */
+export function pinForIntegrity(integrity) {
+	return VENDOR_PINS.find((entry) => entry.integrity === integrity);
+}
+
 // bun.lock is JSON with trailing commas and blank lines.
 // Integrity strings are base64 (no commas), so dropping `,` before a closing bracket is safe and does not touch any recorded value.
 function stripTrailingCommas(text) {

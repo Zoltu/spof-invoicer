@@ -13,8 +13,10 @@
  *
  * A share string is untrusted, so every string passes through {@link toPdfText} before it is measured or drawn: a base-14 font encodes WinAnsi only, and an unencodable code point would otherwise throw mid-export.
  * Text that cannot be encoded becomes `?` and the document still renders.
+ *
+ * The payment link's QR symbol is drawn the same way: one filled rectangle per module of the view model's matrix, never an image, a font glyph, or a `data:` URL, so the export still reaches nothing off-origin.
  */
-import { PDFDocument, PageSizes, StandardFonts, rgb, } from "../../js/vendor/pdf-lib/pdf-lib.esm.js";
+import { PDFDocument, PageSizes, StandardFonts, beginText, endText, popGraphicsState, pushGraphicsState, rgb, setCharacterSqueeze, setFillingColor, setFontAndSize, setTextMatrix, showText, } from "../../js/vendor/pdf-lib/pdf-lib.esm.js";
 import { buildInvoiceViewModel, } from "../ui/presentation.js";
 /** The media type the exported artifact's download blob carries. */
 export const PDF_MIME = "application/pdf";
@@ -34,12 +36,14 @@ export const PAGE = Object.freeze({
     footerBaseline: 46,
 });
 const CONTENT_LEFT = PAGE.marginX;
-const CONTENT_RIGHT = PAGE.width - PAGE.marginX;
+/** The document's right content edge: the x every right-aligned draw and the payment symbol's block align to. */
+export const CONTENT_RIGHT = PAGE.width - PAGE.marginX;
 const CONTENT_W = CONTENT_RIGHT - CONTENT_LEFT;
 const CONTENT_TOP = PAGE.marginTop;
-const FLOOR_TOP = PAGE.height - PAGE.contentFloor;
+/** The lowest top a block may reach, measured from the page's top edge, so nothing lands in the page footer's strip. */
+export const FLOOR_TOP = PAGE.height - PAGE.contentFloor;
 /** Fraction of a font's size from its baseline to the top of a capital, near enough for spacing. */
-const ASCENT = 0.72;
+export const BASELINE_ASCENT = 0.72;
 /** A multiple of a font's size that leaves a comfortable gap to the next baseline. */
 const LEADING = 1.34;
 const CELL_PAD = 8;
@@ -57,6 +61,8 @@ const TOTALS_ROW_H = 19;
 const DUE_H = 32;
 const PAYMENT_LABEL_W = 120;
 const MIN_FIT_SIZE = 7;
+/** The gap the running footer keeps between the document number and its right-aligned page label. */
+const FOOTER_GAP = 12;
 const FILE_STEM_MAX = 64;
 /** How long the object URL outlives the click: a synchronous revoke can cancel the download before the browser has read the blob. */
 const REVOKE_DELAY_MS = 1000;
@@ -77,6 +83,8 @@ const GAP = Object.freeze({
     totalsToNotes: 20,
     /** From the notes section down to the payment details. */
     notesToPayment: 24,
+    /** Between the payment terms' column and the symbol drawn beside it. */
+    termsToSymbol: 18,
 });
 /** The type scale, in points; every run of text names one of these. */
 const SIZE = Object.freeze({
@@ -104,6 +112,15 @@ const SIZE = Object.freeze({
     footer: 7.5,
 });
 /**
+ * The QR symbol's geometry, in points: what one module measures, and the quiet zone the standard requires on every side of it.
+ *
+ * A 2.5-point module makes the widest symbol the link layer can produce — a version-15 grid of 77 modules — 192.5 points square, so with its quiet zone the block is 212.5 points: inside the payment section's 504-point width, and short enough that the whole symbol is checked onto one page before any of it is drawn.
+ */
+export const QR_SYMBOL = Object.freeze({
+    module: 2.5,
+    quietModules: 4,
+});
+/**
  * The document's colors.
  * Each entry traces to a custom property in `invoice.css`, whose names mirror them, with one deliberate exception: `headerBg` is `app.css`'s `--surface-muted`, used here only to fill the item table's header band.
  * `.invoice-items th` never draws that band on screen; this renderer fills it, kept because it reads as intentional print craft.
@@ -118,6 +135,8 @@ const PALETTE = Object.freeze({
     accentSurface: hex("#eef2ff"),
     zebra: hex("#fafbfd"),
     headerBg: hex("#f4f5f7"),
+    /** `--inv-paper`, the document's own surface: it fills the symbol's light modules, so the whole grid is drawn rather than left to the paper showing through. */
+    paper: hex("#ffffff"),
 });
 /** The status badge's ink/line/surface per tone, mirroring `invoice.css`'s status classes. */
 const STATUS = Object.freeze({
@@ -253,12 +272,23 @@ export async function renderInvoicePdf(invoice, today) {
     doc.setProducer(DOCUMENT_PRODUCER);
     return doc.save();
 }
-/** Hand PDF bytes to the browser as a download and release the object URL. */
+/**
+ * The metrics {@link renderInvoicePdf} measures its layout with: the widths of the faces it embeds.
+ * The exported bytes are drawn from that layout, so a caller that has to assert the geometry those bytes carry measures with these rather than with a stand-in of its own.
+ */
+export async function exportFontMetrics() {
+    const doc = await PDFDocument.create({ updateMetadata: false });
+    return metricsFor(await embedFonts(doc));
+}
+/**
+ * Hand PDF bytes to the browser as a download and release the object URL.
+ * The file name is sanitized here, at the one place a name reaches the download attribute, so every caller — not only {@link invoiceFileName} — can hand the anchor nothing but a name folded to `[A-Za-z0-9._-]` with no path separator.
+ */
 export function downloadPdf(bytes, fileName, downloader = browserDownloader) {
     const blob = new Blob([new Uint8Array(bytes)], { type: PDF_MIME });
     const url = downloader.createObjectUrl(blob);
     try {
-        downloader.save(url, fileName);
+        downloader.save(url, sanitizeFileName(fileName));
     }
     finally {
         downloader.revokeObjectUrl(url);
@@ -299,12 +329,12 @@ function leading(size) {
 }
 /** The baseline of a text run whose visual top sits `top` from the page's top edge. */
 function baseline(top, size) {
-    return PAGE.height - top - size * ASCENT;
+    return PAGE.height - top - size * BASELINE_ASCENT;
 }
 /** The `top` that vertically centers a text run of `size` inside a box of `height` starting at `top`. */
 function centerTop(top, height, size) {
-    // A capital's visual middle sits half its ascent above the baseline, so the run is offset by half ASCENT from the box's center.
-    return top + height / 2 - (size * ASCENT) / 2;
+    // A capital's visual middle sits half its ascent above the baseline, so the run is offset by half that ascent from the box's center.
+    return top + height / 2 - (size * BASELINE_ASCENT) / 2;
 }
 /**
  * Shrink `text` toward {@link MIN_FIT_SIZE} to fit `maxWidth`, then wrap — never elide — it, so every glyph survives.
@@ -326,10 +356,32 @@ function drawRightAligned(flow, right, top, value, font, color) {
         y += leading(value.size);
     }
 }
+/** The glyph a shortened value ends in, so an elided identifier reads as elided rather than as the value itself. */
+const ELLIPSIS = "…";
+/**
+ * Shorten `text` to `maxWidth`, ending in {@link ELLIPSIS} when anything was dropped.
+ * Where {@link fitText} wraps a money figure so no digit is lost, an identifier has no digits worth keeping, so it is measured against its box and elided rather than allowed to overrun it.
+ */
+function elideText(text, maxWidth, size, font, metrics) {
+    const clean = toPdfText(text);
+    if (metrics.widthOfText(clean, size, font) <= maxWidth)
+        return clean;
+    const glyphs = Array.from(clean);
+    while (glyphs.length > 0) {
+        glyphs.pop();
+        const candidate = `${glyphs.join("")}${ELLIPSIS}`;
+        if (metrics.widthOfText(candidate, size, font) <= maxWidth)
+            return candidate;
+    }
+    return "";
+}
 /**
  * The vertical cursor a block draws against.
  * `top` is a distance from the page's top edge; each draw method converts to PDF coordinates at the edge.
- * New pages start at {@link CONTENT_TOP} and every block checks {@link Flow.fits} — or calls {@link Flow.ensure} — so nothing lands in the footer strip or past the page.
+ * New pages start at {@link CONTENT_TOP}, and every block that can fall mid-page checks {@link Flow.fits} — or calls {@link Flow.ensure} — before it draws, so a block that does not fit is started on a fresh page rather than split across a break.
+ * The fit checks alone cannot contain a block taller than a whole page: {@link Flow.ensure} moves a block that does not fit onto a fresh page, and a fresh page is no roomier, so the part no page can hold would be drawn past the floor.
+ * Every draw is therefore refused past {@link FLOOR_TOP} — a text line or a rule below the floor is dropped and a fill is clamped to what fits — so an over-tall block is clamped to the content floor rather than drawn past it, whatever a future cap or asset family admits.
+ * The three blocks that draw the head of a page — the letterhead, the parties and the column header — carry no fit check because they are drawn only at the top of a page, the layout's first or one {@link Flow.newPage} has just reset to {@link CONTENT_TOP}; the floor refusal bounds them too.
  */
 class Flow {
     metrics;
@@ -348,6 +400,13 @@ class Flow {
     fits(height) {
         return this.top + height <= FLOOR_TOP;
     }
+    /**
+     * True when a draw reaching `depth` below `top` stays at or above the page's content floor.
+     * This is the last line of containment for a block taller than a whole page: the fit checks start such a block on a fresh page, and this keeps the part no page can hold out of the footer strip.
+     */
+    clearsFloor(top, depth) {
+        return top + depth <= FLOOR_TOP;
+    }
     /** Start a fresh page; `before` draws any continuation header directly on it. */
     newPage(before) {
         this.ops = [];
@@ -360,24 +419,32 @@ class Flow {
         if (!this.fits(height))
             this.newPage(before);
     }
-    text(x, top, value, size, font, color) {
-        this.ops.push({ kind: "text", x, y: baseline(top, size), text: toPdfText(value), size, font, color });
+    /** Draw one run of text at `top`; `xScale` is the horizontal scale it is drawn at, 1 for a run drawn as it measures. */
+    text(x, top, value, size, font, color, xScale = 1) {
+        if (!this.clearsFloor(top, size * BASELINE_ASCENT))
+            return;
+        this.ops.push({ kind: "text", x, y: baseline(top, size), text: toPdfText(value), size, font, color, xScale });
     }
     textRight(right, top, value, size, font, color) {
         const text = toPdfText(value);
         this.text(right - this.metrics.widthOfText(text, size, font), top, text, size, font, color);
     }
     rule(top, x1, x2, thickness, color) {
+        if (!this.clearsFloor(top, 0))
+            return;
         const y = PAGE.height - top;
         this.ops.push({ kind: "rule", x1, y1: y, x2, y2: y, thickness, color });
     }
     fill(x, top, width, height, color, border) {
+        const bounded = Math.min(height, FLOOR_TOP - top);
+        if (bounded <= 0)
+            return;
         this.ops.push({
             kind: "fill",
             x,
-            y: PAGE.height - top - height,
+            y: PAGE.height - top - bounded,
             width,
-            height,
+            height: bounded,
             color,
             ...(border === undefined ? {} : { border }),
         });
@@ -389,7 +456,8 @@ function drawLetterhead(flow, view) {
     flow.text(CONTENT_LEFT + 18, top, view.labels.brand, SIZE.brand, "sansBold", PALETTE.ink);
     flow.text(CONTENT_LEFT + 18, top + leading(SIZE.brand), view.labels.tagline.toUpperCase(), SIZE.tagline, "sansBold", PALETTE.muted);
     flow.textRight(CONTENT_RIGHT, top, view.labels.kind.toUpperCase(), SIZE.kind, "sansBold", PALETTE.ink);
-    flow.textRight(CONTENT_RIGHT, top + leading(SIZE.kind), view.documentNumber, SIZE.documentNumber, "sans", PALETTE.muted);
+    const documentNumber = elideText(view.documentNumber, CONTENT_W, SIZE.documentNumber, "sans", flow.metrics);
+    flow.textRight(CONTENT_RIGHT, top + leading(SIZE.kind), documentNumber, SIZE.documentNumber, "sans", PALETTE.muted);
     const status = STATUS[view.status.tone];
     const label = view.status.label.toUpperCase();
     const badgeWidth = flow.width(label, SIZE.status, "sansBold") + 18;
@@ -471,7 +539,9 @@ function drawItemRow(flow, line, index, labels) {
     const amount = fitText(line.amount, AMOUNT_W - 4, SIZE.tableNumber, "sansBold", flow.metrics);
     const rowLines = Math.max(description.length, qty.lines.length, price.lines.length, amount.lines.length);
     const rowHeight = Math.max(TABLE_ROW_MIN, rowLines * leading(SIZE.tableCell) + 10);
-    flow.ensure(rowHeight, () => drawTableHeader(flow, labels));
+    // The row does not fit, so the break is taken: the column header its callback draws on the new page sits above the row, and reserving room for both would bounce a row that fits by up to TABLE_HEADER_H.
+    if (!flow.fits(rowHeight))
+        flow.newPage(() => drawTableHeader(flow, labels));
     const top = flow.top;
     if (index % 2 === 1)
         flow.fill(CONTENT_LEFT, top, CONTENT_W, rowHeight, PALETTE.zebra);
@@ -518,47 +588,132 @@ function drawTotals(flow, view) {
     drawRightAligned(flow, CONTENT_RIGHT - 12, dueValueTop, due, "sansBold", PALETTE.accent);
     flow.advance(height + 6);
 }
+/** From the notes section's rule down to its title's line top. */
+const NOTES_RULE_TO_TITLE = 14;
+/** The notes section's header: from the rule that opens it down to the first note's line top — the drop to the title, the title's own leading, and the gap below it. */
+const NOTES_HEADER_H = NOTES_RULE_TO_TITLE + leading(SIZE.section) + 6;
 function drawNotes(flow, notes, labels) {
     const lines = notes.flatMap((line) => wrapText(line, CONTENT_W, SIZE.note, "serif", flow.metrics));
     flow.advance(GAP.totalsToNotes);
-    flow.ensure(12 + leading(SIZE.section) + 6 + leading(SIZE.note) * 2);
+    flow.ensure(NOTES_HEADER_H + leading(SIZE.note) * 2);
     flow.rule(flow.top, CONTENT_LEFT, CONTENT_RIGHT, 0.8, PALETTE.rule);
-    flow.advance(14);
-    flow.text(CONTENT_LEFT, flow.top, labels.notesTitle.toUpperCase(), SIZE.section, "sansBold", PALETTE.muted);
-    flow.advance(leading(SIZE.section) + 6);
+    flow.text(CONTENT_LEFT, flow.top + NOTES_RULE_TO_TITLE, labels.notesTitle.toUpperCase(), SIZE.section, "sansBold", PALETTE.muted);
+    flow.advance(NOTES_HEADER_H);
     for (const line of lines) {
         flow.ensure(leading(SIZE.note));
         flow.text(CONTENT_LEFT, flow.top, line, SIZE.note, "serif", PALETTE.inkSoft);
         flow.advance(leading(SIZE.note));
     }
 }
+/** From the payment section's rule down to its title's line top. */
+const PAYMENT_RULE_TO_TITLE = 16;
+/** The payment section's header: from the rule that opens it down to the block its terms and symbol start at — the drop to the title, the title's own leading, and the gap below it. */
+const PAYMENT_HEADER_H = PAYMENT_RULE_TO_TITLE + leading(SIZE.section) + 8;
+/**
+ * The gap between one copied value's band and the next.
+ * The gap separates a band from the one before it, so the block reserves no blank strip below the last of them.
+ */
+const COPY_BAND_GAP = 8;
+/**
+ * The smallest size a copied payment value is set at.
+ *
+ * A value a payer copies is drawn as one text run, so that the run a PDF hands back carries no break inside it, and a value wider than the line is held there by scaling that run horizontally rather than by shrinking its glyphs: below this size the text stops being readable in print, while a run compressed to part of its natural width is still the value, every character in order, to whoever copies it.
+ * Exported with the size it bounds, so a test can assert that no copied value is set below the floor to keep it on one line.
+ */
+export const PAYMENT_VALUE_MIN_SIZE = 6;
+/**
+ * Draw the payment details: the terms that state what is owed beside the symbol of the URI those terms spell, and the values a payer copies out — the amount, the payee address, and the payment link — each drawn as a single unbroken monospace run.
+ *
+ * A copied value has to survive the copy whole: a value broken at the margin is handed back with a line break inside it, which is not the address or the URI a wallet's field reads.
+ * So each copy value is drawn as exactly one run — never wrapped, never elided — set at the largest size from {@link SIZE.paymentMono} down to {@link PAYMENT_VALUE_MIN_SIZE} that holds it as it stands and held to the line by {@link fitCopyValue}'s horizontal scale when even that floor is too narrow.
+ * It is fitted first to the width the terms' own column leaves beside its label, because that column's rows sit inside the symbol's block and cost the section no height of their own; only a value that column cannot hold as it stands takes a line of its own across the whole content width below the block, which is what the longest address this app accepts and the link carrying it need, the terms' column being the section's width less the symbol beside it — and that line is the wider of the two, so it is where the widest legal values are compressed least.
+ * The terms' block and the symbol are checked onto one page together before either is drawn, so a break can never separate the symbol from the link it encodes.
+ */
 function drawPayment(flow, view) {
-    flow.advance(GAP.notesToPayment);
-    flow.ensure(14 + leading(SIZE.section) + 6 + leading(SIZE.paymentValue) * 2);
-    flow.rule(flow.top, CONTENT_LEFT, CONTENT_RIGHT, 2, PALETTE.ink);
-    flow.advance(16);
-    flow.text(CONTENT_LEFT, flow.top, view.labels.paymentTitle.toUpperCase(), SIZE.section, "sansBold", PALETTE.muted);
-    flow.advance(leading(SIZE.section) + 8);
+    const symbolSide = qrBlockSize(view.paymentQr);
+    const columnWidth = CONTENT_W - symbolSide - GAP.termsToSymbol;
+    const besideWidth = columnWidth - PAYMENT_LABEL_W;
+    const rows = [];
+    const bands = [];
     for (const term of view.payment) {
-        const mono = term.mono === true;
-        const size = mono ? SIZE.paymentMono : SIZE.paymentValue;
-        const font = mono ? "mono" : "sans";
-        const lines = wrapText(term.value, CONTENT_W - PAYMENT_LABEL_W, size, font, flow.metrics);
-        const height = Math.max(leading(SIZE.paymentLabel), lines.length * leading(size));
-        flow.ensure(height + 6);
-        const top = flow.top;
-        flow.text(CONTENT_LEFT, top, term.label.toUpperCase(), SIZE.paymentLabel, "sansBold", PALETTE.muted);
-        let y = top;
-        for (const line of lines) {
-            flow.text(CONTENT_LEFT + PAYMENT_LABEL_W, y, line, size, font, PALETTE.ink);
-            y += leading(size);
+        if (term.verbatim !== true) {
+            const lines = wrapText(term.value, besideWidth, SIZE.paymentValue, "sans", flow.metrics);
+            rows.push({ label: term.label, font: "sans", size: SIZE.paymentValue, lines, xScale: 1, height: Math.max(leading(SIZE.paymentLabel), lines.length * leading(SIZE.paymentValue)) });
+            continue;
         }
-        flow.advance(height + 6);
+        const beside = fitCopyValue(term.value, besideWidth, flow.metrics);
+        if (beside.xScale === 1) {
+            rows.push({ label: term.label, font: "mono", size: beside.size, lines: [beside.text], xScale: 1, height: Math.max(leading(SIZE.paymentLabel), leading(beside.size)) });
+            continue;
+        }
+        const wide = fitCopyValue(term.value, CONTENT_W, flow.metrics);
+        bands.push({ label: term.label, run: wide, height: leading(SIZE.paymentLabel) + leading(wide.size) });
     }
+    const blockHeight = Math.max(symbolSide, rows.reduce((total, entry) => total + entry.height + 6, 0));
+    const bandHeight = bands.reduce((total, entry, index) => total + entry.height + (index === 0 ? 0 : COPY_BAND_GAP), 0);
+    flow.advance(GAP.notesToPayment);
+    flow.ensure(PAYMENT_HEADER_H + blockHeight + bandHeight);
+    flow.rule(flow.top, CONTENT_LEFT, CONTENT_RIGHT, 2, PALETTE.ink);
+    flow.text(CONTENT_LEFT, flow.top + PAYMENT_RULE_TO_TITLE, view.labels.paymentTitle.toUpperCase(), SIZE.section, "sansBold", PALETTE.muted);
+    flow.advance(PAYMENT_HEADER_H);
+    const blockTop = flow.top;
+    let y = blockTop;
+    for (const entry of rows) {
+        flow.text(CONTENT_LEFT, y, entry.label.toUpperCase(), SIZE.paymentLabel, "sansBold", PALETTE.muted);
+        let lineTop = y;
+        for (const line of entry.lines) {
+            flow.text(CONTENT_LEFT + PAYMENT_LABEL_W, lineTop, line, entry.size, entry.font, PALETTE.ink, entry.xScale);
+            lineTop += leading(entry.size);
+        }
+        y += entry.height + 6;
+    }
+    drawQrSymbol(flow, view.paymentQr, CONTENT_RIGHT - symbolSide, blockTop);
+    flow.advance(blockHeight);
+    for (const [index, band] of bands.entries()) {
+        if (index > 0)
+            flow.advance(COPY_BAND_GAP);
+        flow.text(CONTENT_LEFT, flow.top, band.label.toUpperCase(), SIZE.paymentLabel, "sansBold", PALETTE.muted);
+        flow.advance(leading(SIZE.paymentLabel));
+        flow.text(CONTENT_LEFT, flow.top, band.run.text, band.run.size, "mono", PALETTE.ink, band.run.xScale);
+        flow.advance(leading(band.run.size));
+    }
+}
+/**
+ * `text` as the one run it is drawn in: the whole value, the largest size from {@link SIZE.paymentMono} down to {@link PAYMENT_VALUE_MIN_SIZE} that measures inside `maxWidth` as it stands, and — for a value no line at that floor holds — the horizontal scale that fits it to `maxWidth`.
+ *
+ * One run is what a copy value needs: the run is the text a PDF hands back when the value is selected, so a value broken at the margin reaches a wallet's field with a line break inside it, and the section's widest legal values — a 311-character mainnet unified address, and the 404-byte `zcash:` link carrying it — measure far past the section's width at any size this floor allows.
+ * Such a value is compressed rather than broken: the glyphs keep the size the layout chose, which is what a reader of the document needs, and the run's advance is scaled to the width it was given, which is what a copy of it needs.
+ */
+function fitCopyValue(text, maxWidth, metrics) {
+    const clean = toPdfText(text);
+    let size = SIZE.paymentMono;
+    while (size > PAYMENT_VALUE_MIN_SIZE && metrics.widthOfText(clean, size, "mono") > maxWidth) {
+        size -= 0.5;
+    }
+    const measured = metrics.widthOfText(clean, size, "mono");
+    return { text: clean, size, xScale: measured <= maxWidth ? 1 : maxWidth / measured };
+}
+/** The block the layout declares for a symbol, in points: its modules at {@link QR_SYMBOL}'s size plus that quiet zone on both sides. */
+function qrBlockSize(matrix) {
+    return matrix.size * QR_SYMBOL.module + QR_SYMBOL.quietModules * QR_SYMBOL.module * 2;
+}
+/**
+ * Draw a symbol's modules at `left`/`top`, offset by the quiet zone the block size already accounts for.
+ * Every module is drawn — dark ones in ink, light ones in the document's paper — so the symbol carries its own contrast rather than leaning on what is beneath it, and a scanner reads the same grid every renderer draws.
+ */
+function drawQrSymbol(flow, matrix, left, top) {
+    const quiet = QR_SYMBOL.quietModules * QR_SYMBOL.module;
+    matrix.modules.forEach((row, rowIndex) => {
+        row.forEach((dark, columnIndex) => {
+            flow.fill(left + quiet + columnIndex * QR_SYMBOL.module, top + quiet + rowIndex * QR_SYMBOL.module, QR_SYMBOL.module, QR_SYMBOL.module, dark ? PALETTE.ink : PALETTE.paper);
+        });
+    });
 }
 function appendFooters(pages, documentNumber, metrics) {
     const total = pages.length;
-    const number = toPdfText(documentNumber);
+    // The page numbering right-aligns on the same line, so the id is bounded to what the widest label leaves of the footer's column rather than to the whole of it.
+    const numberBox = CONTENT_W - metrics.widthOfText(`Page ${total} of ${total}`, SIZE.footer, "sans") - FOOTER_GAP;
+    const number = elideText(documentNumber, numberBox, SIZE.footer, "sans", metrics);
     pages.forEach((ops, index) => {
         ops.push({
             kind: "rule",
@@ -577,6 +732,7 @@ function appendFooters(pages, documentNumber, metrics) {
             size: SIZE.footer,
             font: "sans",
             color: PALETTE.muted,
+            xScale: 1,
         });
         const label = `Page ${index + 1} of ${total}`;
         ops.push({
@@ -587,6 +743,7 @@ function appendFooters(pages, documentNumber, metrics) {
             size: SIZE.footer,
             font: "sans",
             color: PALETTE.muted,
+            xScale: 1,
         });
     });
 }
@@ -614,7 +771,11 @@ function drawOps(page, ops, fonts) {
     for (const op of ops) {
         switch (op.kind) {
             case "text":
-                page.drawText(op.text, { x: op.x, y: op.y, size: op.size, font: fonts[op.font], color: op.color });
+                if (op.xScale === 1) {
+                    page.drawText(op.text, { x: op.x, y: op.y, size: op.size, font: fonts[op.font], color: op.color });
+                    break;
+                }
+                drawScaledRun(page, op, fonts[op.font]);
                 break;
             case "rule":
                 page.drawLine({
@@ -636,5 +797,16 @@ function drawOps(page, ops, fonts) {
                 break;
         }
     }
+}
+/**
+ * Draw one text run whose advance is scaled horizontally, which is how a value that must stay a single run is held to the width the layout measured it against.
+ *
+ * pdf-lib's own `drawText` offers no horizontal scale: it wraps a run at `maxWidth` — which is exactly the break a copied value must not get — and draws it past that width otherwise.
+ * The text-state horizontal scale (`Tz`) does neither: the glyphs keep the size the layout chose, and only their advance is scaled, so the run measures inside the width it was given while the text a PDF hands back is the value, character for character.
+ * The scale is set between the graphics-state push and pop the run is wrapped in, so a later run drawn at its natural width is unaffected by it.
+ */
+function drawScaledRun(page, run, font) {
+    const { newFontKey } = page.setOrEmbedFont(font);
+    page.pushOperators(pushGraphicsState(), beginText(), setFillingColor(run.color), setFontAndSize(newFontKey, run.size), setCharacterSqueeze(run.xScale * 100), setTextMatrix(1, 0, 0, 1, run.x, run.y), showText(font.encodeText(run.text)), endText(), popGraphicsState());
 }
 //# sourceMappingURL=renderer.js.map

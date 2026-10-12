@@ -6,15 +6,21 @@
  * No number is trusted from the share string: the view model recomputes the money from the invoice's own line items.
  *
  * The document is a letterhead, the parties and dates, an itemized table, a prominent total-due block, notes/terms, and payment details.
- * The actions around it (back to Create, Share, Save as PDF, Pay) are chrome.
+ * Payment details is {@link renderPaymentSection}, the section `ui/payment-section.ts` owns and the payee's create screen draws from the same function: the payee address, the amount, and the payment link, each in its own single-line copy field, beside the symbol of that same URI.
+ * The actions around it (back to Create, Share, Save as PDF, Pay) are chrome, and the Pay control is the injected-wallet flow's alone: a Zcash or Monero invoice is paid by the payment link and QR code the document carries, so it is offered no control that would lead nowhere.
  */
 
+import { requireAsset } from "../assets/registry.js";
 import type { Invoice } from "../invoice/model.js";
 import { h } from "../util/dom.js";
 import { boundMessage, messageOf } from "../util/errors.js";
+import { isWalletPayable } from "../wallet/payment.js";
+import type { ClipboardLike } from "./clipboard.js";
+import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import type { NoticeApi } from "./notice.js";
+import { renderPaymentSection } from "./payment-section.js";
 import { buildInvoiceViewModel, type InvoicePartyView } from "./presentation.js";
-import { buildShareBundle, openShareDialog, type ClipboardLike } from "./share.js";
+import { buildShareBundle, openShareDialog } from "./share.js";
 
 /** The most of an action failure's rendered length the view carries into its notice. */
 const ACTION_ERROR_MAX = 300;
@@ -153,16 +159,7 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): HTMLE
 				...view.notes.map((line) => h("p", { class: "note-line" }, line)),
 			);
 
-	const payment = h(
-		"footer",
-		{ class: "invoice-payment" },
-		h("h2", { class: "section-title" }, view.labels.paymentTitle),
-		h(
-			"dl",
-			{ class: "payment-list" },
-			...view.payment.map((term) => paymentTerm(term.label, term.value, term.mono === true)),
-		),
-	);
+	const payment = renderPaymentSection(view, options.clipboard ?? null);
 
 	// The item table can overflow a phone; making its scroll box a named, focusable region lets a keyboard-only user reach the clipped columns, which Safari's scroller auto-focus does not.
 	const document = h(
@@ -183,7 +180,11 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): HTMLE
 	return h("section", { class: "view view-invoice" }, documentActions(invoice, options), document);
 }
 
-/** The actions around the document are chrome; the `no-print` class hides them from the print path in `print.css`, and the exported PDF, drawn from the view model, never reads this DOM. */
+/**
+ * The actions around the document are chrome; the `no-print` class hides them from the print path in `print.css`, and the exported PDF, drawn from the view model, never reads this DOM.
+ *
+ * Pay is the injected-wallet flow, which only the EVM family pays through: on an EVM invoice it is present so the layout is complete and stays disabled — with the reason shown beside it — until a handler is wired, so no click can reach an EVM provider before one exists, while a privacy-chain invoice is offered a hint naming the hand-off it does carry instead of a control that would lead nowhere.
+ */
 function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 	const shareButton = h("button", { type: "button", class: "btn btn-secondary" }, "Share");
 	shareButton.addEventListener("click", () => {
@@ -193,25 +194,26 @@ function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 	const saveButton = h("button", { type: "button", class: "btn btn-secondary" }, "Save as PDF");
 	saveButton.addEventListener("click", () => runAction(() => exportPdf(invoice, options), options, "PDF export"));
 
-	// Pay is present so the layout is complete; it stays disabled — with the reason shown beside it — until the wallet payment flow supplies a handler, so no click can reach an EVM provider before one is wired.
-	const pay = options.pay;
+	// The Pay control is offered only for the invoices the wallet planner can pay: `isWalletPayable` is the same predicate `buildPaymentPlan` enforces, so the control this view offers and the flow behind it cannot disagree.
+	const walletPayable = isWalletPayable(requireAsset(invoice.asset));
+	const pay = walletPayable ? options.pay : undefined;
 	const payNoteId = "pay-unavailable";
-	const payButton = h(
-		"button",
-		{
-			type: "button",
-			class: "btn btn-primary",
-			disabled: pay === undefined,
-			"aria-describedby": pay === undefined ? payNoteId : undefined,
-		},
-		"Pay",
-	);
-	if (pay !== undefined) {
+	const payButton = walletPayable
+		? h(
+				"button",
+				{
+					type: "button",
+					class: "btn btn-primary",
+					disabled: pay === undefined,
+					"aria-describedby": pay === undefined ? payNoteId : undefined,
+				},
+				"Pay",
+			)
+		: null;
+	if (payButton !== null && pay !== undefined) {
 		payButton.addEventListener("click", () => runAction(() => pay(invoice), options, "Payment"));
 	}
-	const payNote = pay === undefined
-		? h("p", { class: "field-hint", id: payNoteId }, "Available once the wallet flow is connected.")
-		: null;
+	const payNote = walletPayNote(walletPayable, pay, payNoteId);
 
 	return h(
 		"div",
@@ -223,6 +225,21 @@ function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 		payButton,
 		payNote,
 	);
+}
+
+/**
+ * The text beside the Pay control: the family's own hand-off, or the reason the wallet flow's control is not wired yet.
+ *
+ * The hand-off sentence is `ui/messages.ts`'s — the one the payment panel's own refusal shows — read from there rather than spelled again, so the hint the payer sees and the notice a panel opened for the same invoice would show cannot describe the payment differently, and this document renderer depends on no wallet-panel module for its own display text.
+ */
+function walletPayNote(walletPayable: boolean, pay: PayHandler | undefined, noteId: string): HTMLElement | null {
+	if (!walletPayable) {
+		return h("p", { class: "field-hint" }, UNSUPPORTED_WALLET_MESSAGE);
+	}
+	if (pay === undefined) {
+		return h("p", { class: "field-hint", id: noteId }, "Available once the wallet flow is connected.");
+	}
+	return null;
 }
 
 /**
@@ -264,14 +281,5 @@ function metaField(label: string, value: string): HTMLElement {
 		{ class: "meta-field" },
 		h("span", { class: "meta-label" }, label),
 		h("span", { class: "meta-value" }, value),
-	);
-}
-
-function paymentTerm(label: string, value: string, mono = false): HTMLElement {
-	return h(
-		"div",
-		{ class: "payment-term" },
-		h("dt", {}, label),
-		h("dd", { class: mono ? "mono" : undefined }, value),
 	);
 }

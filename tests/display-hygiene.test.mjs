@@ -1,18 +1,26 @@
-/** The suite for display hygiene: the stripping pass and the validator's refusals of control, line-separator, and direction-formatting code points across the view model, document, panel, and PDF. */
+/** The suite for display hygiene: the stripping pass across the view model, document, panel, and PDF, and the bound each payment-details value is clipped to — the validator's refusals of control, line-separator, and direction-formatting code points included. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { SUPPORTED_CHAIN_IDS, isCanonicalEvmChainId } from "../app/js/assets/registry.js";
 import { decodeInvoice } from "../app/js/invoice/codec.js";
 import { createInvoice } from "../app/js/invoice/model.js";
+import { MAX_PAYMENT_LINK_BYTES, buildPaymentLink } from "../app/js/payment/links.js";
 import { buildInvoicePages } from "../app/js/pdf/renderer.js";
+import { chainName, networkLabel } from "../app/js/ui/network-labels.js";
 import { openPayPanel } from "../app/js/ui/pay.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
-import { base32nopad, utf8 } from "../app/js/util/encoding.js";
+import { base32nopad, base58xmr, keccak256, utf8 } from "../app/js/util/encoding.js";
 import { boundMessage } from "../app/js/util/errors.js";
 import { MULTI_LINE_CONTROL, SINGLE_LINE_CONTROL, stripDisplayCharacters } from "../app/js/util/text.js";
+import { MAX_EVM_ADDRESS_LENGTH } from "../app/js/wallet/address.js";
+import { MAX_MONERO_ADDRESS_LENGTH } from "../app/js/wallet/monero-address.js";
+import { MAX_PAYOUT_ADDRESS_LENGTH } from "../app/js/wallet/payout-address.js";
+import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
-import { findAll, textOf } from "./helpers/tree.mjs";
+import { findAll, hasClass, textOf } from "./helpers/tree.mjs";
+import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 
 const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
@@ -22,6 +30,11 @@ const INVOICE_TEXT_STRIP = ["\uFFF9", "\uFFFA", "\uFFFB", "\u{13430}", "\u{1343F
 
 // A deterministic stand-in for embedded-font metrics, matching the PDF suite: every glyph is half the point size wide.
 const METRICS = { widthOfText: (text, size) => text.length * size * 0.5 };
+
+// The two Zcash bounds the fixtures below read: the unified container the validator decodes under its longest bound, and the mainnet integrated Monero encoding, which is the widest form that family takes.
+const UNIFIED_PAYLOAD_BYTES = 189;
+const INTEGRATED_MONERO_BYTES = 77;
+const MONERO_CHECKSUM_BYTES = 4;
 
 function invoiceFor(overrides = {}) {
 	return createInvoice({
@@ -48,8 +61,18 @@ function noticeRecorder() {
 	};
 }
 
-function hasClass(node, name) {
-	return (node.attributes.class ?? "").split(/\s+/).includes(name);
+/**
+ * A mainnet Monero integrated address — the widest address that family accepts — built the way the validator reads one: the `0x13` mainnet prefix, a 77-byte body, and the four-byte Keccak-256 checksum over everything before them, in Monero's block-padded base58.
+ * The body is deterministic filler, because what the validator checks is the prefix, the encoding length, and the checksum; no key material is read and none is certified.
+ */
+function widestMoneroAddress() {
+	const body = new Uint8Array(INTEGRATED_MONERO_BYTES - MONERO_CHECKSUM_BYTES);
+	body[0] = 0x13;
+	for (let index = 1; index < body.length; index += 1) body[index] = (index * 7) & 0xff;
+	const encoding = new Uint8Array(INTEGRATED_MONERO_BYTES);
+	encoding.set(body);
+	encoding.set(keccak256(body).subarray(0, MONERO_CHECKSUM_BYTES), body.length);
+	return base58xmr.encode(encoding);
 }
 
 /** The text the PDF text path draws, read from the pure layout so no font is embedded. */
@@ -151,6 +174,126 @@ test("the view model passes every clipped field through the display strip", () =
 	assert.deepEqual(model.notes, ["first line", "second line"], "the note's line structure survives the strip");
 });
 
+/** Every string the view model hands a renderer, labelled by where it is displayed. */
+function displayedStrings(model) {
+	const entries = [
+		["documentNumber", model.documentNumber],
+		["from.name", model.from.name],
+		["from.email", model.from.email],
+		["billTo.name", model.billTo === null ? undefined : model.billTo.name],
+		["billTo.email", model.billTo === null ? undefined : model.billTo.email],
+		["dates", model.dates.map((date) => date.value)],
+		["lines", model.lines.flatMap((line) => [line.description, line.unitPrice, line.amount])],
+		["subtotal", model.subtotal],
+		["tax.label", model.tax === null ? undefined : model.tax.label],
+		["tax.value", model.tax === null ? undefined : model.tax.value],
+		["total", model.total],
+		["notes", model.notes],
+		["payment", model.payment.map((term) => term.value)],
+	];
+	const flat = [];
+	for (const [where, value] of entries) {
+		if (Array.isArray(value)) value.forEach((entry, index) => flat.push([`${where}[${index}]`, entry]));
+		else if (typeof value === "string") flat.push([where, value]);
+	}
+	return flat;
+}
+
+// Each payment-details term's own clip bound, recomputed here from the source that owns it — the link layer's byte ceiling, the widest address any payout family admits, and the longest network label the supported networks spell — rather than read off the view model, so a term bounded by another value's figure fails the case below.
+const MAX_PAYMENT_NETWORK_CHARS = Math.max(...SUPPORTED_CHAIN_IDS.map((chainId) => networkLabel(chainId).length));
+
+test("the payment details pass their values through the clip boundary every other displayed field uses", () => {
+	// The payee is the widest address any payout family admits, so the address term is exercised at a length its own bound has to carry rather than at one every candidate bound would leave untouched.
+	const address = unifiedOfBytes(UNIFIED_PAYLOAD_BYTES);
+	assert.equal(address.length, MAX_ZCASH_ADDRESS_LENGTH, "the fixture is the widest address the payout validators accept");
+	const invoice = invoiceFor({
+		due: "2026-11-02",
+		payee: { name: "Studio Example", address },
+		chainId: "zcash",
+		asset: "zec",
+	});
+	const model = buildInvoiceViewModel(invoice, "2026-10-03");
+	const link = buildPaymentLink(invoice);
+	assert.equal(model.paymentLink, link.uri, "the view model states that URI by name, so the case below reads it rather than a term's position");
+	// The network, the payee address, and the link are invoice-derived display strings like any other, so each is the same clip bound and strip the module applies to a name or a description — each under its own value's bound, never one figure borrowed from another layer.
+	for (const [index, label, raw, bound] of [
+		[1, "Network", networkLabel(invoice.chainId), MAX_PAYMENT_NETWORK_CHARS],
+		[2, "Pays to", address, MAX_PAYOUT_ADDRESS_LENGTH],
+		[4, "Payment link", model.paymentLink, MAX_PAYMENT_LINK_BYTES],
+	]) {
+		assert.equal(model.payment[index].label, label);
+		assert.equal(
+			model.payment[index].value,
+			stripDisplayCharacters(boundMessage(raw, bound)),
+			`${label}: the displayed value is not the clip boundary's own output for the value under its own bound`,
+		);
+	}
+	assert.equal(model.payment[2].value, address, "the widest accepted address is displayed whole rather than truncated");
+});
+
+test("the payment details show the widest address each payout family accepts, whole", () => {
+	// The bound the section clips an address to is the payout dispatcher's own maximum across the families, so no family's longest accepted address is truncated on screen or in the PDF: each fixture here is the widest that family's validator takes, and each reaches the displayed term through a real invoice — which is itself the validator's acceptance of it.
+	const zcashAddress = unifiedOfBytes(UNIFIED_PAYLOAD_BYTES);
+	const moneroAddress = widestMoneroAddress();
+	assert.equal(PAYEE.length, MAX_EVM_ADDRESS_LENGTH, "the EVM fixture is the one length every EVM payee has");
+	assert.equal(zcashAddress.length, MAX_ZCASH_ADDRESS_LENGTH, "the Zcash fixture is the widest form its validator accepts");
+	assert.equal(moneroAddress.length, MAX_MONERO_ADDRESS_LENGTH, "the Monero fixture is the widest form its validator accepts");
+	assert.equal(
+		Math.max(PAYEE.length, zcashAddress.length, moneroAddress.length),
+		MAX_PAYOUT_ADDRESS_LENGTH,
+		"and the display cap is the widest of them, not one family's constant",
+	);
+
+	for (const [invoice, address] of [
+		[invoiceFor(), PAYEE],
+		[invoiceFor({ chainId: "zcash", asset: "zec", payee: { name: "Studio Example", address: zcashAddress } }), zcashAddress],
+		[invoiceFor({ chainId: "monero", asset: "xmr", payee: { name: "Studio Example", address: moneroAddress } }), moneroAddress],
+	]) {
+		const model = buildInvoiceViewModel(invoice, "2026-10-03");
+		assert.equal(model.payment[2].value, address, `${invoice.asset}: the widest accepted address is displayed whole`);
+	}
+});
+
+test("the payer-visible network label has one spelling, shared by every surface that names a network", () => {
+	// The document's Payment details term, the payment panel's summary, and the payment flow's guidance all read this one helper, so none of them can describe a network differently.
+	// The registry id is one a wallet shows only for an EVM chain, so it is carried beside that chain's name alone: a privacy chain's id is this app's own slug for it.
+	for (const chainId of SUPPORTED_CHAIN_IDS) {
+		const expected = isCanonicalEvmChainId(chainId) ? `${chainName(chainId)} (${chainId})` : chainName(chainId);
+		assert.equal(networkLabel(chainId), expected, `${chainId} is named by its friendly name, with its id only where a wallet reads one`);
+	}
+	assert.equal(networkLabel("0x1"), "Ethereum (0x1)");
+	assert.equal(networkLabel("zcash"), "Zcash", "a privacy chain renders under its name alone, with no id suffix");
+	assert.equal(networkLabel("monero"), "Monero", "and the same for the other privacy chain");
+	assert.equal(networkLabel("0x89"), "0x89", "a network the display map does not name falls back to its bare id");
+	assert.equal(networkLabel("constructor"), "constructor", "an inherited prototype member is not read as a chain name");
+
+	const fake = installInteractiveDocument();
+	try {
+		const handle = openPayPanel(invoiceFor(), { notice: noticeRecorder(), clipboard: null });
+		assert.ok(handle, "the panel opens");
+		const dialog = findAll(handle.element, (node) => hasClass(node, "pay-dialog"))[0];
+		assert.ok(dialog, "the panel renders its dialog");
+		assert.ok(textOf(dialog).includes(networkLabel("0x1")), "the panel's summary names the network in the same spelling");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("every string the view model displays is free of unshown code points, the payment details included", () => {
+	const invoice = invoiceFor({
+		id: "INV\uFFF91",
+		payee: { name: "Ana\u{13430}Example", address: PAYEE, email: "bill\uFFF9ing@example.com" },
+		payer: { name: "Cli\uFFFAent Co", email: "pay\u{13430}er@example.com" },
+		tax: { label: "V\uFFFBAT 19%", rate: "19" },
+		items: [{ description: "De\uFFFBsign", quantity: "1", unitPrice: "1" }],
+		notes: "first\uFFF9 line\nsecond line",
+	});
+	const model = buildInvoiceViewModel(invoice, "2026-10-03");
+	for (const [where, value] of displayedStrings(model)) {
+		assert.equal(value, stripDisplayCharacters(value), `${where} carries a code point the display strip removes: ${JSON.stringify(value)}`);
+	}
+});
+
 test("the invoice view strips unshown code points from the document it renders", () => {
 	const fake = installInteractiveDocument();
 	try {
@@ -209,5 +352,6 @@ test("the PDF text path draws the stripped invoice text", () => {
 	for (const character of INVOICE_TEXT_STRIP) {
 		assert.ok(!text.includes(character), `U+${character.codePointAt(0).toString(16)} reached the PDF text path`);
 	}
-	assert.ok(!text.includes("?"), "no stripped code point was left to fold into a replacement glyph");
+	// The payment link carries the query separator `?` of its own scheme, so exactly that many question marks are expected: any other would be a code point folded into a replacement glyph.
+	assert.equal(text.split("?").length - 1, 1, "no stripped code point was left to fold into a replacement glyph");
 });

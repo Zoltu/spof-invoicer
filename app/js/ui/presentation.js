@@ -2,19 +2,29 @@
  * The invoice's presentation layer: the domain model derived once into display strings.
  *
  * The on-screen document (`ui/view.ts`) and the pdf-lib renderer both build from this module, so the two layouts cannot drift: the clip caps, the date formatting, the status classification, the chain name, and every money figure are computed here, never re-derived at a render site.
- * The clip caps are the model's own exported constants, so a cap can only be changed in one place.
- * Each free-text field is also passed through the display strip as it is clipped, so a hostile invoice cannot carry a code point the validator leaves unrefused — the interlinear-annotation and Egyptian-hieroglyph format ranges, the C1 controls — into the document a payer reads.
+ * The payment link and its QR symbol are computed here for the same reason: the URI is built once through `payment/links.ts`, checked to be a URI the display boundary carries byte for byte, exposed as this module's own named `paymentLink`, and its symbol is encoded from that same value through `util/qr.ts`, so the link a payer reads, the link a payer copies, and the payload a wallet scans are one string rather than two spellings that happen to agree.
+ * The amount is read off that same built link — the total it carries, which is the invoice's own recomputed total — for the document's Total due and for the Amount term a payer copies alike, so the figure a wallet is asked for, the figure the document prints, and the figure the clipboard takes are one value rather than two recomputations of the same total kept in step by hope.
+ * A link the display boundary would shorten or alter is refused rather than shown clipped: the link builder and the encoder would each refuse the altered text, and the document must never present a payment URI a wallet cannot pay.
+ * Each clip cap is the widest legal form of the value it bounds rather than any other budget: the free-text caps are the model's own exported constants, the payee address's is the widest address any of this app's payout-address validators accepts across every family and form, and the network label's is the longest label this app's supported networks spell, so a bound never shortens a value a payer copies out of the document.
+ * The payment values a wallet takes verbatim are the exception to the clip: an address or a URI the display boundary cannot carry unchanged is refused rather than displayed, because {@link clip}'s free-text rule annotates what it shortened, and an address a payer copies with `… (N characters)` appended is a payment to a wallet that does not exist.
+ * The link is the one payment value whose bound is not a clip cap: its budget is the link layer's own, applied in bytes where the URI is built, and the display boundary re-measures the URI it would show in those same bytes rather than in the UTF-16 code units a clip counts.
+ * Each free-text field is also passed through the display strip as it is clipped, and so is every payment-details value derived from the invoice's network or payee, so a hostile invoice cannot carry a code point the validator leaves unrefused — the interlinear-annotation and Egyptian-hieroglyph format ranges, the C1 controls — into the document a payer reads.
+ * The network label is the one spelling every payer-facing surface shows, so the document, the payment panel's summary, and the payment flow's guidance cannot describe one network differently; it is declared in `ui/network-labels.ts`, the dependency-free leaf that names every supported network, and this module imports the one label it displays from there without re-exporting any of them, so a surface that only names a network reaches that leaf rather than the module whose import graph carries the link builder and the QR encoder.
  * Nothing in this module touches the DOM or the clock — `today` is an explicit argument — so the whole output is a pure function of the validated {@link Invoice} and the caller's `today`.
  *
- * {@link buildInvoiceViewModel} is the seam the PDF renderer consumes.
- * The exported members beside it ({@link CHAIN_NAMES}, {@link money}, {@link chainName}, {@link formatInvoiceDate}, {@link invoiceStatus}) are the shared primitives the view model is assembled from; {@link clip} is a helper internal to this module, not part of what it exports.
+ * {@link buildInvoiceViewModel} is the seam both renderers consume.
+ * The exported members beside it ({@link money}, {@link formatInvoiceDate}, {@link invoiceStatus}) are the shared primitives the view model is assembled from, while the network label it shows is `ui/network-labels.ts`'s own — imported, not re-exported, so naming a network has one import path; {@link clip} is a helper internal to this module, not part of what it exports.
  */
+import { SUPPORTED_CHAIN_IDS } from "../assets/registry.js";
 import { MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ID_CHARS, MAX_INVOICE_NOTES_CHARS, MAX_NAME_CHARS, MAX_TAX_LABEL_CHARS, computeTotals, } from "../invoice/model.js";
+import { MAX_PAYMENT_LINK_BYTES, PaymentLinkError, buildPaymentLink } from "../payment/links.js";
+import { utf8ToBytes } from "../util/encoding.js";
 import { boundMessage } from "../util/errors.js";
+import { encodeQr } from "../util/qr.js";
 import { stripDisplayCharacters } from "../util/text.js";
+import { MAX_PAYOUT_ADDRESS_LENGTH } from "../wallet/payout-address.js";
+import { networkLabel } from "./network-labels.js";
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-/** The friendly name of each supported chain, keyed by its canonical lower-case id; every chain the registry supports must have an entry so it never renders as its raw id. */
-export const CHAIN_NAMES = Object.freeze({ "0x1": "Ethereum" });
 /**
  * Render a `YYYY-MM-DD` date as a deterministic human date, e.g. `3 Oct 2026`.
  *
@@ -44,22 +54,29 @@ export function invoiceStatus(invoice, today) {
     return Object.freeze({ label: "Payment due", tone: "due" });
 }
 /**
- * The human name of a chain, falling back to its id for one the display map does not name.
- * Only an own property is read, so a chain id that collides with an inherited `Object.prototype` member still falls back to the raw id.
- */
-export function chainName(chainId) {
-    return Object.hasOwn(CHAIN_NAMES, chainId) ? CHAIN_NAMES[chainId] : chainId;
-}
-/**
  * Clip a free-text field to its model cap and pass it through {@link stripDisplayCharacters}, the same display strip the wallet boundary applies to an announced label.
  *
  * The invoice validator deliberately does not refuse the interlinear-annotation and Egyptian-hieroglyph format ranges, so this is the boundary that keeps those, and any C1 control, out of the rendered document; every displayed invoice text field is clipped here, so a new field inherits the strip unless it is deliberately rendered some other way.
  * The bound runs before the strip, exactly as the wallet boundary bounds an announced label before stripping it, so the pass never sees more than the cap.
+ * The payment values a wallet takes verbatim deliberately do not come through here — {@link paymentAddressText} and {@link paymentLinkText} refuse a value the boundary cannot carry unchanged instead of annotating it, and the amount is the model's own ASCII decimal text — while the network label beside them, which no wallet reads as a value, is clipped like any other displayed text.
  * Every call site is inside this module; elsewhere the codebase calls `boundMessage` directly, which is why this is not exported.
  */
 function clip(value, max) {
     return stripDisplayCharacters(boundMessage(value, max));
 }
+/**
+ * The widest payee address the payment section displays: {@link MAX_PAYOUT_ADDRESS_LENGTH}, the longest address any of this app's payout-address validators accepts.
+ *
+ * The bound is the display's own: the address the section shows is the one a payer copies into a wallet, so it is drawn from the true maximum across every accepted family and form — an EVM address, a transparent, Sapling, or unified Zcash address, and a Monero standard, subaddress, or integrated one — rather than from one family's validator constant, which an address of another family's longer form would be silently cut against.
+ * It is applied fail closed by {@link paymentAddressText} rather than as a clip: the figure is the true maximum, so no address a validator accepts reaches it, and one that ever did — a family growing a longer form, or a validator admitting a code point the display strip removes — is refused outright instead of being displayed, and copied, with the clip's own annotation on it.
+ */
+const MAX_PAYMENT_ADDRESS_CHARS = MAX_PAYOUT_ADDRESS_LENGTH;
+/**
+ * The widest network label the payment section displays: the longest {@link networkLabel} this app's supported networks spell.
+ *
+ * The term shows `networkLabel(chainId)` for a network the model has already held to `SUPPORTED_CHAIN_IDS`, so this derivation covers every label the section can show and the bound never shortens one; the registry always names at least one network, which `DEFAULT_CHAIN_ID`'s own derivation requires.
+ */
+const MAX_PAYMENT_NETWORK_CHARS = Math.max(...SUPPORTED_CHAIN_IDS.map((chainId) => networkLabel(chainId).length));
 /**
  * The invoice's notes split into the lines the view renders one paragraph per.
  * The strip removes line and paragraph separators, so it runs on each line after the split; stripping the whole block instead would collapse the note to one line.
@@ -70,6 +87,35 @@ function noteLines(notes) {
 /** A money figure with the asset's symbol, e.g. `357.000001 USDC`. */
 export function money(amount, symbol) {
     return `${amount.text} ${symbol}`;
+}
+/**
+ * The payment URI as the document shows it: the link's own bytes, or the {@link PaymentLinkError} that says the display boundary could not carry them unchanged and inside the link layer's own byte budget.
+ *
+ * The displayed term and the QR payload are this one string, so presenting a shortened or stripped URI would hand a payer a link whose copy and whose symbol disagree about what is paid — and the link builder and the encoder would each refuse the altered text the document had already shown.
+ * The length is measured in UTF-8 bytes, the unit {@link MAX_PAYMENT_LINK_BYTES} and the encoder's own version selection are stated in, rather than in the UTF-16 code units {@link clip} counts: a bound counted in code units under-counts a URI carrying any code point outside ASCII, which would pass the display boundary and then be refused by the encoder — with the whole payer document rather than the value that provoked it.
+ * The link is app-generated from a validated payee address and the invoice's own recomputed total, so the strip and the byte budget both leave it untouched and neither refusal is reachable from a validated invoice.
+ * It is checked here rather than assumed, because the display pass does remove code points from other values: a validator or an asset family that one day admitted one into an address would produce a link the document must refuse instead of quietly showing a different one.
+ */
+function paymentLinkText(link) {
+    const shown = stripDisplayCharacters(link.uri);
+    if (shown !== link.uri || utf8ToBytes(shown).length > MAX_PAYMENT_LINK_BYTES) {
+        throw new PaymentLinkError(`the ${link.scheme} link does not survive the display boundary as the ${MAX_PAYMENT_LINK_BYTES}-byte URI it was built as, so the document cannot show, copy, and encode one link`);
+    }
+    return shown;
+}
+/**
+ * The payee address as the document shows it: the address the URI beside it carries, or the {@link PaymentLinkError} that says the display boundary could not carry it unchanged under {@link MAX_PAYMENT_ADDRESS_CHARS}.
+ *
+ * This is the fail-closed shape {@link paymentLinkText} applies to the URI, applied to the address for the same reason: the term is a value a wallet takes verbatim, and {@link clip}'s free-text rule would answer a value it could not show whole by returning the value's prefix with `… (N characters)` appended — an address a payer copies as a payment to nowhere, displayed beside a URI that carries the whole of it.
+ * The refusal is a payment-value refusal rather than a clip, so it carries the class {@link PaymentLinkError} that names the payment whose display boundary could not be honoured, and a caller that assembles an invoice by hand meets it instead of shipping one.
+ * {@link MAX_PAYMENT_ADDRESS_CHARS} is the widest address any of this app's payout validators accepts, so no address a validated invoice can carry reaches the bound or the strip and the refusal is unreachable from one; it is the guard for the day a validator admits a code point the display strip removes, exactly as the link's own re-measurement is.
+ */
+function paymentAddressText(address) {
+    const shown = stripDisplayCharacters(address);
+    if (shown !== address || address.length > MAX_PAYMENT_ADDRESS_CHARS) {
+        throw new PaymentLinkError(`the payee address does not survive the display boundary as the ${MAX_PAYMENT_ADDRESS_CHARS}-character address the payment link carries, so the document cannot show the payee whose URI it prints`);
+    }
+    return shown;
 }
 /** The one spelling of every fixed document label, shared by the on-screen view and the PDF. */
 export const INVOICE_LABELS = Object.freeze({
@@ -84,12 +130,21 @@ export const INVOICE_LABELS = Object.freeze({
     totalDue: "Total due",
     notesTitle: "Notes and terms",
     paymentTitle: "Payment details",
+    asset: "Asset",
+    network: "Network",
+    paysTo: "Pays to",
+    paymentLink: "Payment link",
     dates: "Dates",
 });
 /**
  * Derive the display strings for a validated invoice against `today`.
  *
- * Every figure comes from {@link computeTotals}, which recomputes the money from the invoice's own line items — never from a transported total — and every free-text field is clipped to its model cap here, so a hostile payee name or description cannot stretch a cell past readability.
+ * Every money figure comes from the invoice's own line items — {@link computeTotals} recomputes them, never a transported total — and every free-text field is clipped to its model cap here, so a hostile payee name or description cannot stretch a cell past readability.
+ * The total the document draws and the Amount term a payer copies are the one amount the built link carries — `payment/links.ts`'s {@link PaymentLink.amount}, whose decimal text is the bare decimal a wallet's amount field takes, with no ticker — so the figure a wallet is asked for, the figure printed beside it, and the figure copied out of it are one value rather than two recomputations that happen to agree today.
+ * The payment terms' network label is clipped like the free-text fields, under the longest label this app's networks spell, while the payee address and the URI are held fail closed instead: the address under {@link MAX_PAYMENT_ADDRESS_CHARS} and the URI under the link layer's own byte budget, so a value that cannot be shown whole is a refused build rather than a displayed prefix with the clip's annotation on it.
+ * The payee term draws the address the link itself carries — the payout-address dispatcher's own return, which `payment/links.ts` exposes as the built link's `payee` — rather than the invoice's raw field, so an `Invoice` a caller assembled by hand cannot display one spelling of a payee beside a URI that encodes another.
+ * The amount, the address, and the link terms carry `verbatim`, the one thing that marks a value a wallet takes verbatim: the on-screen view draws each of those in a single-line field with a copy control, so the value a payer clicks to copy is the same string the URI and the symbol carry rather than whatever their text selection spanned, and the print path and the PDF draw the same string whole rather than the field's own clipped overflow.
+ * The payment link is built once, checked to survive that boundary unchanged, exposed by name, and its symbol is encoded from that one value, so the view model's own {@link InvoiceViewModel.paymentLink}, the term that displays it, and the encoded payload are one string rather than three spellings that happen to agree: a legal invoice's link always fits the encoder's widest symbol, so the two throws those boundaries can raise (`PaymentLinkError`, `RangeError`) are unreachable from a validated invoice and surface only for one a caller assembled by hand.
  * The result is frozen; a renderer reads it and draws, it does not re-derive.
  */
 export function buildInvoiceViewModel(invoice, today) {
@@ -97,6 +152,11 @@ export function buildInvoiceViewModel(invoice, today) {
     const asset = totals.asset;
     const symbol = asset.symbol;
     const notes = invoice.notes === undefined ? null : noteLines(invoice.notes);
+    const link = buildPaymentLink(invoice);
+    // The amount the link was built from, read for the printed total and the copied Amount term alike, so the figure the URI asks for and the figure the document shows are one value.
+    const amount = link.amount;
+    // One value for the named field, the displayed term, and the QR payload alike, so the link a payer reads and the symbol a wallet scans cannot drift apart.
+    const paymentLink = paymentLinkText(link);
     return Object.freeze({
         assetName: asset.name,
         symbol,
@@ -126,13 +186,17 @@ export function buildInvoiceViewModel(invoice, today) {
         tax: invoice.tax === undefined
             ? null
             : Object.freeze({ label: clip(invoice.tax.label, MAX_TAX_LABEL_CHARS), value: money(totals.tax, symbol) }),
-        total: money(totals.total, symbol),
+        total: money(amount, symbol),
         notes: notes === null ? null : Object.freeze(notes),
+        paymentLink,
         payment: Object.freeze([
-            Object.freeze({ label: "Asset", value: `${asset.name} (${asset.symbol})` }),
-            Object.freeze({ label: "Network", value: `${chainName(invoice.chainId)} (${invoice.chainId})` }),
-            Object.freeze({ label: "Pays to", value: invoice.payee.address, mono: true }),
+            Object.freeze({ label: INVOICE_LABELS.asset, value: `${asset.name} (${asset.symbol})` }),
+            Object.freeze({ label: INVOICE_LABELS.network, value: clip(networkLabel(invoice.chainId), MAX_PAYMENT_NETWORK_CHARS) }),
+            Object.freeze({ label: INVOICE_LABELS.paysTo, value: paymentAddressText(link.payee), verbatim: true }),
+            Object.freeze({ label: INVOICE_LABELS.amount, value: amount.text, verbatim: true }),
+            Object.freeze({ label: INVOICE_LABELS.paymentLink, value: paymentLink, verbatim: true }),
         ]),
+        paymentQr: encodeQr(paymentLink),
         labels: INVOICE_LABELS,
     });
 }

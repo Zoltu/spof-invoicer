@@ -6,25 +6,28 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
-import { findAll, walk, textOf } from "./helpers/tree.mjs";
+import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TRANSPARENT_PAYEE } from "./helpers/payee-vectors.mjs";
+import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
+import { readSymbol } from "./helpers/qr-reader.mjs";
+import { findAll, hasClass, inputValues, walk, textOf } from "./helpers/tree.mjs";
+import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 import { SUPPORTED_CHAIN_IDS } from "../app/js/assets/registry.js";
 import { encodeInvoice } from "../app/js/invoice/codec.js";
 import { createInvoice } from "../app/js/invoice/model.js";
+import { buildPaymentLink } from "../app/js/payment/links.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
-import {
-	CHAIN_NAMES,
-	buildInvoiceViewModel,
-	chainName,
-	formatInvoiceDate,
-	invoiceStatus,
-	money,
-} from "../app/js/ui/presentation.js";
+import { buildInvoiceViewModel, formatInvoiceDate, invoiceStatus, money } from "../app/js/ui/presentation.js";
 import { buildShareBundle, createShareDialog, openShareDialog } from "../app/js/ui/share.js";
+import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES } from "../app/js/ui/messages.js";
+import { CHAIN_NAMES, chainName, requireNamedNetworks } from "../app/js/ui/network-labels.js";
+import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
+import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
+import { encodeQr } from "../app/js/util/qr.js";
+import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 
 const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
 
@@ -55,10 +58,6 @@ function noticeRecorder() {
 			calls.push(null);
 		},
 	};
-}
-
-function hasClass(node, name) {
-	return (node.attributes.class ?? "").split(/\s+/).includes(name);
 }
 
 function byText(node, tag, text) {
@@ -212,6 +211,27 @@ test("the presentation module derives the shared view model both renderers consu
 	assert.equal(model.lines[0].amount, "300 USDC");
 	assert.deepEqual(model.notes, ["Thanks for your business.", "Payment due within 30 days."]);
 	assert.deepEqual(model.payment[1], { label: "Network", value: "Ethereum (0x1)" });
+	assert.deepEqual(model.payment[2], { label: "Pays to", value: PAYEE, verbatim: true }, "the address a wallet takes verbatim is marked by the one flag the screen, the print twin, and the PDF all key on");
+	assert.deepEqual(model.payment[3], { label: "Amount", value: "357", verbatim: true }, "the amount is stated as the bare decimal a wallet's amount field takes");
+	assert.deepEqual(model.payment[4], { label: "Payment link", value: model.paymentLink, verbatim: true }, "and the link carries that same one flag");
+	const link = buildPaymentLink(invoice);
+	assert.equal(model.paymentLink, link.uri, "the view model states the URI by name, as the invoice's own scheme builds it");
+	assert.equal(
+		model.payment.find((term) => term.label === model.labels.paymentLink).value,
+		model.paymentLink,
+		"and the Payment link term displays that same named value",
+	);
+	// The amount the link carries is exposed on it, and the document reads that one value rather than recomputing the total: the printed Total due, the Amount term a payer copies, and the figure the URI's own field spells are three readings of one value.
+	const carried = link.amount;
+	assert.equal(carried.text, "357", "the amount the link carries is the bare decimal the document shows");
+	assert.equal(carried.units, 357000000n, "and the same total in the token's own base units");
+	assert.equal(model.total, `${carried.text} ${model.symbol}`, "the document's Total due is that value, not a second recomputation of it");
+	assert.equal(model.payment[3].value, carried.text, "and so is the Amount term a payer copies");
+	assert.equal(model.paymentLink.endsWith(`=${carried.units}`), true, "while the URI's own amount field is that value in the token's base units");
+	assert.equal(model.paymentQr.size, encodeQr(link.uri).size, "with the symbol the encoder makes of it");
+	assert.deepEqual(model.paymentQr.modules, encodeQr(model.paymentLink).modules, "and the matrix is module for module the one the named URI encodes");
+	assert.equal(readSymbol(model.paymentQr).text, model.paymentLink, "an independent decoder reads the named link text back out of the QR payload, so the visible link and the scannable one cannot diverge");
+	assert.equal(model.paymentQr.modules.length, model.paymentQr.size, "a symbol is square");
 	assert.ok(Object.isFrozen(model), "the view model is frozen so a renderer cannot mutate it");
 
 	assert.equal(chainName("0x89"), "0x89", "an unnamed chain falls back to its id");
@@ -220,12 +240,29 @@ test("the presentation module derives the shared view model both renderers consu
 	assert.equal(money({ units: 5n, text: "5" }, "ETH"), "5 ETH");
 });
 
-test("every chain the registry supports renders under a friendly name, not its raw id", () => {
+test("every chain the registry supports renders under a friendly name, and one the map leaves out is refused at load", () => {
 	for (const chainId of SUPPORTED_CHAIN_IDS) {
 		assert.ok(
 			Object.prototype.hasOwnProperty.call(CHAIN_NAMES, chainId),
 			`the registry supports ${chainId}, which has no CHAIN_NAMES entry and would render as its raw id`,
 		);
+	}
+	// The coverage above is the load-time gate's current state rather than a test-only promise: the display layer refuses to run while a network the registry supports has no name here, so a network cannot be added and quietly render as its raw id.
+	assert.doesNotThrow(() => requireNamedNetworks(CHAIN_NAMES, SUPPORTED_CHAIN_IDS), "the shipped map names every supported network");
+	assert.throws(
+		() => requireNamedNetworks({ "0x1": "Ethereum" }, ["0x1", "zcash"]),
+		/network-labels: the registry supports the network "zcash"/,
+		"a network the registry supports and the map does not name is refused rather than rendered as its slug",
+	);
+});
+
+test("the network names have one import path: the leaf that loads neither the link builder nor the encoder", async () => {
+	// A second path for a naming-only concern is how the coupling `ui/network-labels.ts` was split out to remove comes back: a panel taking a label from the display module loads the link layer's budget gates and the QR encoder on a wallet-facing path that builds no link and no symbol.
+	const presentation = await import("../app/js/ui/presentation.js");
+	const labels = await import("../app/js/ui/network-labels.js");
+	for (const name of ["CHAIN_NAMES", "chainName", "networkLabel", "requireNamedNetworks"]) {
+		assert.equal(Object.hasOwn(presentation, name), false, `ui/presentation.ts exposes ${name}, which gives a naming-only concern a second import path`);
+		assert.equal(Object.hasOwn(labels, name), true, `ui/network-labels.ts declares ${name}`);
 	}
 });
 
@@ -579,6 +616,196 @@ test("print.css gates itself to print and keeps the document whole", () => {
 	assert.ok(!/Cmd\/Ctrl\+P/.test(printCss), "the comment must not mistake Save as PDF for browser print");
 });
 
+test("a printed payment value is the whole value, wrapped rather than clipped", () => {
+	// The print path is the one surface where a payment value reached paper through a form control: an input prints its value on one line and clips it at the field's edge, and the copy control beside it — the only affordance that hands over the complete string — is chrome print.css hides, so a Zcash unified address or the link carrying it would print as the prefix that fitted.
+	const address = unifiedOfBytes(189);
+	assert.equal(address.length, MAX_ZCASH_ADDRESS_LENGTH, "the fixture is the widest address the Zcash validator accepts");
+	const invoice = zecInvoice({
+		payee: { name: "Studio Example", address },
+		items: [line({ quantity: "1", unitPrice: fromBaseUnits(UINT256_MAX, 8) })],
+	});
+	const model = buildInvoiceViewModel(invoice, "2026-10-03");
+	assert.equal(model.paymentLink.length, 404, "and the link it pays by is the widest one a legal invoice builds");
+
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
+		const printed = findAll(payment, (node) => hasClass(node, "payment-value-print"));
+		const amount = model.payment.find((term) => term.label === model.labels.amount).value;
+		assert.deepEqual(
+			printed.map((node) => textOf(node)),
+			[address, amount, model.paymentLink],
+			"each value a wallet takes verbatim carries a print presentation of the value itself, the amount, the address, and the link alike",
+		);
+		const fields = inputValues(payment);
+		assert.deepEqual(fields, [address, amount, model.paymentLink], "and the fields the screen draws hold those same strings");
+		// A value the print path could not show whole would arrive here shortened, with the clipper's own annotation appended — the failure this presentation exists to prevent.
+		printed.forEach((node, index) => {
+			assert.doesNotMatch(textOf(node), /\(\d+ characters\)/, "no printed payment value is a clip's annotated prefix");
+			assert.equal(textOf(node), fields[index], "the print presentation is the field's own string, not a second rendering of it");
+		});
+
+		// The swap is the stylesheets' whole contract for the print surface, so both halves are asserted where a print engine reads them: the field is dropped and the twin is shown with a property that lets a value longer than the column break inside itself.
+		const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
+		const field = /input\.payment-value \{([^}]*)\}/.exec(printCss)?.[1];
+		assert.ok(field !== undefined, "print.css states what happens to the field a print engine would clip");
+		assert.match(field, /display:\s*none/, "and drops it, so no printed value is a clipped control");
+		const twin = /\.payment-value-print \{([^}]*)\}/.exec(printCss)?.[1];
+		assert.ok(twin !== undefined, "print.css states how the print presentation is shown");
+		assert.match(twin, /display:\s*(?:block|inline)/, "and shows it in the field's place");
+		assert.match(
+			twin,
+			/overflow-wrap:\s*(?:anywhere|break-word)|word-break:\s*break-all/,
+			"with the property that breaks a value wider than the column inside itself rather than overflowing it",
+		);
+		assert.doesNotMatch(twin, /white-space:\s*nowrap|overflow(?:-[xy])?\s*:\s*(?:hidden|clip)/, "and with nothing that holds it on one line or clips it");
+		const screenTwin = /\.payment-value-print \{([^}]*)\}/.exec(readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8"))?.[1];
+		assert.ok(screenTwin !== undefined, "invoice.css declares the print presentation too, so the two are swapped rather than both drawn");
+		assert.match(screenTwin, /display:\s*none/, "which is hidden on screen, where the field and its copy control are the presentation");
+	} finally {
+		fake.restore();
+	}
+});
+
+/**
+ * Every `.payment-qr` rule a stylesheet declares, labelled with the at-rule it sits inside and its own selector, so an invariant named for the symbol's card is checked everywhere the property could be written rather than only in the first matching block.
+ */
+function paymentQrRules(css, stylesheet) {
+	const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
+	const rules = [];
+	for (const match of stripped.matchAll(/(@media[^{]*\{\s*)?([^{}]*?\.payment-qr[^{}]*?)\s*\{([^{}]*)\}/g)) {
+		const query = (match[1] ?? "").trim().replace(/\{$/, "").trim();
+		rules.push({ where: [stylesheet, query, match[2].trim()].filter((part) => part !== "").join(" "), body: match[3] });
+	}
+	return rules;
+}
+
+test("the screen's symbol derives its quiet zone from one declared module size, which the print rules leave alone", () => {
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
+	const rules = [...paymentQrRules(invoiceCss, "invoice.css"), ...paymentQrRules(printCss, "print.css")];
+	const card = rules.find((rule) => rule.where === "invoice.css .payment-qr")?.body;
+	const cell = /\.qr-module \{([^}]*)\}/.exec(invoiceCss)?.[1];
+	assert.ok(card !== undefined && cell !== undefined, "the stylesheet declares the symbol's card and its module cells");
+	assert.match(card, /--qr-module:\s*3px;/, "the module's size is declared once, on the card its cells inherit it from");
+	assert.match(card, /padding:\s*calc\(4 \* var\(--qr-module\)\);/, "the card's padding is the standard's four-module quiet zone, derived from that size");
+	assert.match(cell, /width:\s*var\(--qr-module\);/, "a cell takes its width from the declared size");
+	assert.match(cell, /height:\s*var\(--qr-module\);/, "and its height");
+
+	// Both invariants are checked against every `.payment-qr` rule in both stylesheets — the screen-scoped step-down and the print rules included — so a clipping overflow, a padding that is not the four-module quiet zone, or a module size raised past the card's is caught wherever it is written rather than only in the first block.
+	const base = Number(/--qr-module:\s*([\d.]+)px/.exec(card)?.[1]);
+	assert.ok(rules.length >= 3, `both stylesheets' symbol rules are read: ${rules.map((rule) => rule.where).join(", ")}`);
+	for (const { where, body } of rules) {
+		assert.ok(!/overflow(?:-[xy])?\s*:\s*(?:hidden|clip)\b/.test(body), `${where} must not clip the symbol it holds, so a wider grid grows the card rather than being cut off`);
+		const padding = /\bpadding:\s*([^;]+);/.exec(body)?.[1];
+		if (padding !== undefined) {
+			assert.equal(padding.trim(), "calc(4 * var(--qr-module))", `${where} states the quiet zone as the standard's four modules of the size the card declares`);
+		}
+		for (const declared of body.matchAll(/--qr-module:\s*([\d.]+)px/g)) {
+			assert.ok(Number(declared[1]) <= base, `${where} declares a ${declared[1]}px module, which raises the symbol past the ${base}px the card declares instead of stepping it down`);
+		}
+	}
+	assert.ok(
+		rules.some((rule) => rule.where.includes("@media")) && rules.some((rule) => rule.where.startsWith("print.css")),
+		`the screen-scoped step-down and the print rules are among the symbol rules read: ${rules.map((rule) => rule.where).join(", ")}`,
+	);
+	assert.ok(
+		!/\.payment-qr[^{}]*\{[^}]*?(?:width|height|padding|--qr-module)\s*:/.test(printCss),
+		"print.css must not restate the symbol's geometry, which invoice.css derives from one size",
+	);
+});
+
+/** The horizontal side padding a one-to-four-value shorthand declares, in rem: the second value is the horizontal one whenever the shorthand has more than one. */
+function horizontalRem(rule, where) {
+	const declared = /\bpadding:\s*([^;]+);/.exec(rule)?.[1];
+	assert.ok(declared !== undefined, `${where} declares a side padding`);
+	const values = declared.trim().split(/\s+/);
+	assert.ok(values.length <= 4, `${where} declares a side padding this test can read`);
+	return remValue(values.length === 1 ? values[0] : values[1], where);
+}
+
+/** The number a length in rem declares, with the unit required so that a px or percentage value cannot pass as the column's own figure. */
+function remValue(length, where) {
+	assert.match(String(length), /^[\d.]+rem$/, `${where} states its length in rem`);
+	return Number(String(length).replace(/rem$/, ""));
+}
+
+test("the widest symbol the encoder can return fits the document column at the narrowest viewport the stylesheet is laid out for", () => {
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+
+	// The worst case comes from the encoder rather than from a figure restated here: the version-15 symbol the widest link builds, inside the standard's quiet zone and the card's border.
+	const widest = zecInvoice({
+		payee: { name: "Studio Example", address: unifiedOfBytes(189) },
+		items: [line({ quantity: "1", unitPrice: fromBaseUnits(UINT256_MAX, 8) })],
+	});
+	const modules = buildInvoiceViewModel(widest, "2026-10-03").paymentQr.size;
+	assert.equal(modules, 77, "the worst case is the encoder's own widest symbol");
+
+	// Every `.payment-qr` rule in both stylesheets is read here, so the geometry below cannot be restated behind the card's back: the card is selected by its own label, the step-down by its screen-scoped query, and no other rule may state a module size, the quiet zone, or the border.
+	const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
+	const rules = [...paymentQrRules(invoiceCss, "invoice.css"), ...paymentQrRules(printCss, "print.css")];
+	const cardRule = rules.find((rule) => rule.where === "invoice.css .payment-qr");
+	assert.ok(cardRule !== undefined, "the stylesheet declares the symbol's card");
+	const card = cardRule.body;
+	const quietModules = Number(/padding:\s*calc\((\d+) \* var\(--qr-module\)\)/.exec(card)?.[1]);
+	const border = Number(/border:\s*(\d+)px solid/.exec(card)?.[1]);
+	const base = Number(/--qr-module:\s*([\d.]+)px/.exec(card)?.[1]);
+	assert.equal(quietModules, 4, "the card's padding is the standard's four-module quiet zone");
+	assert.equal(border, 1, "the card carries a one-pixel border on each side");
+
+	// The module size in force at a viewport: the card's own declaration, narrowed by the screen-scoped small-viewport rule.
+	const stepDown = rules.find((rule) => /@media screen and \(max-width: \d+px\)/.test(rule.where) && /--qr-module:/.test(rule.body));
+	assert.ok(stepDown !== undefined, "the stylesheet steps the module down for the screen below a declared width");
+	const stepDownWidth = Number(/max-width: (\d+)px/.exec(stepDown.where)?.[1]);
+	const narrow = Number(/--qr-module:\s*([\d.]+)px/.exec(stepDown.body)?.[1]);
+	assert.ok(narrow < base && stepDownWidth >= 320, `the step-down below ${stepDownWidth}px lowers the ${base}px module to ${narrow}px under this test's floor`);
+	const moduleAt = (viewport) => (viewport <= stepDownWidth ? narrow : base);
+	for (const rule of rules) {
+		if (rule === cardRule || rule === stepDown) continue;
+		assert.ok(
+			!/--qr-module:|\bpadding:|\bborder:\s/.test(rule.body),
+			`${rule.where} must not restate the module size, the quiet zone, or the border the arithmetic here reads off the card`,
+		);
+	}
+
+	// The column the card sits in, read off the two stylesheets' own declarations — the page's max-width and side padding, the document's side padding, and its border — with the browser's 16px root as the rem neither stylesheet restates, so a padding change moves this bound instead of silently narrowing the real column.
+	const rem = 16;
+	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
+	const appRule = /#app \{([^}]*)\}/.exec(appCss)?.[1];
+	const documentRule = /\.invoice-document \{([^}]*)\}/.exec(invoiceCss)?.[1];
+	const narrowPage = /@media \(max-width: (\d+)px\) \{\s*#app \{([^}]*)\}/.exec(appCss);
+	const narrowDocument = /@media \(max-width: (\d+)px\) \{\s*\.invoice-document \{([^}]*)\}/.exec(invoiceCss);
+	assert.ok(appRule !== undefined && documentRule !== undefined, "both stylesheets declare the boxes this column is nested in");
+	assert.ok(narrowPage !== undefined && narrowDocument !== undefined, "both stylesheets narrow the column's side padding at a small-viewport breakpoint");
+	assert.equal(narrowPage[1], narrowDocument[1], "the page and the document narrow their side padding at the same width");
+	const paddingBreakpoint = Number(narrowPage[1]);
+	const pageMaxWidth = remValue(/max-width:\s*([\d.]+rem)/.exec(appRule)?.[1], "the page's max-width");
+	const pagePadding = horizontalRem(appRule, "the page's padding");
+	const documentPadding = horizontalRem(documentRule, "the document's padding");
+	const narrowPagePadding = horizontalRem(narrowPage[2], "the page's padding below the padding breakpoint");
+	const narrowDocumentPadding = horizontalRem(narrowDocument[2], "the document's padding below the padding breakpoint");
+	const documentBorder = Number(/border:\s*(\d+)px solid/.exec(documentRule)?.[1]);
+	assert.equal(documentBorder, border, "the card's border and the document's are the same declared width");
+	const pagePaddingAt = (viewport) => (viewport <= paddingBreakpoint ? narrowPagePadding : pagePadding);
+	const documentPaddingAt = (viewport) => (viewport <= paddingBreakpoint ? narrowDocumentPadding : documentPadding);
+	const columnAt = (viewport) => Math.min(viewport, pageMaxWidth * rem) - 2 * (pagePaddingAt(viewport) + documentPaddingAt(viewport)) * rem - 2 * documentBorder;
+
+	// 320px is the floor this rests on: neither stylesheet declares a viewport minimum, so the assumption is stated rather than derived — the conventional narrowest mobile width.
+	for (const viewport of [320, 360, 361, 480, 640, 641, 1024]) {
+		const symbol = (modules + 2 * quietModules) * moduleAt(viewport) + 2 * border;
+		assert.ok(
+			symbol <= columnAt(viewport),
+			`the ${modules}-module symbol measures ${symbol}px at a ${viewport}px viewport, where the document column leaves ${columnAt(viewport)}px`,
+		);
+	}
+
+	// The step-down earns its place at the floor above: the base module's card is a few pixels wider than the column there, a spill the document's own side padding absorbs rather than clips.
+	const baseCard = (modules + 2 * quietModules) * base + 2 * border;
+	assert.ok(baseCard > columnAt(320), `the base module's ${baseCard}px card is wider than the ${columnAt(320)}px column a 320px viewport leaves`);
+	assert.ok(baseCard - columnAt(320) < documentPaddingAt(320) * rem, `the base module's overshoot stays inside the document's own ${documentPaddingAt(320) * rem}px side padding`);
+});
+
 test("the images the page references exist", () => {
 	for (const asset of ["logo.svg", "favicon.svg"]) {
 		assert.ok(existsSync(join(root, "app/images", asset)), `app/images/${asset} must exist`);
@@ -631,8 +858,314 @@ test("the payee's Ethereum address renders under Payment details, never under th
 
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
 		assert.ok(payment, "the Payment details section is rendered");
-		assert.ok(textOf(payment).includes(PAYEE), "the Ethereum address still renders under Payment details");
+		assert.ok(inputValues(payment).includes(PAYEE), "the Ethereum address still renders under Payment details");
 	} finally {
 		fake.restore();
 	}
+});
+
+test("an EVM invoice renders its EIP-681 link and symbol and keeps the wallet Pay control", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const invoice = invoiceFor();
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const link = buildPaymentLink(invoice);
+		assert.equal(link.uri.startsWith("ethereum:"), true, "the invoice's own scheme builds the link");
+		assert.equal(
+			link.uri,
+			`ethereum:0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48@1/transfer?address=${PAYEE}&uint256=300000000`,
+			"the EIP-681 transfer call names the token, the chain, the recipient, and the amount in base units",
+		);
+
+		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
+		assert.ok(inputValues(payment).includes(link.uri), "the EIP-681 link renders under Payment details");
+		const grid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
+		assert.ok(grid, "the symbol of that same URI is drawn under Payment details");
+		assertSymbolCellsInDom(grid, encodeQr(link.uri));
+		assert.equal(byText(view, "button", "Pay").length, 1, "and the injected-wallet control is still offered");
+		assert.ok(
+			!textOf(view).includes(UNSUPPORTED_WALLET_MESSAGE),
+			"an invoice the wallet flow can pay is never told there is no wallet to connect",
+		);
+	} finally {
+		fake.restore();
+	}
+});
+
+/** A native-ETH invoice: the chain's own coin rather than a token, paid to the same payee the other Ethereum fixtures name. */
+function ethInvoice(overrides = {}) {
+	return createInvoice({
+		id: "INV-ETH",
+		issued: "2026-10-03",
+		payee: { name: "Studio Example", address: PAYEE },
+		chainId: "0x1",
+		asset: "eth",
+		items: [line()],
+		...overrides,
+	});
+}
+
+test("a native-ETH invoice renders its own EIP-681 link, the symbol of that URI, and keeps the wallet Pay control", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const invoice = ethInvoice();
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const link = buildPaymentLink(invoice);
+		assert.equal(link.uri.startsWith("ethereum:"), true, "the invoice's own scheme builds the link");
+		assert.equal(
+			link.uri,
+			`ethereum:${PAYEE}@1?value=300000000000000000000`,
+			"the chain's own coin is asked for as a plain value transfer in wei, not as an ERC-20 transfer call",
+		);
+		assert.equal(link.uri.includes("/transfer?"), false, "the native spelling carries no transfer call");
+
+		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
+		assert.ok(payment, "the Payment details section is rendered");
+		assert.ok(inputValues(payment).includes(link.uri), "the EIP-681 link renders under Payment details");
+
+		const model = buildInvoiceViewModel(invoice, "2026-10-03");
+		const grid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
+		assert.ok(grid, "the link's symbol is drawn under Payment details");
+		assert.equal(model.paymentQr.size, encodeQr(link.uri).size, "the view model carries the symbol the encoder returns for the same link");
+		assert.deepEqual(model.paymentQr.modules, encodeQr(model.paymentLink).modules, "and that matrix is the one the named URI this model displays encodes, module for module");
+		assertSymbolCellsInDom(grid, model.paymentQr);
+		assert.equal(byText(view, "button", "Pay").length, 1, "and the injected-wallet control is still offered");
+	} finally {
+		fake.restore();
+	}
+});
+
+function zecInvoice(overrides = {}) {
+	return createInvoice({
+		id: "INV-ZEC",
+		issued: "2026-10-03",
+		payee: { name: "Studio Example", address: ZEC_PAYEE },
+		chainId: "zcash",
+		asset: "zec",
+		items: [line()],
+		...overrides,
+	});
+}
+
+test("a privacy-chain invoice offers no wallet Pay control and names its own hand-off", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(zecInvoice(), { ...VIEW_OPTIONS, notice: noticeRecorder(), pay: () => {} });
+		assert.equal(byText(view, "button", "Pay").length, 0, "no injected-wallet control is offered, even with a handler wired");
+		assert.equal(byText(view, "button", "Save as PDF").length, 1, "the rest of the actions are unchanged");
+
+		const hint = findAll(view, (node) => hasClass(node, "field-hint"))[0];
+		assert.ok(hint, "the hand-off is named where that control would sit");
+		assert.equal(textOf(hint), UNSUPPORTED_WALLET_MESSAGE, "the hint is the message module's own sentence, not a second spelling of it");
+
+		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
+		assert.ok(inputValues(payment).includes(ZEC_PAYEE), "the Zcash address renders under Payment details");
+		assert.ok(textOf(payment).includes("Zcash"), "and the network renders under its own name");
+		assert.equal(textOf(payment).includes("(zcash)"), false, "with no id suffix a wallet would not show, since no wallet reads this app's slug for a privacy chain");
+
+		const link = buildPaymentLink(zecInvoice());
+		assert.equal(link.uri.startsWith("zcash:"), true, "the invoice's own scheme builds the link");
+		assert.ok(inputValues(payment).includes(link.uri), "the link renders under Payment details, ready to select and copy");
+		assert.ok(inputValues(payment).includes("300"), "and the amount it asks for sits in its own copy field beside it");
+
+		const size = encodeQr(link.uri).size;
+		const grid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
+		assert.ok(grid, "the link's symbol is drawn under Payment details");
+		assert.equal(grid.attributes["aria-hidden"], "true", "the symbol is decoration beside the link text, not a second statement of it");
+		// The grid's DOM cost is read off the view model's own symbol: one element per module, plus one row element per matrix row, so a missing row or a doubled module is visible here rather than only in the stylesheet.
+		const model = buildInvoiceViewModel(zecInvoice(), "2026-10-03");
+		assert.equal(model.paymentQr.size, size, "the view model carries the symbol the encoder returns for the same link");
+		assert.deepEqual(model.paymentQr.modules, encodeQr(model.paymentLink).modules, "and that matrix is the one the named URI this model displays encodes, module for module");
+		assert.equal(
+			findAll(grid, (node) => hasClass(node, "qr-module")).length,
+			model.paymentQr.size ** 2,
+			"the grid carries one element per module",
+		);
+		assert.equal(
+			findAll(grid, (node) => hasClass(node, "qr-row")).length,
+			model.paymentQr.size,
+			"and one row element per matrix row",
+		);
+		const dark = findAll(grid, (node) => hasClass(node, "qr-module-dark")).length;
+		assert.ok(dark > 0 && dark < size * size, "the symbol has dark modules and light ones");
+		assertSymbolCellsInDom(grid, model.paymentQr);
+		assert.equal(
+			findAll(view, (node) => hasClass(node, "field-hint")).length,
+			1,
+			"the hand-off is stated once, beside the actions whose Pay control this invoice does not get",
+		);
+		assert.equal(
+			findAll(view, (node) => textOf(node) === UNSUPPORTED_WALLET_MESSAGE).length,
+			1,
+			"the hand-off sentence renders exactly once, so a second inlined copy of it fails here",
+		);
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the widest symbol the link layer can produce lays out its own matrix, cell for cell", () => {
+	const address = unifiedOfBytes(189);
+	// Built to the validator's own length bound, which tests/zcash-address.test.mjs pins as the longest address it accepts and one character more as refused, so this is the widest payee address the link layer can be handed.
+	assert.equal(address.length, MAX_ZCASH_ADDRESS_LENGTH, "the fixture measures the payout validator's own maximum address length");
+	const invoice = zecInvoice({
+		payee: { name: "Studio Example", address },
+		items: [line({ quantity: "1", unitPrice: fromBaseUnits(UINT256_MAX, 8) })],
+	});
+	const model = buildInvoiceViewModel(invoice, "2026-10-03");
+	assert.equal(model.paymentQr.size, 77, "a version-15 symbol is the widest the layout has to carry");
+
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const grid = findAll(view, (node) => hasClass(node, "payment-qr"))[0];
+		assert.ok(grid, "the link's symbol is drawn under Payment details");
+		assertSymbolCellsInDom(grid, model.paymentQr);
+	} finally {
+		fake.restore();
+	}
+});
+
+function xmrInvoice(overrides = {}) {
+	return createInvoice({
+		id: "INV-XMR",
+		issued: "2026-10-03",
+		payee: { name: "Studio Example", address: XMR_PAYEE },
+		chainId: "monero",
+		asset: "xmr",
+		items: [line()],
+		...overrides,
+	});
+}
+
+test("a Monero invoice renders its link and the symbol of that same URI, with no wallet Pay control", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const invoice = xmrInvoice();
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder(), pay: () => {} });
+		assert.equal(byText(view, "button", "Pay").length, 0, "no injected-wallet control is offered, even with a handler wired");
+		assert.equal(byText(view, "button", "Save as PDF").length, 1, "the rest of the actions are unchanged");
+		const hint = findAll(view, (node) => hasClass(node, "field-hint"))[0];
+		assert.ok(hint, "the hand-off is named where that control would sit");
+		assert.equal(textOf(hint), UNSUPPORTED_WALLET_MESSAGE, "the hint is the message module's own sentence");
+
+		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
+		assert.ok(payment, "the Payment details section is rendered");
+		assert.ok(inputValues(payment).includes(XMR_PAYEE), "the Monero address renders under Payment details");
+		assert.ok(textOf(payment).includes("Monero"), "and the network renders under its own name");
+		assert.equal(textOf(payment).includes("(monero)"), false, "with no id suffix a wallet would not show, since no wallet reads this app's slug for a privacy chain");
+		assert.ok(inputValues(payment).includes("300"), "and the amount it asks for sits in its own copy field beside it");
+
+		const link = buildPaymentLink(invoice);
+		assert.equal(link.uri, `monero:${XMR_PAYEE}?tx_amount=300`, "the Monero link is its own scheme's spelling of the address and the amount");
+		assert.ok(inputValues(payment).includes(link.uri), "and the rendered document carries that whole URI, ready to select and copy");
+
+		const model = buildInvoiceViewModel(invoice, "2026-10-03");
+		const grid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
+		assert.ok(grid, "the link's symbol is drawn under Payment details");
+		assert.equal(grid.attributes["aria-hidden"], "true", "the symbol is decoration beside the link text, not a second statement of it");
+		assert.equal(model.paymentQr.size, encodeQr(link.uri).size, "the view model carries the symbol the encoder returns for the same link");
+		assert.deepEqual(model.paymentQr.modules, encodeQr(model.paymentLink).modules, "and that matrix is the one the named URI this model displays encodes, module for module");
+		assertSymbolCellsInDom(grid, model.paymentQr);
+	} finally {
+		fake.restore();
+	}
+});
+/**
+ * The transparent Zcash form the payout validator accepts beside Sapling and unified.
+ *
+ * An invoice naming one reached no link, view, or PDF assertion before: the shielded and unified spellings carry the other Zcash fixtures, so a transparent payee is rendered here through the same seams.
+ */
+
+test("a transparent Zcash payee renders its own ZIP-321 link and the symbol of that same URI, with no wallet Pay control", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const invoice = zecInvoice({ payee: { name: "Studio Example", address: ZEC_TRANSPARENT_PAYEE } });
+		const link = buildPaymentLink(invoice);
+		assert.equal(link.uri, `zcash:${ZEC_TRANSPARENT_PAYEE}?amount=300`, "a transparent payee reaches the same scheme its family builds");
+
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder(), pay: () => {} });
+		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
+		assert.ok(payment, "the Payment details section is rendered");
+		assert.ok(inputValues(payment).includes(ZEC_TRANSPARENT_PAYEE), "the transparent address renders under Payment details");
+		assert.ok(inputValues(payment).includes(link.uri), "beside the link it is paid by, ready to select and copy");
+
+		const model = buildInvoiceViewModel(invoice, "2026-10-03");
+		assert.deepEqual(model.paymentQr.modules, encodeQr(link.uri).modules, "and the view model's matrix is the one this displayed URI encodes, module for module");
+		const grid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
+		assert.ok(grid, "the link's symbol is drawn under Payment details");
+		assertSymbolCellsInDom(grid, model.paymentQr);
+		assert.equal(byText(view, "button", "Pay").length, 0, "a transparent address still gets no injected-wallet control");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the amount, the payee address, and the payment link copy byte for byte, at the widest values a legal invoice carries", async () => {
+	// On a Zcash invoice the copy is the payment action: no injected wallet can sign a transfer there, so a value that reached the clipboard clipped or with a line break inside it would be the payment failing rather than a cosmetic slip.
+	const address = unifiedOfBytes(189);
+	assert.equal(address.length, MAX_ZCASH_ADDRESS_LENGTH, "the fixture is the widest address the Zcash validator accepts");
+	const invoice = zecInvoice({
+		payee: { name: "Studio Example", address },
+		items: [line({ quantity: "1", unitPrice: fromBaseUnits(UINT256_MAX, 8) })],
+	});
+	const model = buildInvoiceViewModel(invoice, "2026-10-03");
+	const written = [];
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoice, {
+			...VIEW_OPTIONS,
+			notice: noticeRecorder(),
+			clipboard: { writeText: async (text) => { written.push(text); } },
+		});
+		const copies = findAll(view, (node) => hasClass(node, "payment-copy"));
+		assert.equal(copies.length, 3, "the amount, the address, and the link each carry a copy control, and no other term does");
+		assert.deepEqual(
+			copies.map((button) => button.attributes["aria-label"]),
+			["Copy Pays to", "Copy Amount", "Copy Payment link"],
+			"each control names the term whose value it copies",
+		);
+		for (const button of copies) button.dispatch("click");
+		await drain();
+
+		// The copied string is the value itself rather than a substring of the rendered document: a clip, a strip, or a line break anywhere above the clipboard would show up here as a shorter or altered string.
+		assert.deepEqual(written, [address, model.payment[3].value, model.paymentLink], "the clipboard receives each value byte for byte, in the order the terms are shown");
+		assert.equal(written[0], model.payment[2].value, "and the first is the very string the address term displays");
+		assert.equal(written[1], model.payment[3].value, "the second is the amount term's own wallet-acceptable decimal");
+		assert.equal(written[2], model.payment[4].value, "and the third is the string the link term displays");
+		assert.equal(written[2], buildPaymentLink(invoice).uri, "so the link a wallet scans and the link the clipboard carries are one string");
+		// The copied values are observed against the one value the link carries, so a surface that recomputed what another printed would show up here: the amount is the amount the link asks for, the address is the payee its URI encodes, and the decoded symbol carries the link the clipboard took.
+		const link = buildPaymentLink(invoice);
+		assert.equal(written[1], link.amount.text, "the copied amount is the amount the link carries");
+		assert.equal(model.total, `${link.amount.text} ${model.symbol}`, "which is also the total the document prints");
+		assert.equal(written[0], link.payee, "the copied address is the payee the link's URI encodes");
+		assert.equal(readSymbol(model.paymentQr).text, written[2], "and an independent decoder reads the copied link back out of the symbol's payload");
+		assert.equal(written[2].length, 404, "the widest value a legal ZEC invoice carries: a 311-character address, its scheme prefix, and a uint256-scale amount");
+		assert.deepEqual(inputValues(view), written, "and the fields the copy controls read hold those same strings, one line each");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the payment details' terms are labelled from the document's own label set", () => {
+	const model = buildInvoiceViewModel(invoiceFor(), "2026-10-03");
+
+	// Each term's label is one of the labels the rest of the document chrome is drawn from, so the section cannot be reworded apart from the label set — and the amount term reads the same label as the item table's column header, which is the label the suite's own lookup of that term goes through.
+	assert.deepEqual(
+		model.payment.map((term) => term.label),
+		[model.labels.asset, model.labels.network, model.labels.paysTo, model.labels.amount, model.labels.paymentLink],
+	);
+	assert.equal(model.payment[3].label, model.labels.amount, "the section's amount term and the table's Amount column are one label");
+	assert.deepEqual(model.payment.map((term) => term.label), ["Asset", "Network", "Pays to", "Amount", "Payment link"], "and the labels a payer reads are unchanged");
+});
+
+test("the hand-off sentence is owned by the neutral messages module, not the wallet panel", () => {
+	assert.equal(UNSUPPORTED_WALLET_MESSAGE, FROM_MESSAGES, "the panel re-exports the neutral module's own sentence");
+	const messages = readFileSync(join(root, "app", "ts", "ui", "messages.ts"), "utf8");
+	assert.ok(messages.includes(UNSUPPORTED_WALLET_MESSAGE), "the neutral module is where the sentence is spelled");
+
+	// The document renderer reads the sentence from the neutral module, so its own display text does not depend on the injected-wallet panel's module.
+	const view = readFileSync(join(root, "app", "ts", "ui", "view.ts"), "utf8");
+	assert.match(view, /from "\.\/messages\.js"/, "the document renderer imports the neutral module");
+	assert.ok(!/from "\.\/pay\.js"/.test(view), "and does not import the wallet panel for it");
 });

@@ -1,9 +1,10 @@
-/** The suite for the util modules: decimal and base-unit conversion, the DOM helpers, error descriptions, and text bounding. */
+/** The suite for the util modules: decimal and base-unit conversion, the encoding primitives (hex, base58/base58xmr/base58check, bech32/bech32m, sha-256), the DOM helpers, error descriptions, and text bounding. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fromBaseUnits, toBaseUnits, UINT256_MAX } from "../app/js/util/decimal.js";
 import { append, h, safeUrl } from "../app/js/util/dom.js";
+import { base58, base58check, base58xmr, bech32, bech32m, hexToBytes, sha256, toHex, utf8ToBytes } from "../app/js/util/encoding.js";
 import { describe, preview } from "../app/js/util/errors.js";
 import { boundRaw } from "../app/js/util/text.js";
 import { installFakeDocument } from "./helpers/dom.mjs";
@@ -111,6 +112,82 @@ test("the round-trip invariant holds exactly for 0 < units <= uint256 max", () =
 		/exceeds the uint256 base-unit maximum/,
 		"…but throws as too large on the way back",
 	);
+});
+
+test("base58 matches the Bitcoin Core known-answer vectors", () => {
+	// src/test/data/base58_encode_decode.json from Bitcoin Core.
+	const vectors = [
+		["", ""],
+		["61", "2g"],
+		["626262", "a3gV"],
+		["636363", "aPEr"],
+		["73696d706c792061206c6f6e6720737472696e67", "2cFupjhnEsSn59qHXstmK2ffpLv2"],
+		["00eb15231dfceb60925886b67d065299925915aeb172c06647", "1NS17iag9jJgTHD1VXjvLCEnZuQ3rJDE9L"],
+		["516b6fcd0f", "ABnLTmg"],
+		["bf4f89001e670274dd", "3SEo3LWLoPntC"],
+		["572e4794", "3EFU7m"],
+		["ecac89cad93923c02321", "EJDM8drfXA6uyA"],
+		["10c8511e", "Rt5zm"],
+		["00000000000000000000", "1111111111"],
+	];
+	for (const [hex, text] of vectors) {
+		const bytes = hexToBytes(hex);
+		assert.equal(base58.encode(bytes), text, `base58.encode(${hex})`);
+		assert.deepEqual(base58.decode(text), bytes, `base58.decode(${text})`);
+	}
+});
+
+test("base58xmr round-trips its block-padded encoding across block boundaries", () => {
+	for (const length of [0, 1, 7, 8, 9, 69]) {
+		const payload = Uint8Array.from({ length }, (_, index) => (index * 37 + 11) % 256);
+		assert.deepEqual(base58xmr.decode(base58xmr.encode(payload)), payload, `length ${length}`);
+	}
+});
+
+test("sha256 matches known-answer vectors", () => {
+	assert.equal(
+		toHex(sha256(utf8ToBytes(""))),
+		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		"sha256(\"\")",
+	);
+	assert.equal(
+		toHex(sha256(utf8ToBytes("abc"))),
+		"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+		"sha256(\"abc\")",
+	);
+	assert.equal(
+		toHex(sha256(utf8ToBytes("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))),
+		"248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+		"sha256 of the 56-byte two-block message",
+	);
+});
+
+test("base58check round-trips the Bitcoin mainnet P2PKH address vector and rejects a tampered checksum", () => {
+	const check = base58check(sha256);
+	const payload = hexToBytes("00010966776006953d5567439e5e39f86a0d273bee");
+	const encoded = check.encode(payload);
+	assert.equal(encoded, "16UwLL9Risc3QfPqBUvKofHmBQ7wMtjvM");
+	assert.deepEqual(check.decode(encoded), payload);
+	const last = encoded.at(-1);
+	assert.throws(() => check.decode(`${encoded.slice(0, -1)}${last === "2" ? "3" : "2"}`), /checksum/);
+});
+
+test("bech32 and bech32m match the BIP 173 and BIP 350 known-answer vectors", () => {
+	// BIP 173: a witness-v0 P2WPKH address for program 751e76e8199196d454941c45d1b3a323f1433bd6.
+	const program20 = hexToBytes("751e76e8199196d454941c45d1b3a323f1433bd6");
+	const bech32Text = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+	assert.equal(bech32.encode("bc", [0, ...bech32.toWords(program20)]), bech32Text);
+	const decodedV0 = bech32.decode(bech32Text);
+	assert.equal(decodedV0.prefix, "bc");
+	assert.deepEqual(bech32.fromWords(decodedV0.words.slice(1)), program20);
+
+	// BIP 350: a witness-v1 P2TR address for program 79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798.
+	const program32 = hexToBytes("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798");
+	const bech32mText = "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0";
+	assert.equal(bech32m.encode("bc", [1, ...bech32m.toWords(program32)]), bech32mText);
+	const decodedV1 = bech32m.decode(bech32mText);
+	assert.equal(decodedV1.prefix, "bc");
+	assert.deepEqual(bech32m.fromWords(decodedV1.words.slice(1)), program32);
 });
 
 test("describe renders any rejected value without throwing", () => {
@@ -271,4 +348,28 @@ test("append accepts nodes, stringifies numbers, and skips holes", () => {
 	const parent = { children: [], append(...nodes) { this.children.push(...nodes); } };
 	append(parent, ["a", null, 0, undefined, false]);
 	assert.deepEqual(parent.children, ["a", "0"], "zero is a value, not a hole");
+});
+
+test("preview reads a value's toStringTag under a guard", () => {
+	// A hostile tag is a string this module would otherwise let `Object.prototype.toString` allocate and copy in full before the bound could cut the result.
+	const unbounded = { [Symbol.toStringTag]: "x".repeat(1024 * 1024) };
+	const bounded = preview(unbounded, 60);
+	assert.ok(bounded.length <= 60, `the rendering stays inside the bound, got ${bounded.length} characters`);
+	assert.equal(bounded.includes("x".repeat(64)), false, "the claimed tag is not carried whole");
+	assert.equal(bounded.startsWith("[object "), true, "it is still rendered as a tag");
+
+	// A tag getter that throws must not replace the caller's contracted TypeError with the value's own error.
+	const throwing = {
+		get [Symbol.toStringTag]() {
+			throw new Error("hostile");
+		},
+	};
+	assert.equal(preview(throwing, 60), "[unprintable]", "a throwing tag renders as the fixed fallback instead of throwing");
+
+	// The guard changes nothing for the ordinary shapes: a value with no tag of its own is rendered by the engine exactly as before.
+	assert.equal(preview([]), "[object Array]");
+	assert.equal(preview({}), "[object Object]");
+	assert.equal(preview(new Date(0)), "[object Date]");
+	assert.equal(preview(new Map()), "[object Map]");
+	assert.equal(preview(Object.create(null)), "[object Object]", "an object with no prototype still renders through the engine");
 });

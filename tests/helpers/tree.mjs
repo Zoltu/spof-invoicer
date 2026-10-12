@@ -8,6 +8,11 @@ export function isNode(value) {
 	return typeof value === "object" && value !== null && typeof value.tagName === "string";
 }
 
+/** True when `node` carries `name` in its space-separated class attribute. */
+export function hasClass(node, name) {
+	return String(node.attributes.class ?? "").split(/\s+/).includes(name);
+}
+
 /** Invoke `visit` on every element below `node`, in document order; `node` itself is not visited. */
 export function walk(node, visit) {
 	for (const child of node.children ?? []) {
@@ -33,6 +38,14 @@ export function textOf(node) {
 		text += isNode(child) ? textOf(child) : typeof child === "string" ? child : "";
 	}
 	return text;
+}
+
+/**
+ * The `value` attribute of every `<input>` below `node`, in document order.
+ * A value a view puts in a field rather than in a text node is not part of {@link textOf}, so a suite asserting what such a value reads has to read the field itself.
+ */
+export function inputValues(node) {
+	return findAll(node, (child) => child.tagName === "input").map((input) => String(input.attributes.value));
 }
 
 /** The first descendant `<button>` whose text is exactly `label`, or `undefined`. */

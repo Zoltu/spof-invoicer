@@ -2,7 +2,7 @@
  * Print treatment for the official invoice.
  *
  * The on-screen document is the source of truth; this only makes it print cleanly.
- * Wrapped in `@media print`, it strips the app chrome, drops the screen card's depth, forces black on white, and keeps rows, totals, and the payment block from splitting across a page.
+ * Wrapped in `@media print`, it strips the app chrome, drops the screen card's depth, forces black on white, keeps rows, totals, and the payment block from splitting across a page, and prints each payment value whole: the single-line field is a control whose overflow paper clips, so the field is dropped and its print twin, the same string as a text node, takes its place and wraps.
  * Page geometry is US Letter with comfortable margins.
  * This stylesheet serves the browser's own print path; the `Save as PDF` button is a separate route that hands the invoice to the pdf-lib renderer, which lays out its own pages rather than printing this DOM.
  */
@@ -145,5 +145,41 @@
 	.invoice-logo {
 		-webkit-print-color-adjust: exact;
 		print-color-adjust: exact;
+	}
+
+	/*
+	 * The payment symbol prints as ink on white whatever the screen palette says, light modules included: a wallet's scanner reads the contrast the drawn grid has, and a printer that drops background colours would otherwise hand it a blank square.
+	 */
+	.payment-qr {
+		background: #fff;
+		border-color: #000;
+	}
+
+	.payment-qr .qr-module {
+		background: #fff;
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+	}
+
+	.payment-qr .qr-module-dark {
+		background: #000;
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+	}
+
+	/*
+	 * A copyable payment value prints whole.
+	 * The field is a form control, whose value a print engine lays out on one line and clips at the field's edge, and the copy control beside it — the only affordance that hands over the complete value — is hidden above with the rest of the chrome, so a payee address or payment link longer than the column would otherwise reach paper as the prefix that fitted.
+	 * The field is dropped and its print twin, the same string as a text node, takes its place: a row of its own, wrapping across as many lines as the value needs rather than clipping it, so a printed Zcash unified address or payment link is the whole value a payer can still copy by hand.
+	 */
+	input.payment-value {
+		display: none !important;
+	}
+
+	.payment-value-print {
+		display: block;
+		flex-basis: 100%;
+		min-width: 0;
+		overflow-wrap: anywhere;
 	}
 }

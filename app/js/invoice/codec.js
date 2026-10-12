@@ -223,13 +223,13 @@ function decodePayload(payload) {
 /**
  * Why a payload that parsed into a valid invoice is still not the text this encoder writes.
  *
- * Validation re-encodes the payee address to its EIP-55 checksummed spelling, so a payload that names a payable address in uniform case parses into a valid invoice yet is not the canonical text — naming that divergence is the point, because the generic message would otherwise blame a key order or a number the payload spelled correctly.
+ * Validation re-encodes the payee address to the one canonical spelling its family stores it in — the EIP-55 checksummed form for an EVM payee, the lower-case Bech32 spelling for a Zcash one — so a payload that names a payable address in another case that spells the same address parses into a valid invoice yet is not the canonical text — naming that divergence is the point, because the generic message would otherwise blame a key order or a number the payload spelled correctly.
  * Every other divergence is the JSON spelling itself.
  */
 function nonCanonicalReason(parsed, invoice) {
     const spelled = payeeAddressOf(parsed);
     if (spelled !== undefined && spelled !== invoice.payee.address && spelled.toLowerCase() === invoice.payee.address.toLowerCase()) {
-        return `the payload spells the payee address ${spelled}, but the canonical spelling is its EIP-55 checksummed form ${invoice.payee.address} — the payload is not in the canonical form this encoder writes`;
+        return `the payload spells the payee address ${spelled}, but its canonical spelling is ${invoice.payee.address}, the same address in the one case its family stores it in — the payload is not in the canonical form this encoder writes`;
     }
     return "the payload is not in the canonical form this encoder writes — it repeats a key, reorders keys, adds whitespace, or spells a number non-canonically";
 }

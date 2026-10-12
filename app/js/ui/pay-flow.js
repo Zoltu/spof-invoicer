@@ -13,11 +13,12 @@
  * A caller whose latch must also hold across two flows consults `claimSend` as the send begins, not merely when a panel opens: a flow dismissed during the pre-send window — discovery, connection, the chain check, the balance read — is still running, and a reopened panel builds a second flow, so the check has to run where the send does to refuse one of them.
  *
  * Every failure the flow shows the payer is worded here, not copied out of an error: a provider failure reads `wallet: eth_call failed (code -32000) — …`, which names internal machinery a payer cannot act on, so `failureMessage` maps each error class to plain guidance and answers anything it does not recognize with generic guidance rather than that error's own text, while the original message stays on the error for diagnostics.
+ * A network the guidance names is spelled through `ui/network-labels.ts`'s `networkLabel`, the one spelling the payer's document, the payment panel's summary, and this guidance share.
  */
 import { fromBaseUnits } from "../util/decimal.js";
 import { UnknownChainError, WalletClient, WalletRejectedError, WalletRequestError, WalletResponseError, walletCandidates, } from "../wallet/eip1193.js";
 import { NoAccountError, WrongChainError, connectWallet, ensureWalletChain, readBalance, sendPayment, } from "../wallet/payment.js";
-import { chainName } from "./presentation.js";
+import { networkLabel } from "./network-labels.js";
 /** The payer-facing wording for a send that failed without a definitive answer. */
 const SEND_FAILURE_MESSAGE = "Your wallet did not confirm the transaction. It may still have been sent, so check your wallet's activity before trying again.";
 /** The payer-facing wording for a send refused because another flow on this page has already claimed the invoice's payment. */
@@ -76,18 +77,13 @@ export function createPayFlow(plan, callbacks) {
         setView({ kind: "unknown-chain", message });
         callbacks.onNotice(message, "error");
     }
-    /** A chain display name with its id, or the bare id for one the display map does not name. */
-    function networkLabel(chainId = plan.chainId) {
-        const name = chainName(chainId);
-        return name === chainId ? chainId : `${name} (${chainId})`;
-    }
     /**
      * The payer-facing wording for a wallet that is not on the invoice's network, the neighbour of the declined-switch and unknown-chain branches.
      * `current` is the network the wallet is on when the failure names one; `null` when only the mismatch is known.
      */
     function networkFailureMessage(current) {
         const where = current === null ? "not on the right network" : `on ${networkLabel(current)}`;
-        return `Your wallet is ${where}, but this invoice must be paid on ${networkLabel()}. Switch networks in your wallet, then try again.`;
+        return `Your wallet is ${where}, but this invoice must be paid on ${networkLabel(plan.chainId)}. Switch networks in your wallet, then try again.`;
     }
     /**
      * The payer-facing text for a caught failure.
@@ -171,11 +167,11 @@ export function createPayFlow(plan, callbacks) {
         }
         catch (error) {
             if (error instanceof WalletRejectedError) {
-                wrongChain(`You declined the network switch. Switch your wallet to ${networkLabel()} to continue.`);
+                wrongChain(`You declined the network switch. Switch your wallet to ${networkLabel(plan.chainId)} to continue.`);
                 return;
             }
             if (error instanceof UnknownChainError) {
-                unknownChain(`Your wallet does not know the network ${networkLabel()}, so it cannot switch to it. Add that network in your wallet, then retry.`);
+                unknownChain(`Your wallet does not know the network ${networkLabel(plan.chainId)}, so it cannot switch to it. Add that network in your wallet, then retry.`);
                 return;
             }
             wrongChain(networkFailureMessage(error instanceof WrongChainError ? error.current : null));

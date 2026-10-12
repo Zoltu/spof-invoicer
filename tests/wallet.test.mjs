@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
 import { blockNetwork } from "./helpers/network-block.mjs";
 import { USDC_LOWER } from "./helpers/tokens.mjs";
-import { findAll, textOf } from "./helpers/tree.mjs";
+import { findAll, hasClass, textOf } from "./helpers/tree.mjs";
 import {
 	ACCOUNT,
 	TX_HASH,
@@ -42,6 +42,7 @@ import {
 	buildPaymentPlan,
 	connectWallet,
 	ensureWalletChain,
+	isWalletPayable,
 	readBalance,
 	sendPayment,
 	transactionRequest,
@@ -86,10 +87,6 @@ function ethInvoice(overrides = {}) {
 		items: [{ description: "Advice", quantity: "1", unitPrice: "1.5" }],
 		...overrides,
 	});
-}
-
-function hasClass(node, name) {
-	return (node.attributes.class ?? "").split(/\s+/).includes(name);
 }
 
 function byText(node, tag, text) {
@@ -179,6 +176,17 @@ test("an unpayable destination or unsupported asset is refused before a transact
 	assert.throws(() => buildPaymentPlan({ ...invoice, payee: { name: "x", address: USDC_LOWER } }), /own contract address/);
 	assert.throws(() => buildPaymentPlan({ ...invoice, chainId: "0x89" }), /unsupported chain/);
 	assert.throws(() => buildPaymentPlan({ ...invoice, asset: "doge" }), /unsupported asset/);
+});
+
+test("isWalletPayable answers for every family rather than raising, so a caller can branch on it", () => {
+	// The callers are a filter and a guard — the document's Pay control and the panel's entry — so an asset stating a family this app has no rules for has to read as one no wallet pays here rather than throwing out of the caller's branch.
+	assert.equal(isWalletPayable({ family: "evm" }), true);
+	assert.equal(isWalletPayable({ family: "zcash" }), false, "a privacy-chain family is not paid through an injected wallet");
+	assert.equal(isWalletPayable({ family: "monero" }), false);
+	assert.equal(isWalletPayable({}), true, "an asset stating no family is the default EVM one, as the registry's own resolution reads it");
+	assert.equal(isWalletPayable({ family: undefined }), true);
+	assert.equal(isWalletPayable({ family: "bitcoin" }), false, "a family no rule carries is not the EVM one");
+	assert.equal(isWalletPayable({ family: null }), false, "nor is an explicit statement that is not a family");
 });
 
 test("sendPayment sends the plan's exact params and reads the token balance with balanceOf", async () => {

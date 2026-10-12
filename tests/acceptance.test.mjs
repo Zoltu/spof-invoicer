@@ -16,9 +16,14 @@ import { fileURLToPath } from "node:url";
 import { codeOnly, languageFor } from "./helpers/code-only.mjs";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
 import { blockNetwork } from "./helpers/network-block.mjs";
+import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_UNIFIED_PAYEE } from "./helpers/payee-vectors.mjs";
+import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
+import { assertSymbolCells } from "./helpers/qr-symbol.mjs";
+import { refusalError, refusalMessage } from "./helpers/refusals.mjs";
 import { servedTreeProblems } from "./helpers/served-drift.mjs";
 import { USDC_LOWER } from "./helpers/tokens.mjs";
-import { findAll, findButton, textOf } from "./helpers/tree.mjs";
+import { findAll, findButton, hasClass, inputValues, textOf } from "./helpers/tree.mjs";
+import { SERVED_BUNDLES } from "./helpers/vendor-bundles.mjs";
 import { waitFor } from "./helpers/wait.mjs";
 import { ACCOUNT, TX_HASH, installWindow, mockProvider } from "./helpers/wallet-mock.mjs";
 import { listFiles } from "../scripts/vendor-manifest.mjs";
@@ -41,11 +46,15 @@ import {
 	createInvoice,
 } from "../app/js/invoice/model.js";
 import { SHARE_FRAGMENT_PREFIX, buildShareUrl, decodeShare, encodeShare } from "../app/js/invoice/share.js";
-import { buildInvoicePages, renderInvoicePdf } from "../app/js/pdf/renderer.js";
+import { buildPaymentLink } from "../app/js/payment/links.js";
+import { QR_SYMBOL, buildInvoicePages, renderInvoicePdf } from "../app/js/pdf/renderer.js";
+import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
-import { base32nopad, utf8 } from "../app/js/util/encoding.js";
+import { base32nopad, bech32m, utf8 } from "../app/js/util/encoding.js";
+import { encodeQr } from "../app/js/util/qr.js";
 import { PDFDocument } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
 import { WalletClient, toHexQuantity } from "../app/js/wallet/eip1193.js";
+import { TestnetUnifiedAddressError } from "../app/js/wallet/zcash-address.js";
 import { encodeBalanceOf, encodeTransfer } from "../app/js/wallet/erc20.js";
 import {
 	WrongChainError,
@@ -62,7 +71,6 @@ const jsDir = join(appDir, "js");
 const vendorDir = join(jsDir, "vendor");
 
 const TODAY = "2026-10-03";
-const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 /** 2 × 150 + 57 = 357 USDC, plus 19% tax = 424.83 USDC. */
 const USDC_TOTAL = 424830000n;
 /** 1 × 1.5 ETH. */
@@ -73,8 +81,8 @@ const HOSTILE = "<img src=x onerror=\"alert(1)\"><script>alert(2)</script>";
 const NETWORK_APIS = /\b(fetch|XMLHttpRequest|WebSocket|EventSource|WebTransport|sendBeacon|importScripts|serviceWorker|RTCPeerConnection|ping)\b|\bImage\s*\(|\b(?:dns-)?prefetch\b/;
 // The persistence and side-channel APIs the "no cookie, no storage" promise bans: a value written to any of these outlives the page or leaks the fragment to a same-origin sibling, so the sweep names them beside the network APIs.
 const STORAGE_APIS = /\b(localStorage|sessionStorage|indexedDB|history)\b|\bwindow\s*\.\s*name\b|\bdocument\s*\.\s*cookie\b/;
-// The markup and script sinks, plus the DOM, import, and navigation routes to executable script: building an element from a variable tag, a computed `import()`, `window.open`, and a `location` assignment are each such a route, so the sweep names them beside the literal sinks that build or load a `<script>`.
-const MARKUP_SINKS = /\b(innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval|new Function|createContextualFragment)\b|createElement\s*\(\s*["'`]script["'`]|\bh\s*\(\s*["'`]script["'`]|\bscript\s*\.\s*textContent\s*=|\bdocument\s*\.\s*createElement\s*\(\s*[^"'`\s)]|\bimport\s*\(\s*[^"'`\s)]|\bwindow\s*\.\s*open\s*\(|\blocation\s*\.\s*(?:assign|replace)\s*\(|\blocation\s*\.\s*href\s*=/;
+// The markup and script sinks, plus the DOM, import, and navigation routes to executable script: a `document.createElement(...)` call, whatever tag it is handed — a variable tag can become `<script>`, and a literal one is exempt only through the allow-list below — a computed `import()`, `window.open`, and a `location` assignment are each such a route, so the sweep names them beside the literal sinks that build or load a `<script>`.
+const MARKUP_SINKS = /\b(innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval|new Function|createContextualFragment)\b|createElement\s*\(\s*["'`]script["'`]|\bh\s*\(\s*["'`]script["'`]|\bscript\s*\.\s*textContent\s*=|\bdocument\s*\.\s*createElement\s*\(|\bimport\s*\(\s*[^"'`\s)]|\bwindow\s*\.\s*open\s*\(|\blocation\s*\.\s*(?:assign|replace)\s*\(|\blocation\s*\.\s*href\s*=/;
 // A direct `src` assignment and a script-bearing URL scheme in a string literal. Swept over the app's own runtime only: the vendored pdf-lib bundle legitimately sets `this.src` and builds `data:` URIs, so neither is a vendored-code sink.
 const SCRIPT_URL_VECTORS = /\.\s*src\s*=|["'`](?:javascript|data|vbscript|blob|file):/i;
 
@@ -130,6 +138,30 @@ function ethInvoice() {
 	});
 }
 
+/** A privacy-chain invoice: its own network slug, its own asset, and its own family's payee form. */
+function zecInvoice(overrides = {}) {
+	return createInvoice({
+		id: "INV-ZEC-1",
+		issued: "2026-09-28",
+		payee: { name: "Studio Example Ltd", address: ZEC_PAYEE },
+		chainId: "zcash",
+		asset: "zec",
+		items: [{ description: "Advice", quantity: "1", unitPrice: "1.5" }],
+		...overrides,
+	});
+}
+
+function xmrInvoice() {
+	return createInvoice({
+		id: "INV-XMR-1",
+		issued: "2026-09-28",
+		payee: { name: "Studio Example Ltd", address: XMR_PAYEE },
+		chainId: "monero",
+		asset: "xmr",
+		items: [{ description: "Advice", quantity: "1", unitPrice: "1.5" }],
+	});
+}
+
 /** A payload as the codec writes one: canonical JSON in the base32 container. */
 function b32(text) {
 	return base32nopad.encode(utf8.decode(text));
@@ -170,15 +202,23 @@ async function filesUnder(dir) {
 	return (await listFiles(dir)).map((file) => join(dir, file));
 }
 
+/**
+ * Every hit `pattern` finds in one file's `source`, in line order, reported under the workspace-relative `file`.
+ * A hit carries the line the pattern was tested against, so the sink pattern and the exemption it feeds read one and the same comment-stripped text: a trailing comment naming a sanctioned call cannot exempt a call on its own line.
+ */
+function sourceHits(file, source, pattern, scan) {
+	const hits = [];
+	for (const [index, line] of codeOnly(source, { ...scan, language: languageFor(file) }).split("\n").entries()) {
+		if (pattern.test(line)) hits.push({ file, line: index + 1, text: line.trim() });
+	}
+	return hits;
+}
+
 function occurrences(files, pattern, options = {}) {
 	const { except, ...scan } = options;
 	const hits = [];
 	for (const file of files) {
-		const source = readFileSync(file, "utf8");
-		const code = codeOnly(source, { ...scan, language: languageFor(file) }).split("\n");
-		for (const [index, line] of source.split("\n").entries()) {
-			if (!pattern.test(code[index] ?? "")) continue;
-			const hit = { file: relative(root, file), line: index + 1, text: line.trim() };
+		for (const hit of sourceHits(relative(root, file), readFileSync(file, "utf8"), pattern, scan)) {
 			if (except !== undefined && except(hit)) continue;
 			hits.push(hit);
 		}
@@ -186,17 +226,44 @@ function occurrences(files, pattern, options = {}) {
 	return hits;
 }
 
+/** How many times `text` occurs in `source`, so a sentence claimed to have one spelling can be counted. */
+function countOccurrences(source, text) {
+	return source.split(text).length - 1;
+}
+
+/**
+ * Every authored file the served tree is built from, plus the README, read as one text: the sources the app compiles from, the stylesheets it ships, the page that serves them, and the documentation describing them, so a sentence claimed to have one spelling is counted everywhere a second copy could hide.
+ * The compiled `app/js/**` copy is the same sentence compiled rather than a second spelling of it, and the fresh-build gate is what holds it to the source.
+ */
+async function authoredTreeText() {
+	const files = [
+		...(await listFiles(join(appDir, "ts"))).map((file) => join(appDir, "ts", file)),
+		...(await listFiles(join(appDir, "stylesheets"))).map((file) => join(appDir, "stylesheets", file)),
+		join(appDir, "index.html"),
+		join(root, "README.md"),
+	];
+	return files.map((file) => readFileSync(file, "utf8")).join("\n");
+}
+
 function isOurModule(file) {
 	return file.endsWith(".js") && !file.startsWith(vendorDir + sep);
 }
 
 /**
- * The one element-construction site the variable-tag `createElement(...)` sweep would otherwise flag: `util/dom.ts`'s `h()` builder calls `document.createElement(tag)`, which is safe by construction because it refuses a `<script>` tag and every attribute outside its own allow-list.
- * Any other call, in any other file, is not exempt.
+ * The whole allow-list for the DOM-creation sweep, each site named with the justification that exempts it.
+ *
+ * `util/dom.ts`'s `h()` builder has one sanctioned call, `document.createElement(tag)`, safe because the tag it hands over is the parameter `h()` has already checked against its own forbidden tags.
+ * The exemption names that call site, so a tag literal in that file (`script`, `iframe`, …) or any other `createElement` call in it is still reported.
+ * The PDF export's download anchor in `pdf/renderer.ts` is the exception `README.md` documents: it is built on the fly to take an app-generated `blob:` URL that `h()` itself would refuse, and its tag is the literal `"a"`.
+ * Any other call, in any other file — and any other call in these files — is not exempt.
  */
-const SANCTIONED_ELEMENT_BUILDER = new Set(["app/ts/util/dom.ts", "app/js/util/dom.js"]);
+const ELEMENT_BUILDERS = new Set(["app/ts/util/dom.ts", "app/js/util/dom.js"]);
+const DOWNLOAD_ANCHORS = new Set(["app/ts/pdf/renderer.ts", "app/js/pdf/renderer.js"]);
+/** The builder's one sanctioned call site: `h()` passing the tag parameter it has already refused a forbidden value for. */
+const SANCTIONED_BUILDER_CALL = /\bdocument\s*\.\s*createElement\s*\(\s*tag\s*\)/;
 function isSanctionedElementBuilder(hit) {
-	return SANCTIONED_ELEMENT_BUILDER.has(hit.file) && /\bcreateElement\s*\(/.test(hit.text);
+	if (ELEMENT_BUILDERS.has(hit.file) && SANCTIONED_BUILDER_CALL.test(hit.text)) return true;
+	return DOWNLOAD_ANCHORS.has(hit.file) && /\bdocument\s*\.\s*createElement\s*\(\s*["'`]a["'`]\s*\)/.test(hit.text);
 }
 
 test("a created invoice survives the share link and its blob container unchanged", () => {
@@ -257,6 +324,74 @@ test("a shared link renders the official document, and hostile text stays text",
 				assert.ok(!String(value).includes("onerror"), `the payload reached the attribute ${value}`);
 			}
 		}
+
+		// A privacy-chain invoice reaches the payer through the same shared link, and its payment link plus the symbol of that same URI are the whole payment path it offers.
+		const zec = zecInvoice();
+		const link = buildPaymentLink(zec);
+		assert.equal(link.uri.startsWith("zcash:"), true, "the invoice's own scheme builds the link");
+		const zecShell = mountSharedLink(encodeShare(zec));
+		const zecText = textOf(zecShell.content);
+		assert.ok(inputValues(zecShell.content).includes(ZEC_PAYEE), "the rendered document carries the address it pays to");
+		assert.ok(inputValues(zecShell.content).includes("1.5"), "and the amount, in its own copy field");
+		assert.ok(zecText.includes("1.5 ZEC"), "with the total due drawn in the asset's own figures");
+		assert.ok(inputValues(zecShell.content).includes(link.uri), "and the payment link itself");
+		assert.ok(zecText.includes(UNSUPPORTED_WALLET_MESSAGE), "beside a hint naming that hand-off");
+		assert.equal(findButton(zecShell.content, "Pay"), undefined, "no injected-wallet control is offered for it");
+
+		const grid = findAll(zecShell.content, (node) => hasClass(node, "payment-qr"))[0];
+		assert.ok(grid, "the link's symbol is rendered");
+		assert.equal(grid.attributes["aria-hidden"], "true", "decoration beside the link text, not a second statement of it");
+		const zecView = buildInvoiceViewModel(zec, TODAY);
+		assert.equal(zecView.paymentLink, link.uri, "the view model behind that document carries the URI the link text shows");
+		assert.deepEqual(zecView.paymentQr.modules, encodeQr(link.uri).modules, "and its matrix is module for module the one that displayed URI encodes");
+		assertSymbolCellsInDom(grid, zecView.paymentQr);
+
+		// A Monero invoice reaches the payer the same way, through its own scheme: the link, the symbol of that same URI, and no injected-wallet control.
+		const xmr = xmrInvoice();
+		const xmrLink = buildPaymentLink(xmr);
+		assert.equal(xmrLink.uri, `monero:${XMR_PAYEE}?tx_amount=1.5`, "the Monero link is its own scheme's spelling of the address and the amount");
+		const xmrShell = mountSharedLink(encodeShare(xmr));
+		const xmrText = textOf(xmrShell.content);
+		assert.ok(inputValues(xmrShell.content).includes(XMR_PAYEE), "the rendered document carries the address it pays to");
+		assert.ok(inputValues(xmrShell.content).includes("1.5"), "and the amount, in its own copy field");
+		assert.ok(xmrText.includes("1.5 XMR"), "with the total due drawn in the asset's own figures");
+		assert.ok(inputValues(xmrShell.content).includes(xmrLink.uri), "and the payment link itself");
+		assert.ok(xmrText.includes(UNSUPPORTED_WALLET_MESSAGE), "beside a hint naming that hand-off");
+		assert.equal(findButton(xmrShell.content, "Pay"), undefined, "no injected-wallet control is offered for it");
+
+		const xmrGrid = findAll(xmrShell.content, (node) => hasClass(node, "payment-qr"))[0];
+		assert.ok(xmrGrid, "the link's symbol is rendered");
+		assert.equal(xmrGrid.attributes["aria-hidden"], "true", "decoration beside the link text, not a second statement of it");
+		const xmrView = buildInvoiceViewModel(xmr, TODAY);
+		assert.equal(xmrView.paymentLink, xmrLink.uri, "the view model behind that document carries the URI the link text shows");
+		assert.deepEqual(xmrView.paymentQr.modules, encodeQr(xmrLink.uri).modules, "and its matrix is module for module the one that displayed URI encodes");
+		assertSymbolCellsInDom(xmrGrid, xmrView.paymentQr);
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a Zcash invoice paying a mainnet unified address carries its link and its symbol, and offers no wallet control", () => {
+	const invoice = zecInvoice({ payee: { name: "Studio Example Ltd", address: ZEC_UNIFIED_PAYEE } });
+	const link = buildPaymentLink(invoice);
+	assert.equal(link.uri, `zcash:${ZEC_UNIFIED_PAYEE}?amount=1.5`, "the unified payee reaches the link the invoice asks to be paid by");
+
+	const fake = installInteractiveDocument();
+	try {
+		const shell = mountSharedLink(encodeShare(invoice));
+		const text = textOf(shell.content);
+		assert.ok(inputValues(shell.content).includes(ZEC_UNIFIED_PAYEE), "the rendered document carries the unified address it pays to");
+		assert.ok(inputValues(shell.content).includes("1.5"), "and the amount, in its own copy field");
+		assert.ok(text.includes("1.5 ZEC"), "with the total due drawn in the asset's own figures");
+		assert.ok(inputValues(shell.content).includes(link.uri), "and the payment link built from it");
+		assert.equal(findButton(shell.content, "Pay"), undefined, "no injected-wallet control is offered for it");
+
+		const view = buildInvoiceViewModel(invoice, TODAY);
+		assert.equal(view.paymentLink, link.uri, "the view model behind that document carries the URI the link text shows");
+		assert.deepEqual(view.paymentQr.modules, encodeQr(link.uri).modules, "and its matrix is module for module the one that displayed URI encodes");
+		const grid = findAll(shell.content, (node) => hasClass(node, "payment-qr"))[0];
+		assert.ok(grid, "the link's symbol is rendered");
+		assertSymbolCellsInDom(grid, view.paymentQr);
 	} finally {
 		fake.restore();
 	}
@@ -302,14 +437,19 @@ test("Save as PDF in the rendered view downloads real PDF bytes with zero networ
 		assert.equal(opened.getCreator(), "Invoicing (on-chain payment invoice)");
 		assert.equal(opened.getProducer(), "Invoicing (on-chain payment invoice)");
 
-		const pages = buildInvoicePages(buildInvoiceViewModel(usdcInvoice(), TODAY), PDF_METRICS);
+		const view = buildInvoiceViewModel(usdcInvoice(), TODAY);
+		const pages = buildInvoicePages(view, PDF_METRICS);
 		assert.equal(pages.length, opened.getPageCount(), "the layout paginates exactly as the exported file does");
 		const drawn = pages
 			.flatMap((page) => page.ops.filter((op) => op.kind === "text").map((op) => op.text))
 			.join("\n");
+		const drawnRun = pages.flatMap((page) => page.ops.filter((op) => op.kind === "text").map((op) => op.text)).join("");
 		for (const figure of PDF_FIGURES) {
 			assert.ok(drawn.includes(figure), `the exported layout loses ${JSON.stringify(figure)}`);
 		}
+		// The EIP-681 claim reaches the export too: the layout behind these bytes carries the invoice's own link, and the symbol beside it is that same URI's matrix, cell for cell.
+		assert.ok(drawnRun.includes(buildPaymentLink(usdcInvoice()).uri), "the exported layout loses the invoice's own EIP-681 link");
+		assertSymbolCells(pages[0], view);
 
 		const direct = await renderInvoicePdf(usdcInvoice(), TODAY);
 		assert.equal(new TextDecoder().decode(direct.slice(0, 5)), "%PDF-");
@@ -469,6 +609,47 @@ test("hostile share strings are refused, and a refused link shows a notice, not 
 	}
 });
 
+test("a testnet unified payee is refused by name, so the link renders a notice and no document", () => {
+	// The Bech32m container a testnet wallet hands out: built here from the encoder the app ships, on the part its own validator refuses.
+	const testnetPayee = bech32m.encode("utest", bech32m.toWords(new Uint8Array(61)), false);
+	const payee = { name: "Studio Example Ltd", address: testnetPayee };
+	assert.throws(
+		() => zecInvoice({ payee }),
+		InvalidInvoiceError,
+		"a testnet unified payee is refused where the payee creates the invoice",
+	);
+	const refusal = refusalMessage(() => zecInvoice({ payee }));
+	assert.match(refusal, /^invoice: payee\.address: /, "the refusal reaches the payee on the field they pasted into");
+	assert.match(refusal, /a testnet unified address cannot be paid from a mainnet-only invoice/, "and names the network rather than reading as a malformed paste");
+	assert.match(refusal, /"utest"/, "and the human-readable part it decoded under");
+
+	// The same payee inside a shared payload is refused again, so no link can carry one into a mainnet-only invoice.
+	const payload = b32(serializeInvoice(zecInvoice()).replace(ZEC_PAYEE, testnetPayee));
+	const payloadRefusal = refusalError(() => decodeInvoice(payload));
+	assert.equal(payloadRefusal.name, "InvalidInvoiceError", "a shared payload carrying a testnet unified payee is refused");
+	assert.ok(
+		payloadRefusal.cause instanceof TestnetUnifiedAddressError,
+		"and the model boundary keeps the validator's own class as the cause, so a surface above it classifies the refusal without matching the message it was wrapped into",
+	);
+
+	const fake = installInteractiveDocument();
+	try {
+		const shell = mountSharedLink(`#/i/${payload}`);
+		assert.match(
+			textOf(shell.notice),
+			/invoice: payee\.address: zcash-address: a testnet unified address cannot be paid from a mainnet-only invoice/,
+			"the payer is shown the refusal, with the network named",
+		);
+		const text = textOf(shell.content);
+		assert.ok(!text.includes("#INV-ZEC-1"), "no document is rendered for it");
+		assert.ok(text.includes("Create an invoice"), "the create view takes its place");
+		assert.equal(findButton(shell.content, "Pay"), undefined, "and no wallet control is offered for it");
+		assert.equal(findButton(shell.content, "Save as PDF"), undefined, "nor an export of a document that does not exist");
+	} finally {
+		fake.restore();
+	}
+});
+
 test("no served runtime module can build markup, evaluate code, or reach the network", async () => {
 	const runtime = [
 		...(await filesUnder(join(appDir, "ts"))),
@@ -504,13 +685,65 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 	for (const literal of ["\"javascript:alert(1)\"", "'data:text/html,x'", "\"blob:https://example/x\""]) {
 		assert.ok(SCRIPT_URL_VECTORS.test(literal), `the scheme sweep misses ${literal}`);
 	}
-	assert.ok(!MARKUP_SINKS.test("const element = document.createElement(\"a\");"), "a literal tag other than script stays allowed");
+	assert.ok(MARKUP_SINKS.test("const element = document.createElement(\"a\");"), "a DOM-creation call is a sink whatever tag it is handed, so the allow-list is what exempts one, not the tag");
+	// The sweep's whole allow-list, pinned so it cannot widen unnoticed: the builder's one sanctioned call, the documented download anchor, and neither a forbidden tag literal nor any other call anywhere.
+	assert.ok(
+		isSanctionedElementBuilder({ file: "app/ts/util/dom.ts", text: "const element = document.createElement(tag);" }),
+		"the builder's own call is exempt in it",
+	);
+	assert.ok(
+		!isSanctionedElementBuilder({ file: "app/ts/util/dom.ts", text: 'const element = document.createElement("script");' }),
+		"the builder's file exempts no forbidden tag literal",
+	);
+	assert.ok(
+		!isSanctionedElementBuilder({ file: "app/ts/util/dom.ts", text: 'const frame = document.createElement("iframe");' }),
+		"nor another literal tag in it",
+	);
+	assert.ok(
+		!isSanctionedElementBuilder({ file: "app/ts/util/dom.ts", text: "const element = document.createElement(tagName);" }),
+		"and no other createElement call in the builder's file is exempt",
+	);
+	assert.ok(
+		isSanctionedElementBuilder({ file: "app/ts/pdf/renderer.ts", text: 'const link = document.createElement("a");' }),
+		"the documented download anchor is exempt",
+	);
+	assert.ok(
+		!isSanctionedElementBuilder({ file: "app/ts/pdf/renderer.ts", text: "const link = document.createElement(tag);" }),
+		"another tag in the anchor's file is not",
+	);
+	assert.ok(
+		!isSanctionedElementBuilder({ file: "app/ts/ui/view.ts", text: 'document.createElement("a");' }),
+		"and the anchor's tag exempts nothing in another file",
+	);
+	// A trailing comment naming a sanctioned call exempts nothing: the sweep hands the exemption the same comment-stripped line it tests the sink pattern against.
+	const commentedCall = sourceHits(
+		"app/ts/util/dom.ts",
+		'const frame = document.createElement("iframe"); // const element = document.createElement(tag) is sanctioned',
+		MARKUP_SINKS,
+		{ htmlComments: true },
+	)[0];
+	assert.ok(commentedCall !== undefined, "the call beside a trailing comment is reported");
+	assert.equal(commentedCall.text, 'const frame = document.createElement("iframe");', "and the hit is the line's code, not the comment beside it");
+	assert.ok(!isSanctionedElementBuilder(commentedCall), "so a trailing comment naming the sanctioned call exempts no other call on the line");
 	assert.ok(!SCRIPT_URL_VECTORS.test("const record = { updateMetadata: false };"), "a plain property is not a URL scheme");
+});
+
+test("the hand-off sentence has one spelling across the authored tree and the README", async () => {
+	assert.equal(
+		countOccurrences(await authoredTreeText(), UNSUPPORTED_WALLET_MESSAGE),
+		1,
+		"the sentence has one spelling across the authored sources, the stylesheets, the page, and the README, so a copy inlined in a third authored file fails here",
+	);
 });
 
 test("the vendored bundles name no network API or markup sink outside their own documentation", async () => {
 	const vendor = (await filesUnder(vendorDir)).filter((file) => file.endsWith(".js"));
-	assert.ok(vendor.length >= 5, `expected the vendored bundles, found ${vendor.length}`);
+	// The sweep reaches only the bundles the build copied into app/js/vendor/, so a bundle missing there would silently narrow it; pin the swept set to the bundles the vendor script serves.
+	assert.deepEqual(
+		vendor.map((file) => relative(vendorDir, file)).sort(),
+		[...SERVED_BUNDLES].sort(),
+		"the sweep must cover exactly the bundles the build serves",
+	);
 	// `require-trusted-types-for 'script'` turns a markup sink in a vendored bundle into a hard Chromium runtime failure, so the sweep has to cover both lists, not just the network APIs.
 	assert.deepEqual(occurrences(vendor, NETWORK_APIS), [], "a vendored bundle calls a network API from executable code");
 	assert.deepEqual(occurrences(vendor, STORAGE_APIS), [], "a vendored bundle names a storage or side-channel API from executable code");
@@ -611,4 +844,66 @@ test("the committed app/ tree is a fresh build of its sources, with maps pointin
 		assert.ok(existsSync(sourcePath), `${label} maps to ${sourcePath}, which does not exist`);
 		assert.equal(map.sourcesContent[0], readFileSync(sourcePath, "utf8"), `${label} embeds a stale copy of its source`);
 	}
+});
+
+test("a Monero invoice exports from the served page carrying its link and the symbol of that same URI", async () => {
+	const invoice = xmrInvoice();
+	const link = buildPaymentLink(invoice);
+	assert.equal(link.uri, `monero:${XMR_PAYEE}?tx_amount=1.5`, "the invoice's own scheme builds the link");
+
+	const calls = [];
+	const fake = installInteractiveDocument();
+	const restoreNetwork = blockNetwork(calls);
+	const blobs = [];
+	const saved = [];
+	const revoked = [];
+	const originalCreate = URL.createObjectURL;
+	const originalRevoke = URL.revokeObjectURL;
+	const prototype = globalThis.HTMLElement.prototype;
+	const originalClick = prototype.click;
+	URL.createObjectURL = (blob) => {
+		blobs.push(blob);
+		return `blob:monero-${blobs.length}`;
+	};
+	URL.revokeObjectURL = (url) => revoked.push(url);
+	prototype.click = function click() {
+		if (this.hasAttribute("download")) saved.push([this.getAttribute("href"), this.getAttribute("download")]);
+	};
+	try {
+		const shell = mountSharedLink(encodeShare(invoice));
+		findButton(shell.content, "Save as PDF").dispatch("click", { type: "click" });
+		await waitFor(() => saved.length > 0 || shell.notice.children.length > 0, 400);
+
+		assert.deepEqual(saved, [["blob:monero-1", "invoice-INV-XMR-1.pdf"]], "the served page downloads the invoice's own file");
+		assert.equal(shell.notice.children.length, 0, "a successful export shows no notice");
+		assert.equal(blobs.length, 1, "the export produced exactly one file");
+		assert.equal(blobs[0].type, "application/pdf");
+		// The renderer revokes the object URL a second after the click, so that wait is taken here rather than left to fire while another suite's spy is installed.
+		await waitFor(() => revoked.length > 0, 400);
+		assert.deepEqual(revoked, ["blob:monero-1"], "the object URL is released once the download is under way");
+
+		// The reopened blob is this invoice: one page, and the layout behind those bytes carries the link the invoice asks to be paid by together with the symbol of that same URI.
+		const bytes = new Uint8Array(await blobs[0].arrayBuffer());
+		assert.equal(new TextDecoder().decode(bytes.slice(0, 5)), "%PDF-", "the download is a real PDF");
+		const opened = await PDFDocument.load(bytes, { updateMetadata: false });
+		assert.equal(opened.getPageCount(), 1, "the exported Monero invoice is one page");
+		assert.equal(opened.getTitle(), "Invoice #INV-XMR-1");
+
+		const view = buildInvoiceViewModel(invoice, TODAY);
+		const pages = buildInvoicePages(view, PDF_METRICS);
+		assert.equal(pages.length, opened.getPageCount(), "the layout paginates exactly as the exported file does");
+		const drawn = pages.flatMap((page) => page.ops.filter((op) => op.kind === "text").map((op) => op.text)).join("");
+		assert.ok(drawn.includes(link.uri), "the layout behind those bytes carries the payment link");
+		assert.ok(drawn.includes(XMR_PAYEE), "and the address it pays to");
+		assert.ok(drawn.includes("1.5 XMR"), "and the amount it asks for");
+		assertSymbolCells(pages[0], view);
+	} finally {
+		URL.createObjectURL = originalCreate;
+		URL.revokeObjectURL = originalRevoke;
+		if (originalClick === undefined) delete prototype.click;
+		else prototype.click = originalClick;
+		restoreNetwork();
+		fake.restore();
+	}
+	assert.deepEqual(calls, [], `the export attempted network I/O: ${calls.join(", ")}`);
 });

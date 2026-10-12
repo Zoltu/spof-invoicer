@@ -38,10 +38,17 @@ export declare const StandardFonts: {
 	readonly ZapfDingbats: "ZapfDingbats";
 };
 
+/** A string in the font's own encoding, as `PDFFont.encodeText` produces it and a text-showing operator consumes it: opaque here, handed straight back. */
+export interface PDFEncodedText {}
+
+/** One content-stream operator, as the factories below build it: opaque here, handed straight back to `PDFPage.pushOperators`. */
+export interface PDFOperator {}
+
 export interface PDFFont {
 	readonly name: string;
 	widthOfTextAtSize(text: string, size: number): number;
 	heightAtSize(size: number, options?: { descender?: boolean }): number;
+	encodeText(text: string): PDFEncodedText;
 }
 
 export interface PDFPageDrawTextOptions {
@@ -85,6 +92,10 @@ export interface PDFPage {
 	drawText(text: string, options?: PDFPageDrawTextOptions): void;
 	drawLine(options: PDFPageDrawLineOptions): void;
 	drawRectangle(options?: PDFPageDrawRectangleOptions): void;
+	/** Register `font` in the page's resources and return its key there, which is the name a font-setting operator carries. */
+	setOrEmbedFont(font: PDFFont): { readonly oldFont: PDFFont; readonly oldFontKey: string | undefined; readonly newFont: PDFFont; readonly newFontKey: string };
+	/** Append operators to the page's content stream, after everything drawn before them. */
+	pushOperators(...operators: PDFOperator[]): void;
 }
 
 export interface PDFDocument {
@@ -114,3 +125,13 @@ export declare const PDFDocument: {
 		options?: { ignoreEncryption?: boolean; updateMetadata?: boolean },
 	): Promise<PDFDocument>;
 };
+
+export declare const pushGraphicsState: () => PDFOperator;
+export declare const popGraphicsState: () => PDFOperator;
+export declare const beginText: () => PDFOperator;
+export declare const endText: () => PDFOperator;
+export declare const setFillingColor: (color: Color) => PDFOperator;
+export declare const setFontAndSize: (name: string, size: number) => PDFOperator;
+export declare const setCharacterSqueeze: (squeeze: number) => PDFOperator;
+export declare const setTextMatrix: (a: number, b: number, c: number, d: number, e: number, f: number) => PDFOperator;
+export declare const showText: (text: PDFEncodedText) => PDFOperator;

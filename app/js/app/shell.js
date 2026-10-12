@@ -6,6 +6,7 @@
  * The shell itself never touches the network.
  *
  * The route→render decision lives in {@link dispatchRoute}, which talks only to the {@link RouteEffects} it is handed and never to the DOM; {@link renderRoute} supplies a shell-backed implementation of those effects, and {@link createDispatcher} adds the memo that keeps a repeated route from rebuilding its view.
+ * The view renderers those effects call are the shell's one seam that can throw — the payer's document is built from the invoice's payment link and its symbol — so each render runs behind the boundary `ui/view.ts`'s action runner already gives a click: a failure names itself in the notice region and in the route container rather than leaving the previous route's document, or an empty shell, on screen.
  *
  * The invoice view's two outward seams — {@link ExportPdfHandler} (the pdf-lib renderer) and {@link PayHandler} (the wallet payment flow) — are carried through {@link BootOptions} and {@link RenderOptions}.
  * {@link viewOptions} supplies both defaults: the pdf-lib renderer bound to the boot's `today`, loaded lazily on the first export so its ~1.4 MB bundle stays out of first load, and the payment panel in ui/pay.ts, which reads nothing but the invoice until the payer clicks to pay, so wiring the default adds no wallet access on load or on render.
@@ -100,14 +101,30 @@ export function createDispatcher(effects) {
 export function renderRoute(shell, route, options) {
     dispatchRoute(route, shellEffects(shell, options));
 }
-/** The {@link RouteEffects} a live shell performs, building each view through its own renderer. */
+/**
+ * Render a view behind an error boundary, the way `ui/view.ts`'s `runAction` bounds an action a click starts.
+ *
+ * A renderer is a seam that can throw: `ui/presentation.ts`'s `buildInvoiceViewModel` builds the invoice's payment link through `payment/links.ts` and encodes its QR symbol through `util/qr.ts`, and each of those refuses an invoice its own validators do not admit, so a throw would otherwise escape the `hashchange` listener and the boot dispatch with the payer looking at whatever the previous route drew — or, at boot, at an empty container.
+ * A failure replaces the route container with a statement of it and reaches the notice region as well, which is announced and is the one part of the chrome the shell always draws; the message is bounded and display-stripped by the notice boundary, exactly as every other notice is.
+ */
+function renderGuarded(shell, label, build) {
+    try {
+        shell.setContent(build());
+    }
+    catch (error) {
+        const message = boundMessage(`${label} failed: ${messageOf(error)}`, NOTICE_MESSAGE_MAX);
+        shell.setContent(h("p", { class: "notice notice-error" }, message));
+        shell.showNotice(message, "error");
+    }
+}
+/** The {@link RouteEffects} a live shell performs, building each view through its own renderer and its own boundary. */
 function shellEffects(shell, options) {
     return {
         clearNotice: () => shell.clearNotice(),
         showNotice: (message, tone) => shell.showNotice(message, tone),
         setActiveNav: (name) => shell.setActiveNav(name),
-        showCreateView: () => shell.setContent(renderCreateView(createViewOptions(shell, options))),
-        showView: (invoice) => shell.setContent(renderInvoiceView(invoice, viewOptions(shell, options))),
+        showCreateView: () => renderGuarded(shell, "Create view", () => renderCreateView(createViewOptions(shell, options))),
+        showView: (invoice) => renderGuarded(shell, "Invoice view", () => renderInvoiceView(invoice, viewOptions(shell, options))),
     };
 }
 function createViewOptions(shell, options) {

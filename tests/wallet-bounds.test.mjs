@@ -1,4 +1,4 @@
-/** The suite for the wallet layer's input bounds: announced names and icons, oversized provider replies, and hostile wallet text, bounded before display. */
+/** The suite for the wallet layer's input bounds: announced names and icons, oversized provider replies, a provider reply whose `Symbol.toStringTag` is hostile, and hostile wallet text, bounded before display. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -98,4 +98,32 @@ test("an announced name that is only invisible characters leaves no candidate", 
 	]);
 	const found = await discoverProviders({ target, timeoutMs: 0 });
 	assert.equal(found.length, 0, "a name that strips to nothing is refused rather than shown empty");
+});
+
+test("a provider reply whose toStringTag is hostile cannot stretch or displace the failure", async () => {
+	// The tag `preview` renders a non-string reply under is read under a guard, so a reply that claims a megabyte-long tag or throws from the getter cannot make the failure message unbounded or replace it with the reply's own error.
+	const client = new WalletClient(mockProvider(), "Mock");
+	const provider = mockProvider();
+	provider.state.chainId = { [Symbol.toStringTag]: "x".repeat(1_000_000) };
+	const tagged = new WalletClient(provider, "Mock");
+	await assert.rejects(
+		() => tagged.chainId(),
+		(error) =>
+			error instanceof WalletResponseError &&
+			!error.message.includes("x".repeat(64)) &&
+			error.message.length < 200,
+	);
+
+	provider.state.chainId = {
+		get [Symbol.toStringTag]() {
+			throw new Error("hostile");
+		},
+	};
+	await assert.rejects(
+		() => tagged.chainId(),
+		(error) => error instanceof WalletResponseError && error.message.includes("[unprintable]"),
+	);
+
+	// The client the plain state was built from is unaffected.
+	await assert.equal(await client.chainId(), "0x1");
 });

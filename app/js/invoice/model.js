@@ -16,11 +16,11 @@
  * - an optional tax is a percentage with at most {@link TAX_RATE_DECIMALS} fractional digits applied to the subtotal and rounded the same way (a tax that rounds to zero is allowed: it is a real `0` amount, not a mistyped line);
  * - the total is `subtotal + tax` and must still fit the uint256 a single transfer carries.
  */
-import { ASSET_REGISTRY, SUPPORTED_CHAIN_IDS, isSupportedAsset, isSupportedChain, requirePayableAddress, } from "../assets/registry.js";
+import { ASSET_REGISTRY, SUPPORTED_CHAIN_IDS, isAssetNetwork, isSupportedAsset, isSupportedChain, } from "../assets/registry.js";
 import { UINT256_MAX, canonicalAmount, fractionalDigits, fromBaseUnits, toBaseUnits } from "../util/decimal.js";
 import { boundMessage, describe, messageOf, preview } from "../util/errors.js";
 import { INVISIBLE_FORMATTING, MULTI_LINE_CONTROL, SINGLE_LINE_CONTROL } from "../util/text.js";
-import { requireInvoiceAddress } from "../wallet/address.js";
+import { requirePayoutAddress } from "../wallet/payout-address.js";
 /** The only invoice schema version this build writes and reads. */
 export const INVOICE_VERSION = 1;
 /** The payload kind, so a decoded object says what it is next to its version. */
@@ -43,12 +43,16 @@ export const MAX_INVOICE_NOTES_CHARS = 2000;
 export const MAX_TAX_LABEL_CHARS = 100;
 /** Fractional digits a tax rate may carry, so a rate stays exactly representable. */
 export const TAX_RATE_DECIMALS = 6;
-/** Raised by {@link validateInvoice} for a field that is missing, mis-shaped, or out of range; `path` names the offending field. */
+/**
+ * Raised by {@link validateInvoice} for a field that is missing, mis-shaped, or out of range; `path` names the offending field.
+ *
+ * A refusal this module wraps from another validator — a payout address, a money input — is kept as the error's own `cause`, so a surface above the model can classify the refusal by the class that raised it rather than by reading the message it was worded into.
+ */
 export class InvalidInvoiceError extends Error {
     /** The offending field, e.g. `payee.address` or `items[0].quantity`. Empty for the root object. */
     path;
-    constructor(path, reason) {
-        super(path === "" ? `invoice: ${reason}` : `invoice: ${path}: ${reason}`);
+    constructor(path, reason, options) {
+        super(path === "" ? `invoice: ${reason}` : `invoice: ${path}: ${reason}`, options);
         this.name = "InvalidInvoiceError";
         this.path = path;
     }
@@ -88,7 +92,7 @@ const MAX_TAX_RATE_UNITS = 100n * 10n ** BigInt(TAX_RATE_DECIMALS);
 /**
  * The most of a wrapped validator message a user-facing refusal carries.
  *
- * {@link payoutAddress} and {@link moneyRefusal} pass another module's message through verbatim, {@link email} and {@link date} build one of their own, and {@link assertKnownFields} puts an unknown JSON key into the field path; each embeds the rejected value, which a share payload within the codec's cap can stretch without bound — the address validator imposes no length of its own, the email validator's 320-character cap still leaves room for a notice past 400 characters, a date string reaches its refusal with no cap at all, and an unknown key's length is limited only by the payload.
+ * {@link payoutAddress} and {@link moneyRefusal} wrap another module's message, {@link email} and {@link date} build one of their own, and {@link assertKnownFields} puts an unknown JSON key into the field path; each embeds the rejected value, which a share payload within the codec's cap can stretch without bound — the address validator imposes no length of its own, the email validator's 320-character cap still leaves room for a notice past 400 characters, a date string reaches its refusal with no cap at all, and an unknown key's length is limited only by the payload.
  * Left unbounded, that turns the route notice into ~100 KB and breaks the bounded-message invariant (`util/errors.ts`, `app/shell.ts`).
  * The bound leaves every message this module builds from a legitimate value intact — the longest is well under it — while keeping a hostile one far inside the notice's own limit.
  */
@@ -180,23 +184,24 @@ function chainField(value, path, asset) {
     if (typeof value !== "string" || !isSupportedChain(value)) {
         throw new InvalidInvoiceError(path, `must be one of the supported chains (${SUPPORTED_CHAIN_IDS.join(", ")}), got ${preview(value)}`);
     }
-    // A second chain in the registry is what makes this branch reachable; today one chain holds all.
-    if (value !== asset.chainId) {
+    if (!isAssetNetwork(value, asset)) {
         throw new InvalidInvoiceError(path, `must be ${describe(asset.chainId)} to match the ${asset.id} asset, got ${describe(value)}`);
     }
     return value;
 }
+/**
+ * The payee address for the invoice's own asset, validated by the family that asset states and refused under this field's path.
+ *
+ * The rules belong to the dispatcher: an EVM asset re-encodes the address to its EIP-55 checksum and refuses the zero address or a token's own contract, a Zcash asset reads the transparent, Sapling, and mainnet unified forms, and a Monero asset the standard, subaddress, and integrated ones.
+ * Every refusal it raises reaches the field this module read the value from, bounded with the same cap the other wrapped messages use, because the message embeds the rejected value.
+ * The dispatcher's own error travels with it as the `cause`, so a surface that acts on the refusal — rather than showing its message — reads the class the validator raised: a testnet unified container is a `TestnetUnifiedAddressError` here rather than a wording to match.
+ */
 function payoutAddress(value, path, asset) {
-    if (typeof value !== "string") {
-        throw new InvalidInvoiceError(path, `must be a 0x-prefixed 40-hex payout address, got ${preview(value)}`);
-    }
     try {
-        const checksummed = requireInvoiceAddress(value);
-        requirePayableAddress(checksummed, asset);
-        return checksummed;
+        return requirePayoutAddress(value, asset);
     }
     catch (error) {
-        throw new InvalidInvoiceError(path, boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX));
+        throw new InvalidInvoiceError(path, boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX), { cause: error });
     }
 }
 function payeeField(value, path, asset) {

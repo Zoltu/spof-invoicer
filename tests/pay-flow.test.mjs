@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
-import { findAll } from "./helpers/tree.mjs";
+import { PAYEE, XMR_PAYEE, ZEC_PAYEE } from "./helpers/payee-vectors.mjs";
+import { findAll, hasClass } from "./helpers/tree.mjs";
 import {
 	ACCOUNT,
 	TX_HASH,
@@ -17,9 +18,8 @@ import { createInvoice } from "../app/js/invoice/model.js";
 import { openPayPanel } from "../app/js/ui/pay.js";
 import { createPayFlow } from "../app/js/ui/pay-flow.js";
 import { WalletClient, WalletRequestError } from "../app/js/wallet/eip1193.js";
-import { buildPaymentPlan, readBalance } from "../app/js/wallet/payment.js";
+import { UnsupportedPaymentFamilyError, buildPaymentPlan, readBalance } from "../app/js/wallet/payment.js";
 
-const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 const USDC_TOTAL = 357000000n;
 
 function usdcInvoice(overrides = {}) {
@@ -45,10 +45,6 @@ function ethInvoice(overrides = {}) {
 		items: [{ description: "Advice", quantity: "1", unitPrice: "1.5" }],
 		...overrides,
 	});
-}
-
-function hasClass(node, name) {
-	return (node.attributes.class ?? "").split(/\s+/).includes(name);
 }
 
 function buttonLabels(rootNode) {
@@ -786,5 +782,54 @@ test("the panel's own whole-flow retry after a declined send still broadcasts", 
 	} finally {
 		installed.restore();
 		fake.restore();
+	}
+});
+
+/** A privacy-chain invoice: its own network slug, its own asset, and the payee form that asset's family validates. */
+function privacyInvoice(asset, address) {
+	return createInvoice({
+		id: `INV-${asset.toUpperCase()}`,
+		issued: "2026-10-03",
+		payee: { name: "Studio Example", address },
+		chainId: asset === "zec" ? "zcash" : "monero",
+		asset,
+		items: [{ description: "Design work", quantity: "1", unitPrice: "0.5" }],
+	});
+}
+
+/** The error a refusal raised by `run` carries; `run` failing to refuse at all is an error, so a case expecting a refusal cannot pass silently. */
+function refusal(run) {
+	try {
+		run();
+	} catch (error) {
+		return error;
+	}
+	throw new Error("expected the run to refuse");
+}
+
+test("the injected-wallet flow refuses a privacy-chain invoice by name", () => {
+	// Zcash and Monero are paid by their own payment link and QR code, so there is no transfer here to build: the refusal names the family the asset belongs to rather than reporting a network a wallet could be asked to switch to.
+	for (const [asset, family, address] of [["zec", "zcash", ZEC_PAYEE], ["xmr", "monero", XMR_PAYEE]]) {
+		const error = refusal(() => buildPaymentPlan(privacyInvoice(asset, address)));
+		assert.equal(error instanceof UnsupportedPaymentFamilyError, true, asset);
+		assert.equal(error.family, family, asset);
+		assert.match(error.message, /pays by payment link and QR code rather than through an injected wallet/);
+		assert.equal(error.message.includes("eth_"), false, "no EVM step is named for an invoice this flow cannot pay");
+	}
+});
+
+test("the payment panel refuses a privacy-chain invoice with a notice instead of letting the typed refusal escape", () => {
+	// `buildPaymentPlan` refuses a privacy-chain invoice with a typed error; the panel entry handles it, so a caller that reaches `openPayPanel` with one gets the same hand-off notice the view shows and no panel is mounted.
+	const installed = installWindow({});
+	try {
+		const notices = noticeRecorder();
+		for (const [asset, address] of [["zec", ZEC_PAYEE], ["xmr", XMR_PAYEE]]) {
+			const handle = openPayPanel(privacyInvoice(asset, address), { notice: notices, clipboard: null });
+			assert.equal(handle, null, asset);
+			assert.equal(notices.calls.at(-1).tone, "error", asset);
+			assert.match(notices.calls.at(-1).message, /payment link and QR code/, asset);
+		}
+	} finally {
+		installed.restore();
 	}
 });

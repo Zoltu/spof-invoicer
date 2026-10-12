@@ -9,18 +9,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { installInteractiveDocument } from "./dom.mjs";
 import { blockNetwork } from "./network-block.mjs";
 import { findButton, textOf } from "./tree.mjs";
+import { SERVED_BUNDLES } from "./vendor-bundles.mjs";
 import { waitFor } from "./wait.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const vendor = join(root, "app", "js", "vendor");
-
-const BUNDLES = [
-	"noble-hashes/sha3.js",
-	"noble-hashes/utils.js",
-	"noble-hashes/_u64.js",
-	"scure-base/index.js",
-	"pdf-lib/pdf-lib.esm.js",
-];
 
 const KECCAK_256_EMPTY = "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
 const KECCAK_256_ABC = "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45";
@@ -63,7 +56,7 @@ try {
 	const message = encoding.utf8ToBytes("hello");
 	assert.equal(encoding.base32.encode(message), "NBSWY3DP");
 
-	for (const file of BUNDLES) {
+	for (const file of SERVED_BUNDLES) {
 		await import(moduleUrl(join(vendor, file)));
 	}
 

@@ -1,12 +1,10 @@
 Third-party notices for the code vendored under vendor-src/ and served from app/js/vendor/.
 
-This file is additive: it documents the licences of the third-party code that is redistributed here.
-It does not modify any vendored library file. pdf-lib's own LICENSE.md is vendored alongside its
-bundle; the notices below cover the components that pdf-lib embeds without an in-file notice, plus the
-directly vendored hashing and base-encoding modules.
+This file is additive: it documents the licenses of the third-party code that is redistributed here.
+It does not modify any vendored library file.
+pdf-lib's own LICENSE.md is vendored alongside its bundle; the notices below list several of the components that pdf-lib embeds — @pdf-lib/upng and @pdf-lib/standard-fonts without an in-file notice, base64-arraybuffer and pako with their own — plus the directly vendored hashing and base-encoding modules.
 
-pdf-lib.esm.js additionally begins with the Apache License 2.0 banner that pdf-lib ships at the head
-of that bundle; it is reproduced in-file and is left untouched.
+pdf-lib.esm.js additionally begins with tslib's Apache License 2.0 banner; it is reproduced in-file and is left untouched.
 
 ================================================================================
 pdf-lib 1.17.1 — MIT License
@@ -154,3 +152,55 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+================================================================================
+@noble/hashes 2.4.0 — MIT License
+Vendored at vendor-src/noble-hashes/ (see also vendored LICENSE).
+
+MIT License
+
+Copyright (c) 2022 Paul Miller (https://paulmillr.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+================================================================================
+@scure/base 2.4.0 — MIT License
+Vendored at vendor-src/scure-base/ (see also vendored LICENSE).
+
+MIT License
+
+Copyright (c) 2022 Paul Miller (https://paulmillr.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

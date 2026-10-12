@@ -2,15 +2,22 @@
  * The payee's create-invoice view.
  *
  * The view is split in two layers so most of it is testable without a browser: the pure form state and its mapping to a validated {@link Invoice} live in the exported helpers at the top, and the DOM building at the bottom only wires those helpers to inputs.
+ * The payee's own screen shows the invoice the form creates, not only its share link: the section `ui/payment-section.ts` owns is drawn into this view for each invoice the form builds, so the payee can pay it, or copy its link, its address, and its amount, without opening their own share link.
  * Every rendered string — a field value, a validation message, a share payload — reaches the page as a text child of `util/dom.ts`'s `h()`, so nothing a user or a share link supplies can become markup.
  */
-import { ASSETS, isSupportedAsset, requireAsset } from "../assets/registry.js";
+import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset } from "../assets/registry.js";
 import { MAX_JSON_BYTES, encodedJsonBytes } from "../invoice/codec.js";
 import { InvalidInvoiceError, MAX_ITEMS, computeTotalsFor, createInvoice, } from "../invoice/model.js";
+import { PaymentLinkBudgetError, requireLinkBudget } from "../payment/links.js";
 import { toBaseUnits } from "../util/decimal.js";
 import { h } from "../util/dom.js";
 import { boundMessage, messageOf } from "../util/errors.js";
 import { checksumStatus } from "../wallet/address.js";
+import { EVM_ADDRESS_FORMS } from "../wallet/address.js";
+import { MONERO_ADDRESS_FORMS } from "../wallet/monero-address.js";
+import { ZCASH_ADDRESS_FORMS } from "../wallet/zcash-address.js";
+import { renderPaymentSection } from "./payment-section.js";
+import { buildInvoiceViewModel } from "./presentation.js";
 import { buildShareBundle, openShareDialog } from "./share.js";
 /**
  * Upper bound on a field or summary error's rendered length, matching the shell notice's own bound.
@@ -85,7 +92,7 @@ export function invoiceInputFromState(state) {
         ...(due === "" ? {} : { due }),
         payee: {
             name: state.payeeName.trim(),
-            // The address is untrusted form text; createInvoice validates and checksums it.
+            // The address is untrusted form text, kept as the string it is; createInvoice re-dispatches it through `wallet/payout-address.ts`'s requirePayoutAddress, which validates it against the selected asset's family — an EIP-55 checked `0x` address for an EVM asset, the chain's own grammar for Zcash or Monero — rather than asserting a family here.
             address: state.payeeAddress.trim(),
             ...(payeeEmail === "" ? {} : { email: payeeEmail }),
         },
@@ -261,22 +268,49 @@ export function liveLineAmount(state, index) {
     const totals = previewTotals(state, [{ description: item.description.trim(), quantity, unitPrice }], false);
     return totals === null ? null : totals.total.text;
 }
-/** Decide a share attempt's outcome as a value — a ready bundle, invalid fields, a too-large invoice, or a failure — so the submit handler stays thin. */
+/**
+ * The payee-facing message for a link-budget refusal: the asset the form selected, and the one action that clears the refusal.
+ *
+ * Nothing the payee typed can change it — the gate measures the selected entry's own widest link rather than this invoice — so the message names the asset and leaves choosing a different one as the payee's move.
+ */
+function linkBudgetMessage(asset) {
+    return `This invoice cannot be shared: the payment link for ${asset.symbol} is longer than the invoice's QR code can carry. Choose a different asset, then try again.`;
+}
+/**
+ * The refusal a failed share attempt reads as, decided by the error's class rather than by its message.
+ *
+ * A budget refusal is the one throw a payee's own input can provoke, so it is answered as the state it is; anything else is a fault this form cannot explain and is reported as one, with the underlying message clipped the way every other message reaching the page is.
+ * Exported so the classification is testable without a registry entry that outgrows the symbol, which no shipped entry does.
+ */
+export function shareFailure(error, asset) {
+    if (error instanceof PaymentLinkBudgetError) {
+        return { kind: "link-too-large", message: linkBudgetMessage(asset) };
+    }
+    return {
+        kind: "failed",
+        message: `The invoice could not be shared: ${boundMessage(messageOf(error), FIELD_MESSAGE_MAX)}`,
+    };
+}
+/**
+ * Decide a share attempt's outcome as a value — a ready bundle, invalid fields, or the refusal that stopped it — so the submit handler stays thin.
+ *
+ * The asset is resolved before the work below because the model has already validated that field: `parseFormState` accepts only an invoice `createInvoice` built, and that refuses an asset id the registry does not carry, so the lookup cannot throw and no branch of this function does.
+ */
 export function planShare(state, baseUrl) {
     const outcome = parseFormState(state);
     if (!outcome.ok)
         return { kind: "invalid", errors: outcome.errors };
+    const asset = requireAsset(outcome.invoice.asset);
     try {
         const bytes = encodedJsonBytes(outcome.invoice);
         if (bytes > MAX_JSON_BYTES)
             return { kind: "too-large", message: tooLargeMessage(bytes) };
+        // The entry's widest link is measured before the share is handed out: the refusal belongs to the payee's form, not to the payer's page.
+        requireLinkBudget(asset);
         return { kind: "ready", invoice: outcome.invoice, bundle: buildShareBundle(outcome.invoice, baseUrl) };
     }
     catch (error) {
-        return {
-            kind: "failed",
-            message: `The invoice could not be shared: ${boundMessage(messageOf(error), FIELD_MESSAGE_MAX)}`,
-        };
+        return shareFailure(error, asset);
     }
 }
 function tooLargeMessage(bytes) {
@@ -294,13 +328,93 @@ export function shareSizeHint(state) {
     return { bytes, limit: MAX_JSON_BYTES, fits: bytes <= MAX_JSON_BYTES };
 }
 /**
- * The non-blocking caution shown under the payout address when the entered address is uniformly cased.
+ * The forms each family's addresses take, read from the validators that decide them: `wallet/address.ts`, `wallet/zcash-address.ts` and `wallet/monero-address.ts` each state their own accepted forms as one list.
+ *
+ * The map is exhaustive by type, so adding a family to `AssetFamily` is a compile error until it is given its forms here — a decision rather than a silently empty hint — and the placeholder and guidance below are composed from these entries rather than from a wording of their own, so a hint cannot name a form its validator refuses or miss one it accepts, nor spell the EVM family's form apart from the validator that reads it.
+ */
+const PAYOUT_ADDRESS_FORMS = {
+    evm: EVM_ADDRESS_FORMS,
+    zcash: ZCASH_ADDRESS_FORMS,
+    monero: MONERO_ADDRESS_FORMS,
+};
+/**
+ * The spellings a family's forms lead with, deduplicated in the order its validator states them.
+ *
+ * A form may lead with more than one spelling — the transparent Zcash address with `t1` and `t3` — and those are one entry of the hint's list, so a form's spellings are joined under the form rather than listed apart; two forms that share a spelling, as the integrated Monero address shares the standard one's `4`, are named once.
+ */
+function formSpellings(forms) {
+    const spellings = [];
+    for (const form of forms) {
+        const spelling = form.prefixes.join("/");
+        if (!spellings.includes(spelling))
+            spellings.push(spelling);
+    }
+    return spellings;
+}
+/** Join `parts` as an English list — `a, b, or c`, `a or b` for a pair, and `a` alone when there is one — which is the shape both hints read in. */
+function orList(parts) {
+    const last = parts[parts.length - 1] ?? "";
+    if (parts.length <= 1)
+        return last;
+    const head = parts.slice(0, -1).join(", ");
+    return parts.length === 2 ? `${head} or ${last}` : `${head}, or ${last}`;
+}
+/**
+ * The family `asset` belongs to as one of the families this app carries, or `null` for an asset that states a name it does not.
+ *
+ * The family is read through `assets/registry.ts`'s `assetFamily` — the resolution `wallet/payout-address.ts`'s dispatcher applies — so an asset that states no family is the default EVM one for this form exactly as it is for the validator that reads what the form holds.
+ * The name is then judged by that module's `isAssetFamily`, the one statement of which names a family, so this hint and the registry's load-time gate cannot disagree about that: a name the gate refuses leaves this form showing no family-specific text rather than a value that means nothing, an inherited `Object.prototype` member such as `"constructor"` included.
+ */
+function payoutFamily(asset) {
+    const family = assetFamily(asset);
+    return isAssetFamily(family) ? family : null;
+}
+/**
+ * The placeholder the payout-address field shows for `asset`'s family, and no placeholder at all for a family this file does not carry.
+ *
+ * The field's placeholder is what tells a payee which spelling to paste, and the families do not share one: an EVM address is an `0x` string while a privacy-chain address is an address in that chain's own encoding, so one EVM-shaped placeholder would point a Zcash or Monero payee at the wrong form.
+ * Every spelling comes from the family's own validator through {@link PAYOUT_ADDRESS_FORMS}, so a form the placeholder names is one a paste in it is accepted by; the family comes from {@link payoutFamily}, so the asset the dispatcher validates by the default EVM rules shows the EVM forms here.
+ */
+export function payoutAddressPlaceholder(asset) {
+    const family = payoutFamily(asset);
+    return family === null ? "" : orList(formSpellings(PAYOUT_ADDRESS_FORMS[family]).map((spelling) => `${spelling}…`));
+}
+/**
+ * The guidance the payout-address field shows per family: what a family whose addresses carry no EIP-55 checksum expects instead, and `null` for the EVM family, which its placeholder and its checksum caution already cover.
+ *
+ * The map is exhaustive by type, exactly as {@link PAYOUT_ADDRESS_FORMS} is: adding a family to `AssetFamily` is a compile error until it is given a guidance decision here, so a new family forces an explicit choice — a sentence naming its forms, or a deliberate `null` — rather than silently shipping a placeholder with no guidance and no checksum caution.
+ * Each sentence is composed from the family's own form list, so it names every form `wallet/zcash-address.ts` or `wallet/monero-address.ts` accepts and only those: a payee who pasted an address the validator takes must not be told by the hint that its shape is wrong, and a form the validator refuses must not be held out as one to paste.
+ */
+const PAYOUT_ADDRESS_GUIDANCE = {
+    evm: null,
+    zcash: (forms) => `This invoice pays to a mainnet Zcash address: a ${orList(forms.map((form) => `${form.name} (${form.prefixes.join("/")})`))} form.`,
+    monero: (forms) => `This invoice pays to a mainnet Monero address: ${orList(forms.map((form) => `a ${form.characters}-character ${form.name} beginning with ${form.prefixes[0]}`))}.`,
+};
+/**
+ * The guidance the payout-address field shows for `asset`'s family, or `null` for the EVM family and for a family this file does not carry.
+ *
+ * A privacy-chain payee has no EIP-55 checksum to be cautioned about — {@link payoutAddressWarning} cautions about a mistyped `0x` address — so the slot carries what the family does expect instead, rather than an EVM instruction for an asset that cannot receive one.
+ * The family comes from {@link payoutFamily}, so a family-less asset is treated as the EVM one here as it is by the dispatcher that validates its address, and a name this app carries no rules for resolves to `null` and shows no guidance.
+ */
+export function payoutAddressGuidance(asset) {
+    const family = payoutFamily(asset);
+    if (family === null)
+        return null;
+    const sentence = PAYOUT_ADDRESS_GUIDANCE[family];
+    return sentence === null ? null : sentence(PAYOUT_ADDRESS_FORMS[family]);
+}
+/**
+ * The non-blocking caution shown under the payout address when an EVM asset's entered address is uniformly cased.
  *
  * EIP-55 catches a mistyped character only in a mixed-case address; a uniformly-cased address carries no checksum, so nothing verifies it — yet {@link parseFormState} accepts one and the model stores the checksummed spelling, which every display then shows as if verified.
  * This names the gap where the raw text still exists: the payee is cautioned as they type, before the address is folded to its checksummed form.
+ * The caution is about an EVM `0x` address's checksum alone, so a family whose addresses carry no EIP-55 checksum gets `null` and shows {@link payoutAddressGuidance} in its place.
+ * The family comes from {@link payoutFamily}, so an asset that states no family is cautioned here exactly as the dispatcher validates it, by the EVM rules.
  * Returns `null` for a mixed-case address with a valid checksum, for an empty or malformed field, and for a wrong checksum (that is reported by the model on submit, not as a caution).
  */
-export function payoutAddressWarning(address) {
+export function payoutAddressWarning(address, asset) {
+    if (payoutFamily(asset) !== "evm")
+        return null;
     if (checksumStatus(address.trim()) !== "unverifiable")
         return null;
     return "This payout address is all one case, so it carries no EIP-55 checksum and a mistyped character would not be caught. Paste the checksummed (mixed-case) spelling to verify it.";
@@ -318,7 +432,7 @@ export function renderCreateView(options) {
     let shownErrors = [];
     const errorSummary = h("div", { class: "error-summary", role: "alert", hidden: true });
     const payeeName = h("input", { type: "text", name: "payeeName", value: state.payeeName, placeholder: "Acme Studio" });
-    const payeeAddress = h("input", { type: "text", name: "payeeAddress", value: state.payeeAddress, placeholder: "0x…" });
+    const payeeAddress = h("input", { type: "text", name: "payeeAddress", value: state.payeeAddress, placeholder: payoutAddressPlaceholder(requireAsset(state.assetId)) });
     // Its single child changes in place, so the node stays mounted: an empty caution is hidden rather than removed.
     const payoutWarning = h("p", { class: "field-warning", role: "status", hidden: true }, "");
     const payeeEmail = h("input", { type: "text", name: "payeeEmail", value: state.payeeEmail, placeholder: "billing@example.com" });
@@ -339,6 +453,8 @@ export function renderCreateView(options) {
     const totalText = h("span", { class: "totals-value" }, "—");
     const taxRow = h("tr", { class: "totals-row", hidden: true }, h("th", { scope: "row" }, "Tax"), h("td", {}, taxText));
     const shareSizeNote = h("p", { class: "field-hint share-size" }, "");
+    // The created invoice's section, drawn in this view rather than only in the share dialog: a payee who has just built an invoice can pay it, or copy its link, address, and amount, without opening their own share link.
+    const createdPayment = h("div", { class: "created-payment", hidden: true });
     function syncTotals() {
         const symbol = requireAsset(state.assetId).symbol;
         amountCells.forEach((cell, index) => {
@@ -374,14 +490,22 @@ export function renderCreateView(options) {
         shareSizeNote.setAttribute("class", hint.fits ? "field-hint share-size" : "field-error share-size");
     }
     function syncPayoutWarning() {
-        const warning = payoutAddressWarning(state.payeeAddress);
-        if (warning === null) {
+        const asset = requireAsset(state.assetId);
+        const guidance = payoutAddressGuidance(asset);
+        const message = guidance ?? payoutAddressWarning(state.payeeAddress, asset);
+        if (message === null) {
             payoutWarning.textContent = "";
             payoutWarning.setAttribute("hidden", "");
             return;
         }
-        payoutWarning.textContent = warning;
+        payoutWarning.textContent = message;
+        payoutWarning.setAttribute("class", guidance === null ? "field-warning" : "field-hint");
         payoutWarning.removeAttribute("hidden");
+    }
+    /** Draw the invoice the form just created into this view, through the section the payer's document draws beside it. */
+    function showCreatedPayment(invoice) {
+        createdPayment.replaceChildren(renderPaymentSection(buildInvoiceViewModel(invoice, options.today), options.clipboard ?? null));
+        createdPayment.removeAttribute("hidden");
     }
     function sync() {
         syncTotals();
@@ -496,6 +620,8 @@ export function renderCreateView(options) {
     assetSelect.addEventListener("change", () => {
         if (isSupportedAsset(assetSelect.value)) {
             state.assetId = assetSelect.value;
+            payeeAddress.setAttribute("placeholder", payoutAddressPlaceholder(requireAsset(state.assetId)));
+            syncPayoutWarning();
             sync();
         }
     });
@@ -522,17 +648,19 @@ export function renderCreateView(options) {
             return;
         }
         showErrors([]);
-        if (plan.kind === "too-large" || plan.kind === "failed") {
+        if (plan.kind !== "ready") {
             options.notice.showNotice(plan.message, "error");
             return;
         }
         options.notice.clearNotice();
+        showCreatedPayment(plan.invoice);
         openShareDialog(plan.bundle, { clipboard: options.clipboard ?? null });
         options.notice.showNotice(`Invoice ${plan.invoice.id} is ready to share.`, "success");
     });
     rebuildItems((index) => index);
     sync();
-    return h("section", { class: "view view-create" }, h("h1", { class: "view-title" }, "Create an invoice"), h("p", { class: "view-intro" }, "Fill in your details and line items. Totals update as you type; the share link stays on this device."), form);
+    syncPayoutWarning();
+    return h("section", { class: "view view-create" }, h("h1", { class: "view-title" }, "Create an invoice"), h("p", { class: "view-intro" }, "Fill in your details and line items. Totals update as you type; the share link stays on this device."), form, createdPayment);
 }
 function buildItemRow(item, index, errors, sync, onRemove, onUp, onDown) {
     const description = h("input", { type: "text", name: `item-${index}-description`, value: item.description, placeholder: "Design work" });

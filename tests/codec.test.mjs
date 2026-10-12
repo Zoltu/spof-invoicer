@@ -35,6 +35,8 @@ const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 const PAYEE_LOWER = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
 const USDC_CONTRACT = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+/** A mainnet unified Zcash address, whose canonical spelling is the lower-case one its Bech32m checksum is computed over. */
+const UNIFIED = "u1qpatys4zruk99pg59gcscrt7y6akvl9vrhcfyhm9yxvxz7h87q6n8cgrzzpe9zru68uq39uhmlpp5uefxu0su5uqyqfe5zp3tycn0ecl";
 
 function baseInput(overrides = {}) {
 	return {
@@ -393,7 +395,7 @@ test("the asset must be supported and the chain must match it", () => {
 		"an unknown asset",
 		() => make({ asset: "dai" }),
 		InvalidInvoiceError,
-		/asset: must be a supported asset id \(eth, usdc, usdt\), got "dai"/,
+		/asset: must be a supported asset id \(eth, usdc, usdt, zec, xmr\), got "dai"/,
 	);
 	rejects("a non-string asset", () => make({ asset: 42 }), InvalidInvoiceError, /asset: must be a supported asset id/);
 	rejects(
@@ -406,7 +408,7 @@ test("the asset must be supported and the chain must match it", () => {
 		"an unsupported chain",
 		() => make({ chainId: "0x89" }),
 		InvalidInvoiceError,
-		/chainId: must be one of the supported chains \(0x1\), got "0x89"/,
+		/chainId: must be one of the supported chains \(0x1, zcash, monero\), got "0x89"/,
 	);
 	rejects(
 		"a numeric chain id",
@@ -415,6 +417,40 @@ test("the asset must be supported and the chain must match it", () => {
 		/chainId: must be one of the supported chains/,
 	);
 	assert.equal(make({ asset: "eth", chainId: "0x1" }).asset, "eth", "a native asset on its own chain is accepted");
+});
+
+test("a privacy-chain invoice carries its own network slug and payout form through the share container", () => {
+	// The wire format is unchanged: the network still travels under `chainId`, now holding the slug the entry states, and the payee address is the mainnet unified container the Zcash branch accepts.
+	const UNIFIED = "u1qpatys4zruk99pg59gcscrt7y6akvl9vrhcfyhm9yxvxz7h87q6n8cgrzzpe9zru68uq39uhmlpp5uefxu0su5uqyqfe5zp3tycn0ecl";
+	const MONERO = "46BeWrHpwXmHDpDEUmZBWZfoQpdc6HaERCNmx1pEYL2rAcuwufPN9rXHHtyUA4QVy66qeFQkn6sfK8aHYjA3jk3o1Bv16em";
+	const zec = make({ asset: "zec", chainId: "zcash", payee: { name: "Studio Example", address: UNIFIED } });
+	assert.equal(zec.chainId, "zcash");
+	assert.equal(zec.payee.address, UNIFIED, "the validated address is stored as the family that read it returned it");
+	assert.deepEqual(decodeInvoice(encodeInvoice(zec)), zec, "and the invoice survives the share container");
+
+	const xmr = make({ asset: "xmr", chainId: "monero", payee: { name: "Studio Example", address: MONERO } });
+	assert.equal(xmr.chainId, "monero");
+	assert.deepEqual(decodeInvoice(encodeInvoice(xmr)), xmr);
+
+	// The asset and the chain must still agree, and the payee address must belong to the asset's family.
+	rejects(
+		"a Zcash asset on the Ethereum chain",
+		() => make({ asset: "zec", chainId: "0x1" }),
+		InvalidInvoiceError,
+		/chainId: must be "zcash" to match the zec asset, got "0x1"/,
+	);
+	rejects(
+		"an EVM payee in a Zcash invoice",
+		() => make({ asset: "zec", chainId: "zcash" }),
+		InvalidInvoiceError,
+		/payee\.address: zcash-address: not a Zcash payout address — expected a mainnet transparent t1\/t3, Sapling zs1, or unified u1 address/,
+	);
+	rejects(
+		"a testnet unified payee in a mainnet Zcash invoice",
+		() => make({ asset: "zec", chainId: "zcash", payee: { name: "X", address: "utest10c5kutapazdnf8ztl3pu43nkfsjx89fy3uuff8tsmxm6s86j37pe7uz94z5jhkl49pqe8yz75rlsaygexk6jpaxwx0esjr8wm5ut7d5s" } }),
+		InvalidInvoiceError,
+		/payee\.address: zcash-address: a testnet unified address cannot be paid from a mainnet-only invoice/,
+	);
 });
 
 test("totals are computed in base units with half-up rounding", () => {
@@ -684,13 +720,22 @@ test("a payload that is not canonical JSON is refused", () => {
 	rejects("a non-object payload", () => payloadOf("[]"), InvalidInvoiceError, /must be a JSON object/);
 });
 
-test("a payload that spells the payee address without its checksum names that cause", () => {
+test("a payload that spells a payee address in the other case names that cause", () => {
 	const json = serializeInvoice(MINIMAL);
 	rejects(
-		"a uniformly-cased payee address",
+		"a uniformly-cased EVM payee address",
 		() => decodeInvoice(b32(json.replace(PAYEE, PAYEE_LOWER))),
 		ShareFormatError,
-		/EIP-55 checksummed form/,
+		/but its canonical spelling is 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045/,
+	);
+	// A Zcash payee's canonical spelling is the lower-case Bech32 one rather than an EIP-55 checksum, and the message names that canonical spelling.
+	const zcash = make({ payee: { name: "Studio Example", address: UNIFIED }, chainId: "zcash", asset: "zec" });
+	const zcashJson = serializeInvoice(zcash);
+	rejects(
+		"an upper-case Zcash payee address",
+		() => decodeInvoice(b32(zcashJson.replace(UNIFIED, UNIFIED.toUpperCase()))),
+		ShareFormatError,
+		new RegExp(`but its canonical spelling is ${UNIFIED}`),
 	);
 	// A divergence that is the JSON spelling itself keeps the generic message.
 	rejects(

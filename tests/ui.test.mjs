@@ -1,4 +1,4 @@
-/** The suite for the create and share UI and the app shell: form state and totals, the share dialog, route dispatch, the chrome, and hostile text kept inert as text. */
+/** The suite for the create and share UI and the app shell: form state and totals, the payout-address placeholder and guidance per family, the share dialog, route dispatch, the chrome, and hostile text kept inert as text. */
 
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -6,12 +6,17 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
-import { findAll, findButton, textOf } from "./helpers/tree.mjs";
+import { ZEC_PAYEE, XMR_PAYEE } from "./helpers/payee-vectors.mjs";
+import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
+import { readSymbol } from "./helpers/qr-reader.mjs";
+import { findAll, findButton, hasClass, inputValues, textOf } from "./helpers/tree.mjs";
+import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
 import { MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
 import { MAX_JSON_BYTES, encodeInvoice } from "../app/js/invoice/codec.js";
 import { decodeShare } from "../app/js/invoice/share.js";
 import { parseHash } from "../app/js/app/router.js";
 import { createDispatcher, dispatchRoute, mountShell, renderRoute } from "../app/js/app/shell.js";
+import { PaymentLinkBudgetError } from "../app/js/payment/links.js";
 import {
 	addItem,
 	canAddItem,
@@ -21,13 +26,18 @@ import {
 	liveTotals,
 	moveItem,
 	parseFormState,
+	payoutAddressGuidance,
+	payoutAddressPlaceholder,
 	payoutAddressWarning,
 	planShare,
 	removeItem,
 	renderCreateView,
+	shareFailure,
 	shareSizeHint,
 } from "../app/js/ui/create.js";
+import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { buildShareBundle, copyText } from "../app/js/ui/share.js";
+import { renderInvoiceView } from "../app/js/ui/view.js";
 import { base32nopad, utf8 } from "../app/js/util/encoding.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -322,6 +332,47 @@ test("renderRoute switches views and keeps hostile share text inert", () => {
 	}
 });
 
+test("a view renderer that throws leaves a notice, not a blank or stale document", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const shell = mountShell(document.createElement("div"));
+		renderRoute(shell, parseHash(""), TOTAL_OPTIONS);
+		const createView = shell.content.children[0];
+		assert.equal(shell.notice.children.length, 0);
+
+		// A hand-built invoice reaches the renderer without the validation `createInvoice` applies, so `buildInvoiceViewModel` throws while it builds the payment link — the seam the boundary covers.
+		const unpayable = { ...invoiceFor(), payee: { name: "Studio Example", address: "0x1234" } };
+		renderRoute(shell, { kind: "view", invoice: unpayable }, TOTAL_OPTIONS);
+
+		assert.notEqual(shell.content.children[0], createView, "the route container drops the previous route's document");
+		assert.match(textOf(shell.content), /Invoice view failed:/);
+		assert.equal(shell.notice.children[0].attributes.role, "alert", "and the notice region announces it too");
+		assert.match(textOf(shell.notice), /Invoice view failed:/);
+		assert.match(textOf(shell.notice), /0x-prefixed 40-hex address/, "with the reason the render refused the invoice");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the payout-address hint is composed from the validators' own form lists", async () => {
+	// The hint names the forms each family accepts, so it is built from the lists `wallet/zcash-address.ts` and `wallet/monero-address.ts` state: a form a validator adds or drops has to appear or vanish here rather than being restated in the view.
+	const { ZCASH_ADDRESS_FORMS } = await import("../app/js/wallet/zcash-address.js");
+	const { MONERO_ADDRESS_FORMS } = await import("../app/js/wallet/monero-address.js");
+
+	const zcashPlaceholder = payoutAddressPlaceholder(ASSET_REGISTRY.zec);
+	const zcashGuidance = payoutAddressGuidance(ASSET_REGISTRY.zec);
+	for (const form of ZCASH_ADDRESS_FORMS) {
+		assert.ok(zcashPlaceholder.includes(form.prefixes.join("/")), `${form.name} missing from the placeholder`);
+		assert.ok(zcashGuidance.includes(`${form.name} (${form.prefixes.join("/")})`), `${form.name} missing from the guidance`);
+	}
+
+	const moneroPlaceholder = payoutAddressPlaceholder(ASSET_REGISTRY.xmr);
+	const moneroGuidance = payoutAddressGuidance(ASSET_REGISTRY.xmr);
+	for (const form of MONERO_ADDRESS_FORMS) {
+		assert.ok(moneroPlaceholder.includes(form.prefixes[0]), `${form.name} missing from the placeholder`);
+		assert.ok(moneroGuidance.includes(`${form.characters}-character ${form.name} beginning with ${form.prefixes[0]}`), `${form.name} missing from the guidance`);
+	}
+});
 test("the create view renders its title, form, and submit handler through the DOM helpers", () => {
 	const fake = installInteractiveDocument();
 	try {
@@ -476,6 +527,18 @@ test("planShare yields a shareable bundle for a normal invoice", () => {
 	assert.ok(plan.bundle.blob.startsWith("pinv1b-"));
 });
 
+test("a link-budget refusal reaches the payee as its own plan, with the asset and the action that clears it", () => {
+	// The form's catch-all folded this into one "could not be shared": the refusal is a known state — the selected asset's widest link outgrows the symbol, whatever the invoice says — so it is classified by the error's class and answered with the payee's one move, while a genuine fault still reports itself as one.
+	const refused = shareFailure(new PaymentLinkBudgetError("the eth entry builds a 512-byte link"), ASSET_REGISTRY.eth);
+	assert.equal(refused.kind, "link-too-large");
+	assert.match(refused.message, /ETH/);
+	assert.match(refused.message, /Choose a different asset/);
+	assert.doesNotMatch(refused.message, /could not be shared/);
+	const failed = shareFailure(new Error("the codec threw"), ASSET_REGISTRY.eth);
+	assert.equal(failed.kind, "failed");
+	assert.match(failed.message, /^The invoice could not be shared: the codec threw$/);
+});
+
 test("shareSizeHint reports the encoded size and flags the over-cap case", () => {
 	const normal = shareSizeHint(formState());
 	assert.ok(normal.fits);
@@ -601,12 +664,46 @@ test("moving a flagged line keeps its still-true error and follows it to the new
 	}
 });
 
-test("payoutAddressWarning flags only a uniformly-cased address", () => {
-	assert.match(payoutAddressWarning(PAYEE.toLowerCase()), /no EIP-55 checksum/);
-	assert.match(payoutAddressWarning(PAYEE.toUpperCase().replace(/^0X/, "0x")), /no EIP-55 checksum/);
-	assert.equal(payoutAddressWarning(PAYEE), null, "a checksummed address needs no caution");
-	assert.equal(payoutAddressWarning(""), null, "an empty field is not a caution");
-	assert.equal(payoutAddressWarning("0x1234"), null, "a malformed address is the submit-time error, not a caution");
+test("payoutAddressWarning flags only a uniformly-cased EVM address", () => {
+	assert.match(payoutAddressWarning(PAYEE.toLowerCase(), ASSET_REGISTRY.eth), /no EIP-55 checksum/);
+	assert.match(payoutAddressWarning(PAYEE.toUpperCase().replace(/^0X/, "0x"), ASSET_REGISTRY.eth), /no EIP-55 checksum/);
+	assert.equal(payoutAddressWarning(PAYEE, ASSET_REGISTRY.eth), null, "a checksummed address needs no caution");
+	assert.equal(payoutAddressWarning("", ASSET_REGISTRY.eth), null, "an empty field is not a caution");
+	assert.equal(payoutAddressWarning("0x1234", ASSET_REGISTRY.eth), null, "a malformed address is the submit-time error, not a caution");
+
+	// A privacy-chain payee has no EIP-55 checksum to be cautioned about, so the EVM caution never speaks for that family's asset.
+	for (const id of ["zec", "xmr"]) {
+		assert.equal(payoutAddressWarning(PAYEE.toLowerCase(), ASSET_REGISTRY[id]), null, id);
+		assert.equal(payoutAddressWarning("u1qqqqqqqqqq", ASSET_REGISTRY[id]), null, id);
+	}
+});
+
+test("the payout-address placeholder and guidance follow the asset's family", async () => {
+	// The EVM placeholder is composed from the validator's own form list exactly as the two privacy families' are, so the spelling a payee is told to paste cannot drift from the one the validator reads.
+	const { EVM_ADDRESS_FORMS } = await import("../app/js/wallet/address.js");
+	assert.equal(payoutAddressPlaceholder(ASSET_REGISTRY.eth), `${EVM_ADDRESS_FORMS[0].prefixes.join("/")}…`);
+	assert.match(payoutAddressPlaceholder(ASSET_REGISTRY.usdc), /^0x/);
+	assert.match(payoutAddressPlaceholder(ASSET_REGISTRY.zec), /u1/);
+	assert.match(payoutAddressPlaceholder(ASSET_REGISTRY.zec), /t1\/t3/, "and names the transparent P2SH form the validator accepts as well");
+	assert.match(payoutAddressPlaceholder(ASSET_REGISTRY.xmr), /4/);
+
+	assert.equal(payoutAddressGuidance(ASSET_REGISTRY.eth), null, "the EVM family is covered by its placeholder and its checksum caution");
+	assert.match(payoutAddressGuidance(ASSET_REGISTRY.zec), /mainnet Zcash/);
+	assert.match(payoutAddressGuidance(ASSET_REGISTRY.xmr), /mainnet Monero/);
+});
+
+test("every family the app carries has a guidance decision, so a new one cannot ship silently", () => {
+	// The guidance map is exhaustive by type exactly as the placeholder map is, so this reads the decision back for every family `ASSET_FAMILIES` names: the EVM family is covered by its placeholder and its checksum caution and returns `null` here, while every other family must name the forms its validator accepts rather than showing nothing.
+	for (const family of Object.keys(ASSET_FAMILIES)) {
+		const asset = { family };
+		assert.notEqual(payoutAddressPlaceholder(asset), "", `${family} placeholder`);
+		if (family === "evm") {
+			assert.equal(payoutAddressGuidance(asset), null, family);
+			continue;
+		}
+		assert.equal(typeof payoutAddressGuidance(asset), "string", `${family} guidance`);
+		assert.notEqual(payoutAddressGuidance(asset), "", `${family} guidance`);
+	}
 });
 
 test("the create form warns in place when the payout address carries no checksum", () => {
@@ -631,3 +728,143 @@ test("the create form warns in place when the payout address carries no checksum
 		fake.restore();
 	}
 });
+
+test("the create form follows the selected asset's family in the payout-address field", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const notices = noticeRecorder();
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: notices });
+		const address = controlNamed(view, "payeeAddress");
+		const asset = controlNamed(view, "asset");
+		const hint = findAll(view, (node) => node.attributes?.class === "field-warning")[0];
+		assert.ok(hint, "the form carries a payout-address slot");
+		assert.equal(address.attributes.placeholder, "0x…", "the default asset is EVM");
+
+		setControl(view, "payeeAddress", PAYEE.toLowerCase());
+		assert.match(textOf(hint), /EIP-55 checksum/);
+
+		asset.value = "zec";
+		asset.dispatch("change");
+		assert.match(address.attributes.placeholder, /u1/, "a Zcash asset asks for a Zcash-shaped address");
+		assert.match(textOf(hint), /mainnet Zcash/);
+		assert.equal(textOf(hint).includes("EIP-55"), false, "the EVM caution is not shown for a non-EVM family");
+		assert.equal(hint.attributes.hidden, undefined, "the family guidance is shown instead");
+
+		asset.value = "eth";
+		asset.dispatch("change");
+		assert.equal(address.attributes.placeholder, "0x…", "switching back restores the EVM placeholder");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the payout-address placeholder is read by own property and fails closed", () => {
+	// A plain object literal resolves through `Object.prototype`, so a family name that collides with an inherited member would otherwise yield a function rather than a placeholder; the field then shows no placeholder at all.
+	for (const family of ["constructor", "toString", "hasOwnProperty", "bitcoin", ""]) {
+		assert.equal(payoutAddressPlaceholder({ family }), "", family);
+	}
+	assert.equal(payoutAddressPlaceholder(ASSET_REGISTRY.eth), "0x…");
+	for (const asset of Object.values(ASSET_REGISTRY)) {
+		assert.equal(typeof payoutAddressPlaceholder(asset), "string", asset.id);
+		assert.notEqual(payoutAddressPlaceholder(asset), "", asset.id);
+	}
+});
+
+test("the Monero guidance names every form the validator accepts", () => {
+	const guidance = payoutAddressGuidance(ASSET_REGISTRY.xmr);
+	assert.match(guidance, /mainnet Monero/);
+	assert.match(guidance, /95-character standard address beginning with 4/, "the standard form");
+	assert.match(guidance, /95-character subaddress beginning with 8/, "the subaddress form");
+	assert.match(guidance, /106-character integrated address beginning with 4/, "the integrated form `wallet/monero-address.ts` accepts");
+});
+
+test("the payout field resolves the family through the same helper the dispatcher does", () => {
+	// `wallet/payout-address.ts` validates an asset that states no family by the default EVM rules, so the field that asset is paired with must show the EVM forms rather than no hint at all.
+	const familyLess = { id: "eth", symbol: "ETH", name: "Ether", chainId: "0x1", decimals: 18, kind: "native", address: null };
+	assert.equal(payoutAddressPlaceholder(familyLess), "0x…");
+	assert.equal(payoutAddressGuidance(familyLess), null);
+	assert.match(payoutAddressWarning(PAYEE.toLowerCase(), familyLess), /no EIP-55 checksum/);
+
+	// Only an absent field states none: a name this app carries no rules for is not defaulted to the EVM family.
+	assert.equal(payoutAddressPlaceholder({ family: undefined }), "0x…", "an explicit undefined is the absent field");
+	assert.equal(payoutAddressPlaceholder({ family: "bitcoin" }), "");
+	assert.equal(payoutAddressGuidance({ family: "bitcoin" }), null);
+	assert.equal(payoutAddressWarning(PAYEE.toLowerCase(), { family: "bitcoin" }), null);
+});
+
+test("the Zcash placeholder names every form the validator accepts", () => {
+	// The hint and the validator describe one set of forms, and `wallet/zcash-address.ts` takes the `t3` P2SH spelling as well as `t1`, `zs1`, and `u1`: a payee pasting a `t3` address must see their own form in the field.
+	const placeholder = payoutAddressPlaceholder(ASSET_REGISTRY.zec);
+	for (const form of ["t1", "t3", "zs1", "u1"]) assert.ok(placeholder.includes(form), `${form} missing from ${placeholder}`);
+	assert.match(payoutAddressGuidance(ASSET_REGISTRY.zec), /t1\/t3/);
+});
+
+/**
+ * The task path this suite left piecewise: a Zcash or Monero invoice created in the form, shared, and paid from the payment section the share renders.
+ * The form's per-family validation, the link builders, and the invoice view's own payment section were each covered apart, so no case drove one privacy-chain asset from the payee's own form to the payer's rendered payment details.
+ */
+const PRIVACY_CREATE_PATH = [
+	{ assetId: "zec", payee: ZEC_PAYEE, scheme: "zcash:", amountQuery: "?amount=300" },
+	{ assetId: "xmr", payee: XMR_PAYEE, scheme: "monero:", amountQuery: "?tx_amount=300" },
+];
+
+for (const path of PRIVACY_CREATE_PATH) {
+	test(`a ${path.assetId.toUpperCase()} invoice created in the form is shared and renders its payment section`, () => {
+		const fake = installInteractiveDocument();
+		try {
+			const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+			const asset = controlNamed(view, "asset");
+			asset.value = path.assetId;
+			asset.dispatch("change");
+			setControl(view, "payeeName", "Studio Example");
+			setControl(view, "payeeAddress", path.payee);
+			setControl(view, "item-0-description", "Design work");
+			setControl(view, "item-0-quantity", "2");
+			setControl(view, "item-0-unitPrice", "150");
+			assert.doesNotThrow(() => view.children[2].dispatch("submit"), "the submit handler must not throw");
+
+			// The payee's own screen: the invoice the form just built shows its own payment section, so the link, its symbol, and the copy fields are reachable without opening the share link.
+			const created = findAll(view, (node) => node.attributes?.class === "invoice-payment")[0];
+			assert.ok(created, "the created invoice's payment details are shown on the create screen");
+			const createdValues = inputValues(created);
+			assert.ok(createdValues.includes(path.payee), "the address the invoice pays to is one of the copy fields");
+			assert.ok(createdValues.includes("300"), "beside the amount it asks for");
+			const createdLink = createdValues.find((value) => value.startsWith(path.scheme));
+			assert.ok(createdLink, `and the invoice's own ${path.scheme} link`);
+			assert.ok(createdLink.includes(path.amountQuery), `whose amount field is the family's own: ${createdLink}`);
+			assert.deepEqual(
+				findAll(created, (node) => hasClass(node, "payment-copy")).map((button) => button.attributes["aria-label"]),
+				["Copy Pays to", "Copy Amount", "Copy Payment link"],
+				"each value a wallet takes verbatim carries its own copy control",
+			);
+
+			// The share dialog carries the invoice the form built; its link is the payer's own entry point, and the invoice it decodes to is what the payer's page renders.
+			const backdrop = document.body.children.find((child) => child.attributes?.class?.includes("dialog-backdrop"));
+			assert.ok(backdrop, "the share dialog opens over the page for the created invoice");
+			const url = findAll(backdrop, (node) => node.attributes?.class === "share-value")[0].attributes.value;
+			const shared = decodeShare(url.slice(url.indexOf("#")));
+			assert.ok(shared, "the shared link decodes back to the invoice");
+			assert.equal(shared.asset, path.assetId);
+			assert.equal(shared.payee.address, path.payee);
+
+			const model = buildInvoiceViewModel(shared, TOTAL_OPTIONS.today);
+			assert.equal(createdLink, model.paymentLink, "the payee's own screen states the link the shared invoice carries");
+			assert.equal(readSymbol(model.paymentQr).text, createdLink, "and an independent decoder reads that same URI back out of its symbol");
+			const createdGrid = findAll(created, (node) => hasClass(node, "payment-qr"))[0];
+			assert.ok(createdGrid, "the link's symbol is drawn beside the terms on the create screen");
+			assertSymbolCellsInDom(createdGrid, model.paymentQr);
+
+			// The payer's side of the same path: the shared invoice renders that link, its symbol, and the address and amount fields a wallet takes verbatim.
+			const payer = renderInvoiceView(shared, { ...TOTAL_OPTIONS, notice: noticeRecorder() });
+			const payment = findAll(payer, (node) => node.attributes?.class === "invoice-payment")[0];
+			assert.ok(payment, "the shared invoice renders its payment section");
+			assert.deepEqual(inputValues(payment), [path.payee, "300", model.paymentLink], "the address, the amount, and the link, each in its own copy field");
+			const payerGrid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
+			assert.ok(payerGrid, "the link's symbol is drawn beside them");
+			assertSymbolCellsInDom(payerGrid, model.paymentQr);
+			assert.equal(findButton(payer, "Pay"), undefined, "a privacy-chain invoice is offered no injected-wallet control");
+		} finally {
+			fake.restore();
+		}
+	});
+}

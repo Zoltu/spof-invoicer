@@ -5,8 +5,12 @@
  */
 import { describe } from "./errors.js";
 const AMOUNT_PATTERN = /^(?:0|[1-9]\d*)(?:\.(\d+))?$/;
-/** `2^256 - 1` has 78 decimal digits, so any longer whole part exceeds the uint256 range. */
-const MAX_UINT256_DIGITS = 78;
+/**
+ * The decimal digits `2^256 - 1` has: 78, the longest whole part a base-unit amount can spell.
+ *
+ * It bounds the digit count {@link toBaseUnits} reads before it converts, and it is exported as the owning figure for the length of a uint256-bounded amount's decimal spelling, which `payment/schemes.ts` derives a payment link's amount budget from rather than restating the number.
+ */
+export const MAX_UINT256_DIGITS = 78;
 /** The uint8 ceiling an on-chain `decimals()` can report; the asset registry validates against it. */
 export const MAX_DECIMALS = 255;
 /** The largest value a single uint256 base-unit amount can hold. */

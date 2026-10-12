@@ -2,16 +2,42 @@
  * Ethereum address syntax, EIP-55 checksum handling, and the address ↔ 20-byte conversion shared by the invoice and wallet layers.
  *
  * The module offers two normalizations on purpose: {@link normalizeAddress} lower-cases trusted, already-validated input without checking casing, while {@link requireInvoiceAddress} is the one entry point for untrusted text — an invoice payee, a pasted recipient — and refuses a mixed-case body whose EIP-55 checksum does not match, since that contradiction is exactly the mistyped character EIP-55 exists to catch.
+ * The clause every reader of this module refuses a value that is not an address with is {@link addressShapeMessage}, its one statement, which `wallet/payout-address.ts` reads for the same refusal rather than restating it: a maintainer who rewords the clause here moves both layers' messages with it.
  */
 import { hexToBytes, keccak256, toHex, utf8ToBytes } from "../util/encoding.js";
 import { describe } from "../util/errors.js";
-const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
+/** The characters every address this module accepts begins with: the prefix of its one spelling, and the spelling the payout-address hint names. */
+const ADDRESS_PREFIX = "0x";
+const ADDRESS_PATTERN = new RegExp("^" + ADDRESS_PREFIX + "[0-9a-fA-F]{40}$");
 const ADDRESS_BYTES = 20;
+/**
+ * The characters this module's addresses occupy: the `0x` prefix and two characters per byte, so every accepted address is this long.
+ *
+ * It is exported as the EVM family's own length for the readers that bound a payee address across families — `wallet/payout-address.ts`'s `MAX_PAYOUT_ADDRESS_LENGTH`, and through it the display cap `ui/presentation.ts` clips a displayed address to — rather than each of them restating `42`.
+ */
+export const MAX_EVM_ADDRESS_LENGTH = ADDRESS_PREFIX.length + ADDRESS_BYTES * 2;
+/**
+ * The forms this module accepts, for the payout-address hint `ui/create.ts` renders: the single `0x` spelling {@link ADDRESS_PATTERN} reads, which every one of this family's addresses carries.
+ *
+ * Both figures are read off the constants the checks below apply — {@link ADDRESS_PREFIX}, and through it {@link ADDRESS_PATTERN} and {@link MAX_EVM_ADDRESS_LENGTH} — so a form the hint names is one this validator takes and one this validator takes is named by the hint; the sentence around those entries is the UI layer's own wording rather than a second statement of the forms.
+ */
+export const EVM_ADDRESS_FORMS = Object.freeze([
+    Object.freeze({ name: "0x address", prefixes: Object.freeze([ADDRESS_PREFIX]), characters: MAX_EVM_ADDRESS_LENGTH }),
+]);
 /** The all-zero address. A transfer here is unrecoverable, so the transfer guards reject it. */
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 /** True when `value` is a `0x`-prefixed 40-hex address, narrowing it to {@link Address}. */
 export function isAddress(value) {
     return typeof value === "string" && ADDRESS_PATTERN.test(value);
+}
+/**
+ * The refusal text for a value that is not an address, with the caller's own rendering of that value: `address: expected a 0x-prefixed 40-hex address, got …`.
+ *
+ * The clause is stated once here because three boundaries raise it — {@link normalizeAddress}, {@link requireInvoiceAddress}, and `wallet/payout-address.ts`'s EVM gate, which refuses the same paste a layer earlier than the invoice path would — so the same paste cannot be refused in two different words and a reworded copy cannot leave the other saying something else about it.
+ * The rendering stays with the caller, because how much of a rejected value a message may carry is the caller's own bound: this module escapes the value whole with `describe`, while `wallet/payout-address.ts` renders it with `util/errors.ts`'s `preview` so a hostile paste cannot inflate the message it is refused with.
+ */
+export function addressShapeMessage(rendered) {
+    return `address: expected a 0x-prefixed 40-hex address, got ${rendered}`;
 }
 /**
  * Syntax-only normalization: lower-case an address and keep the `0x` prefix, throwing on anything that is not an address.
@@ -21,7 +47,7 @@ export function isAddress(value) {
  */
 export function normalizeAddress(value) {
     if (!isAddress(value)) {
-        throw new TypeError(`address: expected a 0x-prefixed 40-hex address, got ${describe(value)}`);
+        throw new TypeError(addressShapeMessage(describe(value)));
     }
     return value.toLowerCase();
 }
@@ -83,7 +109,7 @@ export class InvalidChecksumError extends Error {
  */
 export function requireInvoiceAddress(value) {
     if (!isAddress(value)) {
-        throw new TypeError(`address: expected a 0x-prefixed 40-hex address, got ${describe(value)}`);
+        throw new TypeError(addressShapeMessage(describe(value)));
     }
     if (checksumStatus(value) === "invalid") {
         throw new InvalidChecksumError(value);

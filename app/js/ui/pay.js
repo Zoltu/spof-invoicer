@@ -9,19 +9,22 @@
  * What the flow *does* lives in `ui/pay-flow.ts`, which is free of the DOM and driven directly by tests; this module owns only how each of its states is drawn and which control maps to which step.
  * A `failed` frame — nothing was broadcast — offers a full-flow "Try again", while the ambiguous `send-failed` frame offers a send-only "Try sending again" and an "I already sent it" exit that dismisses the panel without touching the wallet, so a retry after an unclear send cannot blindly re-run the whole flow.
  * Everything the panel shows comes from `wallet/payment.ts` and `wallet/eip1193.ts`: the amount is the model's own total, the recipient is the invoice's validated payee, and a wrong network stops the flow with guidance and a switch control rather than a transaction.
+ * The network it names is spelled by `ui/network-labels.ts`'s `networkLabel`, the same spelling the payer's document and the flow's guidance use.
  * All text is a text child of `util/dom.ts`'s `h()`, so no invoice field can become markup, and the transaction hash is shown as plain text with a copy control — the panel deliberately links to no block explorer, since resolving one would mean a network destination the app refuses to have.
  * A provider-derived string that reaches this panel — a wallet's announced label, whether on its own or echoed into a status line — is run through the same display-character pass the notices get, so it cannot carry bidi or invisible characters even if a future caller hands the panel one that `providerInfo` has not already cleaned.
  */
+import { requireAsset } from "../assets/registry.js";
 import { serializeInvoice } from "../invoice/codec.js";
 import { fromBaseUnits } from "../util/decimal.js";
 import { append, h } from "../util/dom.js";
 import { stripDisplayCharacters } from "../util/text.js";
 import { toChecksumAddress } from "../wallet/address.js";
-import { buildPaymentPlan } from "../wallet/payment.js";
+import { UnsupportedPaymentFamilyError, buildPaymentPlan, isWalletPayable, } from "../wallet/payment.js";
 import { copyWithFallback } from "./clipboard.js";
+import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import { openOverlay } from "./overlay.js";
 import { createPayFlow } from "./pay-flow.js";
-import { chainName } from "./presentation.js";
+import { networkLabel } from "./network-labels.js";
 let panelSequence = 0;
 /**
  * The invoice whose payment this page has claimed, keyed by the invoice's canonical serialization, and the flow that claimed it.
@@ -56,6 +59,8 @@ const FRAMED_MESSAGE = "This page is displayed inside another page, so the payme
 const OPENED_MESSAGE = "This page was opened by another page, which could drive the payment controls. Open the invoice at its own address to pay.";
 /** Shown when the panel is refused because this page has already claimed a payment for the same invoice. */
 const REOPEN_MESSAGE = "A payment for this invoice was already attempted from this page. Check your wallet's activity before trying again; reloading the page is the only way to start over.";
+/** The hand-off sentence `ui/messages.ts` owns, re-exported so this module's callers keep a single import site. */
+export { UNSUPPORTED_WALLET_MESSAGE };
 /**
  * True when this document is displayed inside another page's frame.
  *
@@ -99,6 +104,7 @@ function embeddingRefusal() {
  *
  * Nothing but the invoice is read until the payer asks to pay.
  * The panel is refused when the document is framed or opened in a window another page still holds, either of which could overlay or drive the app's Pay control, and when this page has already claimed a payment for the same invoice content, so a reopened panel — including one reopened by navigating back to the same fragment — cannot begin a second broadcast.
+ * It is refused too for an invoice whose asset belongs to a family no injected wallet pays, read through `wallet/payment.ts`'s own `isWalletPayable`; the same typed refusal `buildPaymentPlan` raises is caught here as well, so a privacy-chain invoice can never let that error escape this entry uncaught.
  */
 export function openPayPanel(invoice, options) {
     const refusal = embeddingRefusal();
@@ -111,7 +117,21 @@ export function openPayPanel(invoice, options) {
         options.notice.showNotice(REOPEN_MESSAGE, "error");
         return null;
     }
-    return openOverlay((close) => buildPayDialog(invoice, key, options, close), { initialFocus: ".pay-connect" });
+    if (!isWalletPayable(requireAsset(invoice.asset))) {
+        options.notice.showNotice(UNSUPPORTED_WALLET_MESSAGE, "error");
+        return null;
+    }
+    try {
+        return openOverlay((close) => buildPayDialog(invoice, key, options, close), { initialFocus: ".pay-connect" });
+    }
+    catch (error) {
+        // The typed refusal `buildPaymentPlan` raises for a family this flow cannot pay must not escape the panel entry; the gate above already covers it, and this keeps the guarantee if the two ever diverge.
+        if (error instanceof UnsupportedPaymentFamilyError) {
+            options.notice.showNotice(UNSUPPORTED_WALLET_MESSAGE, "error");
+            return null;
+        }
+        throw error;
+    }
 }
 /** Build the panel's dialog element. Every wallet call below happens only from a click on its controls. */
 function buildPayDialog(invoice, key, options, close) {
@@ -278,7 +298,7 @@ function payHeader(plan, close) {
 }
 /** What the transaction will send, read off the plan so the panel cannot disagree with the wallet. */
 function paySummary(plan) {
-    return h("dl", { class: "pay-summary" }, payTerm("Amount due", `${plan.amountText} ${plan.asset.symbol}`, true), payTerm("Asset", `${plan.asset.name} (${plan.asset.symbol})`), payTerm("Recipient", toChecksumAddress(plan.recipient), true), payTerm("Network", `${chainName(plan.chainId)} (${plan.chainId})`));
+    return h("dl", { class: "pay-summary" }, payTerm("Amount due", `${plan.amountText} ${plan.asset.symbol}`, true), payTerm("Asset", `${plan.asset.name} (${plan.asset.symbol})`), payTerm("Recipient", toChecksumAddress(plan.recipient), true), payTerm("Network", networkLabel(plan.chainId)));
 }
 function payTerm(label, value, mono = false) {
     return h("div", { class: "pay-term" }, h("dt", { class: "pay-term-label" }, label), h("dd", { class: mono ? "pay-term-value mono" : "pay-term-value" }, value));

@@ -399,17 +399,102 @@
 	color: var(--inv-muted);
 }
 
+/*
+ * The payment terms are what a payer copies into a wallet — the amount, the address, the link — so a value a wallet takes verbatim is drawn in a single-line field with a copy control beside it, and the term lays that field, the control, and the status out on one row.
+ * The field never wraps: it holds the value as one run of characters and scrolls its own overflow, so neither the layout nor a text selection can put a line break inside a value that has none.
+ */
 .payment-term dd {
 	margin: 0;
 	font-family: var(--inv-sans);
 	font-size: 0.9375rem;
 	color: var(--inv-ink);
-	overflow-wrap: anywhere;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.35rem 0.5rem;
+	min-width: 0;
 }
 
 .payment-term dd.mono {
 	font-family: var(--inv-mono);
 	font-size: 0.8125rem;
+}
+
+/* The term value: the field a copy control reads, or the plain text of a term no wallet takes verbatim; a click anywhere in either selects the whole of it rather than starting a character-at-a-time drag. */
+.payment-value {
+	flex: 1 1 0;
+	min-width: 0;
+	user-select: all;
+}
+
+/* The field is drawn as the text it replaces, so the document reads the same either way. */
+input.payment-value {
+	font: inherit;
+	color: inherit;
+	background: transparent;
+	border: none;
+	padding: 0;
+	white-space: nowrap;
+	overflow-x: auto;
+}
+
+/*
+ * The print twin of a copyable payment value: the printed page's own presentation of the same string, which print.css shows in the field's place, so on screen it is not shown at all.
+ */
+.payment-value-print {
+	display: none;
+}
+
+/* The copy control and the status reporting its outcome are screen affordances, hidden in print with the document’s other chrome. */
+.payment-copy,
+.payment-status {
+	flex: 0 0 auto;
+}
+
+.payment-status {
+	flex-basis: 100%;
+	font-size: 0.8125rem;
+	color: var(--success);
+}
+
+/*
+ * The payment link's symbol: rows of fixed-size module cells, so a symbol's size follows from its module count alone and this stylesheet needs to know nothing about which version the encoder picked.
+ * The module's size is declared here once and every cell inherits it, and the card's padding is the quiet zone the standard wants on every side of the symbol — four modules — derived from that same size rather than stated beside it.
+ */
+.payment-qr {
+	--qr-module: 3px;
+	display: inline-flex;
+	flex-direction: column;
+	margin-top: 1rem;
+	padding: calc(4 * var(--qr-module));
+	background: #fff;
+	border: 1px solid var(--inv-rule);
+}
+
+.qr-row {
+	display: flex;
+}
+
+.qr-module {
+	flex: 0 0 auto;
+	width: var(--qr-module);
+	height: var(--qr-module);
+	background: #fff;
+}
+
+.qr-module-dark {
+	background: var(--inv-ink);
+}
+
+/*
+ * The widest symbol the encoder can return — a version-15 grid of 77 modules — is 85 modules across once the standard's four-module quiet zone on each side is counted, which at the declared 3px module is 257px: three pixels wider than the 254px the document column leaves at a 320px viewport, the narrowest the page is laid out for.
+ * The card sizes to the symbol it holds and clips nothing, so that overflow lands in the document's own 20px side padding rather than truncating the symbol; the step-down below is what keeps the whole symbol inside the column at these widths, where a desktop window's scrollbar narrows the column past the window itself.
+ * The rule is scoped to the screen so the print path keeps one geometry: print.css leaves this size alone, and a print engine evaluating an unscoped width query against its own window would step the printed symbol down too.
+ */
+@media screen and (max-width: 360px) {
+	.payment-qr {
+		--qr-module: 2.5px;
+	}
 }
 
 @media (max-width: 640px) {

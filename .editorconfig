@@ -40,3 +40,12 @@ indent_style = unset
 end_of_line = unset
 insert_final_newline = unset
 trim_trailing_whitespace = unset
+
+# The committed test fixture archives are real GNU/pax tar streams the vendor reader consumes byte for byte, so they are byte-held artifacts too: a gzip stream is not UTF-8 text and need not end in a newline, so unset every rule the config sets, `charset` included.
+# This section sits after the basename-anchored `[*.{…}]` rule above, so the exclusion is the last section covering the tree and the walk prunes it rather than a later rule re-enabling a file inside it.
+[tests/fixtures/**]
+charset = unset
+indent_style = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset

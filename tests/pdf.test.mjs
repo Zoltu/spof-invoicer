@@ -1,4 +1,4 @@
-/** The suite for `app/js/pdf/renderer.js`: that the exported bytes reopen as one US Letter page carrying the project's metadata and every figure the invoice shows. */
+/** The suite for `app/js/pdf/renderer.js`: that the exported bytes reopen as US Letter pages carrying the project's metadata, its pagination, and every figure the invoice shows. */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -6,13 +6,22 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { encodeInvoice } from "../app/js/invoice/codec.js";
-import { createInvoice } from "../app/js/invoice/model.js";
-import { PDFDocument } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
+import { InvalidInvoiceError, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ID_CHARS, MAX_NAME_CHARS, createInvoice } from "../app/js/invoice/model.js";
+import { buildPaymentLink } from "../app/js/payment/links.js";
+import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
+import { PDFDocument, decodePDFRawStream } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
 import {
+	BASELINE_ASCENT,
+	CONTENT_RIGHT,
+	FLOOR_TOP,
 	PAGE,
+	PAYMENT_VALUE_MIN_SIZE,
+	QR_SYMBOL,
 	buildInvoicePages,
+	downloadPdf,
+	exportFontMetrics,
 	invoiceFileName,
 	renderInvoicePdf,
 	renderPdf,
@@ -22,12 +31,13 @@ import {
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
 import { blockNetwork } from "./helpers/network-block.mjs";
+import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TRANSPARENT_PAYEE } from "./helpers/payee-vectors.mjs";
+import { assertSymbolCells, moduleFills } from "./helpers/qr-symbol.mjs";
 import { findButton, textOf } from "./helpers/tree.mjs";
+import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 import { waitFor } from "./helpers/wait.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
-
 // A deterministic stand-in for embedded-font metrics: every glyph is half the point size wide.
 // The pure layout only needs consistent widths, so this exercises the pagination without a font.
 const METRICS = { widthOfText: (text, size) => text.length * size * 0.5 };
@@ -57,6 +67,108 @@ function invoiceFor(overrides = {}) {
 	});
 }
 
+function zecInvoice(overrides = {}) {
+	return createInvoice({
+		id: "INV-ZEC",
+		issued: "2026-10-03",
+		payee: { name: "Studio Example", address: ZEC_PAYEE },
+		chainId: "zcash",
+		asset: "zec",
+		items: [line()],
+		...overrides,
+	});
+}
+
+function xmrInvoice(overrides = {}) {
+	return createInvoice({
+		id: "INV-XMR",
+		issued: "2026-10-03",
+		payee: { name: "Studio Example", address: XMR_PAYEE },
+		chainId: "monero",
+		asset: "xmr",
+		items: [line()],
+		...overrides,
+	});
+}
+
+function ethInvoice(overrides = {}) {
+	return createInvoice({
+		id: "INV-ETH",
+		issued: "2026-10-03",
+		payee: { name: "Studio Example", address: PAYEE },
+		chainId: "0x1",
+		asset: "eth",
+		items: [line()],
+		...overrides,
+	});
+}
+
+/** The page's text draws, in the order they were emitted. */
+function textDraws(page) {
+	return page.ops.filter((op) => op.kind === "text");
+}
+
+/** Assert two layout figures agree, to a tolerance that absorbs the float noise of adding one module's size a few dozen times. */
+function assertClose(actual, expected, message) {
+	assert.ok(Math.abs(actual - expected) < 1e-9, `${message}: expected ${expected}, got ${actual}`);
+}
+
+/**
+ * The `top` the payment section's own block starts at, measured down from the page's top edge: the line the first payment term's label is drawn on, which is where the terms and the symbol both begin.
+ * A text draw records a baseline rather than the line's top, so the line's top is read back through the renderer's own `BASELINE_ASCENT` — the fraction every text draw offsets its baseline by — and never through the metrics of an unrelated draw.
+ */
+function paymentBlockTop(page, view) {
+	const firstTerm = view.payment[0];
+	assert.ok(firstTerm !== undefined, "the view model states the term the payment block opens with");
+	const label = textDraws(page).find((op) => op.text === firstTerm.label.toUpperCase());
+	assert.ok(label !== undefined, `the layout draws the first payment term's label: ${firstTerm.label}`);
+	return PAGE.height - label.y - label.size * BASELINE_ASCENT;
+}
+
+/** The rule that opens the payment section on `page`: the two-point ink rule drawn nearest above `blockTop`. */
+function sectionRuleAbove(page, blockTop) {
+	const above = page.ops.filter((op) => op.kind === "rule" && op.thickness === 2 && drawnBottomTop(op) <= blockTop);
+	assert.ok(above.length > 0, "the layout draws a rule above the payment block");
+	return above.reduce((nearest, op) => (drawnBottomTop(op) > drawnBottomTop(nearest) ? op : nearest));
+}
+
+/** True when a text draw lies in the payment section's block: its line's top sits between `blockTop` and the content floor, which is the strip the section's terms occupy. */
+function insidePaymentBlock(op, blockTop) {
+	const top = PAGE.height - op.y - op.size * BASELINE_ASCENT;
+	return top >= blockTop - 1e-9 && top <= FLOOR_TOP + 1e-9;
+}
+
+/** The right edge of a right-aligned text draw, as the document itself records it: the op's own x plus the width the layout's own measurement gives that text. */
+function drawnRightEdge(page, text) {
+	const op = textDraws(page).find((candidate) => candidate.text === text);
+	assert.ok(op !== undefined, `the layout draws ${JSON.stringify(text)}`);
+	return op.x + METRICS.widthOfText(op.text, op.size, op.font);
+}
+
+/** The lowest a drawn op reaches, as a distance from the page's top edge: a rule's line, or a text or fill op's own bottom. */
+function drawnBottomTop(op) {
+	return PAGE.height - (op.kind === "rule" ? Math.min(op.y1, op.y2) : op.y);
+}
+
+/** The bottom edge of each item row a page drew, in the order the rows are drawn, as distances from the page's top edge: the soft rule that closes a row's cells. */
+function itemRowBottoms(page) {
+	return page.ops.filter((op) => op.kind === "rule" && op.thickness === 0.5).map(drawnBottomTop);
+}
+
+/** The top of a row-bearing page's first item row, as a distance from the page's top edge: the column header's closing rule, which that row is drawn directly beneath. */
+function firstRowTop(page) {
+	const rule = page.ops.find((op) => op.kind === "rule" && op.thickness === 1.2);
+	assert.ok(rule !== undefined, "a row-bearing page opens with the repeated column header");
+	return drawnBottomTop(rule);
+}
+
+/** The height the repeated column header occupies, measured from the band it draws rather than restated from the renderer's own constant. */
+function columnHeaderHeight(page) {
+	const band = headBlocks(page)[2][1].find((op) => op.kind === "fill");
+	assert.ok(band !== undefined, "the column header draws its own band");
+	return band.height;
+}
+
 function manyItems(count) {
 	return Array.from({ length: count }, (_, index) =>
 		line({
@@ -68,7 +180,7 @@ function manyItems(count) {
 }
 
 function textOps(page) {
-	return page.ops.filter((op) => op.kind === "text").map((op) => op.text);
+	return textDraws(page).map((op) => op.text);
 }
 
 test("a small invoice renders to a one-page US Letter PDF", async () => {
@@ -151,23 +263,20 @@ test("the layout carries every figure the on-screen document shows", () => {
 });
 
 test("a uint256-scale money figure wraps rather than losing digits or the asset suffix", () => {
-	const view = buildInvoiceViewModel(
-		invoiceFor({
-			payee: { name: "Studio Example", address: "0x1111111111111111111111111111111111111111" },
-			items: [line({ quantity: "1", unitPrice: NINES })],
-		}),
-		"2026-10-03",
-	);
+	const invoice = invoiceFor({
+		payee: { name: "Studio Example", address: "0x1111111111111111111111111111111111111111" },
+		items: [line({ quantity: "1", unitPrice: NINES })],
+	});
+	const view = buildInvoiceViewModel(invoice, "2026-10-03");
 	const pages = buildInvoicePages(view, METRICS);
 	const entries = pages.flatMap((page) => textOps(page));
 
 	assert.ok(!entries.some((entry) => entry.includes("...")), "no value is re-drawn elided with an ellipsis");
-	const nines = entries.join("").split("9").length - 1;
-	assert.equal(
-		nines,
-		NINES.length * 4,
-		"every digit of the unit price, amount, subtotal and total survives — the PDF shows the screen's number",
-	);
+	// The document draws five money figures — the line's unit price and amount, the subtotal, the total, and the payment details' own Amount — and every digit of each survives the wrap.
+	// The payment link's own digits are counted out: it is the same total spelled in base units inside its URI, drawn as link text rather than as a money figure.
+	const linkNines = buildPaymentLink(invoice).uri.split("9").length - 1;
+	const figureNines = entries.join("").split("9").length - 1 - linkNines;
+	assert.equal(figureNines, NINES.length * 5, "every digit of every money figure survives — the PDF shows the screen's number");
 });
 
 test("a long invoice paginates, repeating the column header and numbering each footer", () => {
@@ -193,6 +302,38 @@ test("a long invoice paginates, repeating the column header and numbering each f
 			`page ${index + 1} is missing its "Page X of Y" footer`,
 		);
 	}
+});
+
+test("an item row moves to the next page only when it cannot fit the page it would have landed on", () => {
+	const pages = buildInvoicePages(
+		buildInvoiceViewModel(invoiceFor({ items: manyItems(120) }), "2026-10-03"),
+		METRICS,
+	);
+	// Every break the table takes is read off the layout's own geometry: the row that opens a page is measured from the column header redrawn for it, and the page it left is asked whether a row that tall had room under its last row.
+	// A break that reserved the header along with the row fails here only on a page whose spare room below its last row is smaller than that header: there the current rule kept a row the header-reserving rule would have bounced, so the row opening the next page differs and the assertion below moves with it.
+	// Whether this fixture holds such a page is asserted rather than assumed, so a letterhead, parties, or row-height change cannot leave the branch exercised by nothing while the loop still passes.
+	const headerHeight = columnHeaderHeight(pages[0]);
+	let breaks = 0;
+	let tightBreaks = 0;
+	for (let index = 0; index + 1 < pages.length; index += 1) {
+		const kept = itemRowBottoms(pages[index]);
+		const bounced = itemRowBottoms(pages[index + 1]);
+		if (kept.length === 0 || bounced.length === 0) continue;
+		const lastRowBottom = kept[kept.length - 1];
+		const spareRoom = FLOOR_TOP - lastRowBottom;
+		const bouncedRowHeight = bounced[0] - firstRowTop(pages[index + 1]);
+		assert.ok(
+			lastRowBottom + bouncedRowHeight > FLOOR_TOP,
+			`the ${bouncedRowHeight.toFixed(1)}-point row opening page ${index + 2} had ${spareRoom.toFixed(1)} points below page ${index + 1}'s last row, so it was bounced with room to spare`,
+		);
+		if (spareRoom < headerHeight) tightBreaks += 1;
+		breaks += 1;
+	}
+	assert.ok(breaks >= 2, `the fixture must break rows across pages for this to mean anything, and it took ${breaks} breaks`);
+	assert.ok(
+		tightBreaks >= 1,
+		`the fixture must bounce a row off a page with less spare room than the ${headerHeight.toFixed(1)}-point column header, or reverting the reservation would leave this test passing`,
+	);
 });
 
 test("a large invoice renders to multiple real PDF pages", async () => {
@@ -230,6 +371,134 @@ test("no draw op leaves the page, even with 200 items and long notes", () => {
 			}
 		}
 	}
+});
+
+/** True for the running footer's own draws — its hairline and the two runs under it — which sit deliberately in the strip below the content floor. */
+function isFooterOp(op) {
+	return (op.kind === "text" && op.y === PAGE.footerBaseline) || (op.kind === "rule" && op.y1 === PAGE.footerRule);
+}
+
+test("an over-tall block is clamped to the page's content floor rather than drawn past it", () => {
+	// A validated invoice can never reach this: the model's own field caps keep every block well inside a page, so the draw-site bound is exercised with a view model built outside the validators — the shape a loosened cap or a new asset family would land in.
+	const base = buildInvoiceViewModel(invoiceFor({ due: "2026-11-02", notes: "Thanks." }), "2026-10-03");
+	const overTall = [
+		["an over-tall item row", { ...base, lines: [{ ...base.lines[0], description: "n".repeat(20000) }] }],
+		["an over-tall head block", { ...base, from: { ...base.from, name: "n".repeat(20000) } }],
+		["an over-tall payment block", { ...base, payment: [{ label: "Payment link", value: "l".repeat(20000), verbatim: true }] }],
+	];
+	for (const [fixture, view] of overTall) {
+		const pages = buildInvoicePages(view, METRICS);
+		assert.ok(pages.length >= 1, `${fixture}: the layout still produces a page`);
+		const drawn = pages.flatMap((page) => page.ops).filter((op) => !isFooterOp(op));
+		assert.ok(drawn.length > 0, `${fixture}: the layout still draws the document`);
+		for (const op of drawn) {
+			const bottom = drawnBottomTop(op);
+			assert.ok(bottom <= FLOOR_TOP + 1e-9, `${fixture}: a draw reaches ${bottom.toFixed(1)} from the page's top, past the ${FLOOR_TOP}-point content floor`);
+		}
+	}
+});
+
+test("a maximum-length id of wide glyphs is drawn inside the page on the letterhead and the footer alike", async () => {
+	const id = "@".repeat(MAX_ID_CHARS);
+	assert.equal(id.length, MAX_ID_CHARS);
+	// The stand-in measures every glyph at half an em, so the capped id is only 320 points wide under it; the export's own faces measure `@` at just over an em, which is what lets a capped id of wide glyphs overrun its box.
+	const metrics = await exportFontMetrics();
+	const view = buildInvoiceViewModel(invoiceFor({ id }), "2026-10-03");
+	const pages = buildInvoicePages(view, metrics);
+	assert.equal(pages.length, 1);
+
+	for (const page of pages) {
+		for (const op of page.ops) {
+			if (op.kind === "text") {
+				const width = metrics.widthOfText(op.text, op.size, op.font);
+				assert.ok(op.x >= 0 && op.x + width <= PAGE.width + 0.01, `text escapes horizontally: ${op.text}`);
+				assert.ok(op.y >= 0 && op.y <= PAGE.height, `text escapes vertically: ${op.text}`);
+			} else if (op.kind === "rule") {
+				assert.ok(Math.min(op.x1, op.x2) >= 0 && Math.max(op.x1, op.x2) <= PAGE.width);
+				assert.ok(Math.min(op.y1, op.y2) >= 0 && Math.max(op.y1, op.y2) <= PAGE.height);
+			} else {
+				assert.ok(op.x >= 0 && op.x + op.width <= PAGE.width, "fill escapes horizontally");
+				assert.ok(op.y >= 0 && op.y + op.height <= PAGE.height, "fill escapes vertically");
+			}
+		}
+	}
+
+	// The footer's number and its right-aligned page label share one line, so the bound that keeps the number on the page is the same one that keeps the two from drawing over each other.
+	const atFooter = textDraws(pages[0]).filter((op) => op.y === PAGE.footerBaseline);
+	assert.equal(atFooter.length, 2, "the footer draws the document number and its page label");
+	const [number, label] = atFooter;
+	assert.equal(number.text.startsWith("#"), true, `the footer's left run is the document number, got ${JSON.stringify(number.text)}`);
+	const numberRight = number.x + metrics.widthOfText(number.text, number.size, number.font);
+	assert.ok(numberRight <= label.x, `the footer's number reaches ${numberRight}, into the page label at ${label.x}`);
+});
+
+/**
+ * The head of a page: the three blocks the layout draws without asking the flow for room, split at the rules that close each of them — the letterhead's, the parties', and the column header's.
+ */
+function headBlocks(page) {
+	const rules = page.ops.flatMap((op, index) => (op.kind === "rule" ? [index] : []));
+	assert.ok(rules.length >= 3, "the head blocks each close with a rule, and the item table follows them");
+	return [
+		["the letterhead", page.ops.slice(0, rules[0] + 1)],
+		["the parties", page.ops.slice(rules[0] + 1, rules[1] + 1)],
+		["the column header", page.ops.slice(rules[1] + 1, rules[2] + 1)],
+	];
+}
+
+/** Assert every op of each head block on the page's first page stays above the content floor, naming the fixture that drew it. */
+function assertHeadsAboveFloor(fixture, pages) {
+	for (const [name, block] of headBlocks(pages[0])) {
+		assert.ok(block.length > 0, `${fixture}: ${name} drew no op`);
+		for (const op of block) {
+			const bottom = drawnBottomTop(op);
+			assert.ok(bottom <= FLOOR_TOP, `${fixture}: ${name} reaches the page's content floor: ${bottom} > ${FLOOR_TOP}`);
+		}
+	}
+}
+
+/**
+ * A name of exactly `length` characters in the word shape the half-em metric wraps to the most lines: 14-character words are the longest two of which no longer share one narrow column line, so every word takes a line of its own.
+ */
+function cappedName(length) {
+	const words = Array.from({ length: Math.ceil(length / 15) }, () => "n".repeat(14));
+	return words.join(" ").slice(0, length).padEnd(length, "n");
+}
+
+/**
+ * The tallest head a validated invoice can draw: a name and an email at the model's own caps, in the narrowest column the party grid gives, with both party columns filled at once — the payee, the bill-to and the dates make three blocks, so each column is a third of the content width rather than a half.
+ */
+function capMaxInvoice({ nameLength = MAX_NAME_CHARS, emailLength = MAX_EMAIL_CHARS } = {}) {
+	const name = cappedName(nameLength);
+	const email = `${"m".repeat(emailLength - "@example.com".length)}@example.com`;
+	assert.equal(name.length, nameLength);
+	assert.equal(email.length, emailLength);
+	return invoiceFor({
+		due: "2026-11-02",
+		payee: { name, address: PAYEE, email },
+		payer: { name, email },
+		notes: "Thanks for your business.",
+	});
+}
+
+test("the blocks the layout draws without a fit check stay above the content floor at the invoice's field caps", async () => {
+	// The head blocks carry no fit check because the model's own field caps bound them, so what the bound rests on is the cap-max head — the longest name and email a validated invoice can carry, in the narrowest column three parties give — and a short fixture stands far clear of the floor without saying anything about it.
+	const plain = buildInvoicePages(
+		buildInvoiceViewModel(invoiceFor({ due: "2026-11-02", notes: "Thanks for your business." }), "2026-10-03"),
+		METRICS,
+	);
+	const capped = buildInvoicePages(buildInvoiceViewModel(capMaxInvoice(), "2026-10-03"), METRICS);
+	// The stand-in measures a half em per glyph, while the faces the export embeds measure wider — Helvetica `m` is 0.833 em and Times `n` 0.556 em — so the cap-max head sits higher above the floor here than the head drawn in the exported file; the same invoice is laid out again with the export's own metric source.
+	const exported = buildInvoicePages(buildInvoiceViewModel(capMaxInvoice(), "2026-10-03"), await exportFontMetrics());
+	assert.equal(plain.length, 1);
+	const lowest = (page) => Math.max(...headBlocks(page).flatMap(([, block]) => block.map(drawnBottomTop)));
+
+	for (const [fixture, pages] of [["the plain invoice", plain], ["the cap-max invoice", capped], ["the exported cap-max invoice", exported]]) {
+		assertHeadsAboveFloor(fixture, pages);
+	}
+	assert.ok(lowest(capped[0]) > lowest(plain[0]), "the cap-max head is the taller of the two, so it is the case the unchecked head blocks have to survive");
+	// The caps are what keeps the bound true, so the fixture pins the relationship rather than a figure: a name or an email one character past them is refused where the invoice is created.
+	assert.throws(() => capMaxInvoice({ nameLength: MAX_NAME_CHARS + 1 }), InvalidInvoiceError, "a name past the cap is refused");
+	assert.throws(() => capMaxInvoice({ emailLength: MAX_EMAIL_CHARS + 1 }), InvalidInvoiceError, "an email past the cap is refused");
 });
 
 test("the totals block stays whole on one page", () => {
@@ -326,6 +595,24 @@ test("renderPdf downloads the bytes under a sanitized name and revokes the objec
 	assert.deepEqual(revoked, ["blob:test"], "the object URL is always released");
 });
 
+test("downloadPdf sanitizes whatever file name a caller hands it, so the download attribute cannot receive an unsanitized name", () => {
+	const saved = [];
+	const downloader = {
+		createObjectUrl: () => "blob:test",
+		revokeObjectUrl: () => {},
+		save: (url, fileName) => saved.push([url, fileName]),
+	};
+
+	downloadPdf(new Uint8Array([1, 2, 3]), "../../etc/passwd%00.png", downloader);
+
+	assert.equal(saved.length, 1);
+	const [url, fileName] = saved[0];
+	assert.equal(url, "blob:test");
+	assert.ok(!fileName.includes("/"), `path separator survived: ${fileName}`);
+	assert.ok(!fileName.includes(".."), `parent-directory segment survived: ${fileName}`);
+	assert.match(fileName, /^[A-Za-z0-9._-]+$/, `the sink did not fold the name to its safe alphabet: ${fileName}`);
+});
+
 test("the shell's real Save as PDF handler runs network-free end to end, deferring the revoke", async () => {
 	const calls = [];
 	const restoreNetwork = blockNetwork(calls);
@@ -387,6 +674,269 @@ test("the renderer references no external resource and no network API", () => {
 	assert.ok(!/<svg/i.test(source), "the letterhead is drawn, not loaded as SVG");
 });
 
+test("a privacy-chain invoice draws its payment link and the symbol of that same URI", () => {
+	const invoice = zecInvoice();
+	const link = buildPaymentLink(invoice);
+	assert.equal(link.uri.startsWith("zcash:"), true, "the invoice's own scheme builds the link");
+
+	const view = buildInvoiceViewModel(invoice, "2026-10-03");
+	assert.equal(view.paymentLink, link.uri, "the view model carries that one URI");
+	const pages = buildInvoicePages(view, METRICS);
+	assert.equal(pages.length, 1);
+	assert.equal(textOps(pages[0]).join("").includes(link.uri), true, "the drawn text carries the whole URI, as the one run the address and the link are drawn as");
+
+	assertSymbolCells(pages[0], view);
+});
+
+test("the symbol is drawn inside its quiet zone, in the block the layout places it in", () => {
+	const view = buildInvoiceViewModel(zecInvoice(), "2026-10-03");
+	const pages = buildInvoicePages(view, METRICS);
+	assert.equal(pages.length, 1);
+	const modules = moduleFills(pages[0]);
+	assert.equal(modules.length, view.paymentQr.size * view.paymentQr.size);
+
+	// The block the layout declares: the symbol's own side inside the configured quiet zone, its right edge on the section's content edge, and its top on the line the payment terms start at.
+	// The block's own left edge and bottom edge are entailed by those three figures together with the block's side — the symbol's own side plus one quiet zone on each side — so they are not asserted a second time here.
+	const quiet = QR_SYMBOL.quietModules * QR_SYMBOL.module;
+	const symbolSide = view.paymentQr.size * QR_SYMBOL.module;
+	const blockTop = paymentBlockTop(pages[0], view);
+	// The drawn symbol, in the same top-down coordinates: the bounding box of its own modules, which is what every figure the layout declares is checked against.
+	const drawn = Object.freeze({
+		left: Math.min(...modules.map((op) => op.x)),
+		right: Math.max(...modules.map((op) => op.x + op.width)),
+		top: PAGE.height - Math.max(...modules.map((op) => op.y + op.height)),
+	});
+
+	assertClose(drawn.right - drawn.left, symbolSide, "the drawn modules span the symbol's own side");
+	assertClose(drawn.right + quiet, CONTENT_RIGHT, "the drawn symbol's right edge stands one quiet zone inside the content edge the layout aligns it to");
+	assertClose(drawn.top - quiet, blockTop, "the drawn symbol's top edge stands one quiet zone below the block's top");
+	// The insets above read the renderer's own figures, so a change to either would move the drawing and the expectation together; what they have to be is the documented 2.5-point module and the standard's own four-module quiet zone.
+	assertClose(
+		drawn.right + quiet,
+		drawnRightEdge(pages[0], view.labels.amount.toUpperCase()),
+		"the drawn symbol's right edge stands one quiet zone inside the column edge the document itself draws — the right-aligned column header — rather than a figure recomputed from the renderer's constants",
+	);
+	assert.equal(QR_SYMBOL.module, 2.5, "the configured module size is the documented 2.5 points");
+	assert.equal(QR_SYMBOL.quietModules, 4, "the configured quiet zone is the standard's four modules");
+});
+
+test("the widest symbol the link layer can produce fits the payment section whole", async () => {
+	const address = unifiedOfBytes(189);
+	const invoice = zecInvoice({
+		payee: { name: "Studio Example", address },
+		items: [line({ quantity: "1", unitPrice: fromBaseUnits(UINT256_MAX, 8) })],
+	});
+	const view = buildInvoiceViewModel(invoice, "2026-10-03");
+	assert.equal(view.paymentQr.size, 77, "a version-15 symbol is the widest the layout has to carry");
+
+	// The section this fixture measures is mostly the monospace face — the 311-character payee value and the 404-character link — and the stand-in measures a half em per glyph where Courier measures 0.6, so the two metric sets compress those runs to different scales and the section is checked both ways.
+	// The export's own metrics are measured here too, so the page count, the single holder, and the bounds below describe the section production renders rather than a narrower one.
+	const exported = await exportFontMetrics();
+	for (const [fixture, metrics] of [
+		["the half-em stand-in", METRICS],
+		["the export's own metrics", exported],
+	]) {
+		const pages = buildInvoicePages(view, metrics);
+		// The widest symbol's block together with the copy values drawn below it is taller than the room the page they would otherwise share leaves, so the section is moved whole onto a page of its own and the symbol lands there with it.
+		assert.equal(pages.length, 2, `${fixture}: the tall payment section is moved whole onto its own page`);
+		const holders = pages.filter((page) => moduleFills(page).length > 0);
+		assert.equal(holders.length, 1, `${fixture}: the symbol is measured onto one page, never split across a break`);
+		const modules = moduleFills(holders[0]);
+		assert.equal(modules.length, 77 * 77, `${fixture}: the whole symbol is drawn`);
+		for (const op of modules) {
+			assert.ok(op.y + op.height <= PAGE.height, `${fixture}: the symbol escapes the page vertically`);
+		}
+		// The section's own content column, read off the rule that opens it — the two-point ink rule drawn nearest above the block — rather than recomputed from the renderer's private width constants, so a section drawn elsewhere moves this bound with it.
+		const blockTop = paymentBlockTop(holders[0], view);
+		const opening = sectionRuleAbove(holders[0], blockTop);
+		// The block `drawPayment` reserves for the symbol, in the same top-down coordinates as the drawn modules: the symbol's bounding box grown by one quiet zone on every side.
+		const quiet = QR_SYMBOL.quietModules * QR_SYMBOL.module;
+		const block = Object.freeze({
+			left: Math.min(...modules.map((op) => op.x)) - quiet,
+			right: Math.max(...modules.map((op) => op.x + op.width)) + quiet,
+		});
+		const symbolBlockBottom = PAGE.height - (Math.min(...modules.map((op) => op.y)) - quiet);
+		assertClose(block.right, opening.x2, `${fixture}: the widest symbol's block ends on the payment section's own content edge`);
+		assert.ok(block.left > opening.x1, `${fixture}: the symbol's block must stay inside the section's content column: ${block.left} <= ${opening.x1}`);
+		// The terms column as drawn: the widest text line that shares the symbol's own vertical band, which the block has to clear.
+		// A copy value drawn below that band is no part of this bound — it takes the section's whole content width on a line of its own, which is what holds an address or a link on one line, and the symbol has ended by then.
+		const sharesSymbolBand = (op) => PAGE.height - op.y - op.size * BASELINE_ASCENT < symbolBlockBottom - 1e-9;
+		const terms = textDraws(holders[0]).filter((op) => insidePaymentBlock(op, blockTop) && sharesSymbolBand(op));
+		assert.ok(terms.length > 0, `${fixture}: the payment block draws no term line to measure`);
+		const termsRight = Math.max(...terms.map((op) => op.x + metrics.widthOfText(op.text, op.size, op.font)));
+		assert.ok(termsRight <= block.left, `${fixture}: the terms column reaches ${termsRight} into the symbol's block, which starts at ${block.left}`);
+		// What follows is a self-check of the section's own reservation rather than independent coverage: `drawPayment` checks the header and the whole block onto a page before it draws either, so this bound holds by construction and cannot fail without that reservation changing.
+		// What pins the bounce is the page count and the single holder asserted above; a fixture tuned to land a point or two above the floor would assert float luck rather than intent.
+		assert.ok(symbolBlockBottom <= FLOOR_TOP, `${fixture}: the symbol's block must stay above the page's content floor: ${symbolBlockBottom} > ${FLOOR_TOP}`);
+	}
+});
+
+test("the values a payer copies out of the payment details are drawn as single unbroken runs", async () => {
+	// What a payer copies out of the export is the text run a value was drawn as, so a value broken at the margin reaches a wallet's field with a line break inside it — not the address, and not the URI.
+	// Every value the payment details offer for copying is therefore drawn as exactly one run — held to the line by the horizontal scale `fitCopyValue` fits it with when the section's width cannot hold it as it stands — and the values the cases below look for are the invoice's own rather than a wrapper around them.
+	for (const [fixture, invoice] of [
+		["an Ethereum invoice", ethInvoice()],
+		["an ERC-20 invoice", invoiceFor()],
+		["a Monero invoice", xmrInvoice()],
+		["a transparent Zcash invoice", zecInvoice({ payee: { name: "Studio Example", address: ZEC_TRANSPARENT_PAYEE } })],
+	]) {
+		const view = buildInvoiceViewModel(invoice, "2026-10-03");
+		const pages = buildInvoicePages(view, METRICS);
+		const runs = pages.flatMap((page) => textDraws(page));
+		const amount = view.payment.find((term) => term.label === view.labels.amount);
+		assert.ok(amount !== undefined, `${fixture}: the payment details state the amount`);
+
+		// The amount, the address, and the link are the section's monospace values: each is a value a wallet takes verbatim, drawn as one unbroken run in the one face.
+		for (const value of [amount.value, invoice.payee.address, view.paymentLink]) {
+			const drawn = runs.filter((op) => op.font === "mono" && op.text === value);
+			assert.equal(drawn.length, 1, `${fixture}: ${JSON.stringify(value.slice(0, 16))}… is drawn as one run rather than broken across lines`);
+			assert.ok(drawn[0].x >= 0 && drawn[0].x + METRICS.widthOfText(drawn[0].text, drawn[0].size, drawn[0].font) * drawn[0].xScale <= PAGE.width, `${fixture}: and that run, at the scale it is drawn at, stays on the page`);
+		}
+	}
+
+	// The widest legal values an invoice can carry — the 311-character mainnet unified address this app accepts, and the 404-byte `zcash:` link built from it with a uint256-scale amount — are wider than any line the section holds at a legible size: each is still drawn as exactly one run, compressed horizontally onto the section's own content width, so what a payer copies out of the document is the value itself, character for character and with no break inside it.
+	const widest = zecInvoice({
+		payee: { name: "Studio Example", address: unifiedOfBytes(189) },
+		items: [line({ quantity: "1", unitPrice: fromBaseUnits(UINT256_MAX, 8) })],
+	});
+	const widestView = buildInvoiceViewModel(widest, "2026-10-03");
+	const copyValues = widestView.payment.filter((term) => term.verbatim === true).map((term) => term.value);
+	const linkValue = widestView.paymentLink;
+	assert.equal(copyValues.length, 3, "the section draws three copy values for this invoice: the amount, the address, and the link");
+	assert.equal(copyValues[2], linkValue, "and the widest legal link is the last of them");
+	assert.equal(linkValue.length, 404, "the one a 311-character address and a uint256-scale amount build");
+
+	// The scale a value is drawn at is the width the section leaves over the width the value measures, and the stand-in and the export's own metrics measure a monospace glyph differently, so the section is checked under both.
+	const exported = await exportFontMetrics();
+	for (const [fixture, metrics] of [
+		["the half-em stand-in", METRICS],
+		["the export's own metrics", exported],
+	]) {
+		const pages = buildInvoicePages(widestView, metrics);
+		const runs = pages.flatMap((page) => textDraws(page)).filter((op) => op.font === "mono");
+		assert.deepEqual(runs.map((op) => op.text), copyValues, `${fixture}: each copy value is drawn as one run, in the order the terms state them, and no character is dropped`);
+		const page = pages.find((candidate) => textDraws(candidate).some((op) => op.text === linkValue));
+		assert.ok(page !== undefined, `${fixture}: the widest link is drawn on a page`);
+		const opening = sectionRuleAbove(page, paymentBlockTop(page, widestView));
+		const sectionWidth = opening.x2 - opening.x1;
+		for (const op of runs) {
+			assert.ok(op.size >= PAYMENT_VALUE_MIN_SIZE, `${fixture}: a copy value was set at ${op.size}, below the ${PAYMENT_VALUE_MIN_SIZE}-point floor`);
+			assert.ok(op.xScale <= 1, `${fixture}: a copy value is never stretched past its natural width`);
+			assertClose(op.x, opening.x1, `${fixture}: a copy value the terms' column cannot hold starts on the payment section's own content edge`);
+			const drawn = metrics.widthOfText(op.text, op.size, op.font) * op.xScale;
+			assert.ok(drawn <= sectionWidth + 1e-9, `${fixture}: and never overruns that content width`);
+			if (op.xScale < 1) assertClose(op.x + drawn, opening.x2, `${fixture}: a value too wide to hold at the floor is compressed to exactly the section's content width`);
+		}
+		// The address and the link are the two values wider than the section at the floor, so they are the two it compresses; the amount is short enough to be drawn at its natural width.
+		assert.deepEqual(runs.filter((op) => op.xScale < 1).map((op) => op.text), [copyValues[0], linkValue], `${fixture}: the address and the link are the compressed values`);
+	}
+
+	// The figure itself, for the widest value this app can produce: the 404-byte link measures 1454.4 points at the 6-point floor in Courier's own 0.6-em advance, against the section's 504-point content width, so it is drawn at about 35% of its natural width — the smallest scale any legal invoice asks for, every other family's address and link being shorter.
+	const widestLink = buildInvoicePages(widestView, exported)
+		.flatMap((page) => textDraws(page))
+		.find((op) => op.font === "mono" && op.text === linkValue);
+	assert.ok(widestLink !== undefined, "the widest link is drawn with the export's own metrics");
+	assert.equal(widestLink.size, PAYMENT_VALUE_MIN_SIZE, "set at the floor, since no larger size holds it as it stands");
+	assert.ok(widestLink.xScale > 0.34 && widestLink.xScale < 0.35, `the widest legal link is compressed to ${widestLink.xScale.toFixed(4)} of its natural width`);
+});
+
+/**
+ * Every page's content stream, decoded, in page order: the operators the exported bytes carry, which is what a PDF reader hands back when the document's text is selected.
+ * The artifact holds each stream Flate-compressed, so it is inflated through pdf-lib's own decoder — the library the export wrote it with — rather than through a second implementation of the codec.
+ */
+async function contentStreams(bytes) {
+	const doc = await PDFDocument.load(bytes, { updateMetadata: false });
+	return doc.getPages().map((page) => {
+		const contents = page.node.Contents();
+		const refs = contents === undefined ? [] : contents.array ?? [contents];
+		return refs
+			.map((ref) => Buffer.from(decodePDFRawStream(doc.context.lookup(ref)).decode()).toString("latin1"))
+			.join("");
+	});
+}
+
+/**
+ * Every run of text a decoded content stream shows, with the text object it is shown in: the hex string each text-showing operator carries, decoded, and the operators around it — the size, the horizontal scale and the position the run is drawn at.
+ * A PDF hands a selection back one text-showing operator at a time, so a value split over two of them is a value with a break inside it wherever the extractor puts the boundary.
+ */
+function shownRuns(stream) {
+	return stream.split("BT").flatMap((object) =>
+		[...object.matchAll(/<([0-9A-Fa-f]+)>\s*Tj/g)].map((match) => ({
+			text: Buffer.from(match[1], "hex").toString("latin1"),
+			at: match.index,
+			object,
+		})),
+	);
+}
+
+/**
+ * The operator tokens of one text object of a content stream, in the order the renderer wrote them: one operator per line, each argument ahead of the operator it belongs to.
+ * pdf-lib writes a text run as its own text object — the fill color, the font and size, the horizontal scale, the text matrix, then the run's own showing operator — so the numbers a run is drawn with are read off that object rather than recomputed.
+ */
+function operatorTokens(object) {
+	return object.split("\n").flatMap((line) => line.trim().split(" ")).filter((token) => token.length > 0);
+}
+
+/**
+ * The number the single-number operator `name` carries in a text object, as the layout set it: `12 Tf` is the size, and `50 Tz` the horizontal scale in percent.
+ */
+function numberFor(object, name) {
+	const tokens = operatorTokens(object);
+	const at = tokens.indexOf(name);
+	assert.ok(at > 0, `the run's own text object sets ${name}`);
+	return Number(tokens[at - 1]);
+}
+
+/**
+ * The x a run's own text matrix places it at: the first of the two translations `1 0 0 1 x y Tm` carries.
+ */
+function runLeft(object) {
+	const tokens = operatorTokens(object);
+	const at = tokens.indexOf("Tm");
+	assert.ok(at >= 6 && tokens.slice(at - 6, at - 2).join(" ") === "1 0 0 1", "the run's own text object sets its position with a translation");
+	return Number(tokens[at - 2]);
+}
+
+test("the exported PDF shows each copied value as one text run, so a copy of it carries no break", async () => {
+	// The layout's own ops are only a promise about what the renderer will draw; what a payer copies is the text-showing operator the artifact carries, so the widest legal invoice is rendered to real bytes and the streams are read back.
+	const widest = zecInvoice({
+		payee: { name: "Studio Example", address: unifiedOfBytes(189) },
+		items: [line({ quantity: "1", unitPrice: fromBaseUnits(UINT256_MAX, 8) })],
+	});
+	const view = buildInvoiceViewModel(widest, "2026-10-03");
+	const streams = await contentStreams(await renderInvoicePdf(widest, "2026-10-03"));
+	const runs = streams.flatMap((stream) => shownRuns(stream));
+	const metrics = await exportFontMetrics();
+
+	const amount = view.payment.find((term) => term.label === view.labels.amount).value;
+	for (const value of [view.paymentLink, view.payment.find((term) => term.verbatim === true).value]) {
+		const own = runs.filter((run) => run.text === value);
+		assert.equal(own.length, 1, `${value.length} characters are shown by exactly one text-showing operator`);
+		// No second operator carries a run of that same value: a value broken at the margin would leave its head and its tail in two of them, and the value's own operator above is a prefix of itself.
+		const pieces = runs.filter((run) => run.text.length >= 20 && value.startsWith(run.text));
+		assert.equal(pieces.length, 1, "and no operator carries a piece of it beside that one");
+
+		// The run is set at a legible size and held to the section's content width by the horizontal scale, so the printed line is inside the page and no glyph was given up to fit it.
+		const size = numberFor(own[0].object, "Tf");
+		const scale = numberFor(own[0].object, "Tz") / 100;
+		const x = runLeft(own[0].object);
+		assert.ok(size >= PAYMENT_VALUE_MIN_SIZE, `the run is set at ${size}, below the ${PAYMENT_VALUE_MIN_SIZE}-point floor`);
+		assert.ok(scale > 0 && scale < 1, `the run is compressed to ${scale} of its natural width`);
+		assertClose(x + metrics.widthOfText(value, size, "mono") * scale, CONTENT_RIGHT, "and spans the section's content width exactly, so it is drawn at the one scale that fits it");
+	}
+
+	// The amount is the third value a wallet takes verbatim, so the artifact shows it by exactly one operator too; it is short enough to need no compression, so its own text object carries no squeeze operator at all.
+	const amountRuns = runs.filter((run) => run.text === amount);
+	assert.equal(amountRuns.length, 1, "the amount is shown by exactly one text-showing operator as well");
+	assert.equal(amountRuns.filter((run) => /Tz/.test(run.object)).length, 0, "and at its natural width, unlike the two wide values");
+
+	// The scale the artifact itself carries for the widest legal link: the 404 bytes it shows at the 6-point floor are 1454.4 points of Courier, against the section's 504-point content width.
+	const link = runs.find((run) => run.text === view.paymentLink);
+	assert.ok(link !== undefined, "the widest link is shown");
+	assert.equal(numberFor(link.object, "Tf"), PAYMENT_VALUE_MIN_SIZE);
+	assert.ok(Math.abs(numberFor(link.object, "Tz") - 34.65346534653465) < 1e-9, `the widest legal link is shown at ${numberFor(link.object, "Tz")}% of its natural width`);
+});
+
 test("the payee's Ethereum address is drawn under Payment details, never in the parties section", () => {
 	const view = buildInvoiceViewModel(invoiceFor(), "2026-10-03");
 	const pages = buildInvoicePages(view, METRICS);
@@ -399,4 +949,79 @@ test("the payee's Ethereum address is drawn under Payment details, never in the 
 		"the Ethereum address must not be drawn before Payment details",
 	);
 	assert.ok(ops.slice(paymentAt).join("\n").includes(PAYEE), "the Ethereum address is still drawn under Payment details");
+});
+
+test("a Monero, a transparent Zcash, and an EIP-681 invoice each draw their own link and the symbol of that same URI", () => {
+	for (const [fixture, invoice, scheme, uri] of [
+		["a Monero invoice", xmrInvoice(), "monero:", `monero:${XMR_PAYEE}?tx_amount=300`],
+		["a transparent Zcash invoice", zecInvoice({ payee: { name: "Studio Example", address: ZEC_TRANSPARENT_PAYEE } }), "zcash:", `zcash:${ZEC_TRANSPARENT_PAYEE}?amount=300`],
+		["an Ethereum invoice", ethInvoice(), "ethereum:", `ethereum:${PAYEE}@1?value=300000000000000000000`],
+	]) {
+		const link = buildPaymentLink(invoice);
+		assert.equal(link.uri.startsWith(scheme), true, `${fixture}: the invoice's own scheme builds the link`);
+		assert.equal(link.uri, uri, `${fixture}: the link spells its address and its amount in that scheme`);
+
+		const view = buildInvoiceViewModel(invoice, "2026-10-03");
+		assert.equal(view.paymentLink, link.uri, `${fixture}: the view model carries that one URI`);
+		const pages = buildInvoicePages(view, METRICS);
+		assert.equal(pages.length, 1);
+		const text = textOps(pages[0]).join("");
+		assert.equal(text.includes(link.uri), true, `${fixture}: the drawn text carries the whole URI, however it wrapped`);
+		assert.equal(text.includes(invoice.payee.address), true, `${fixture}: and the address the URI pays to is drawn with it`);
+		assertSymbolCells(pages[0], view);
+	}
+});
+
+/**
+ * The tallest line item a validated invoice can carry, with every field at the cap the model puts on it: the description at `MAX_DESCRIPTION_CHARS` with no space in it — the shape `wrapText` hard-breaks, which packs that fixed column as tightly per character as any arrangement at the cap can — and a quantity at the uint256 base-unit maximum the asset's decimals allow, with a unit price of `1` so the line's amount stays inside that same maximum.
+ */
+function capMaxItem() {
+	return {
+		description: "n".repeat(MAX_DESCRIPTION_CHARS),
+		quantity: fromBaseUnits(UINT256_MAX, 6),
+		unitPrice: "1",
+	};
+}
+
+test("the model's own caps bound an item row inside a fresh page's capacity", async () => {
+	// `drawItemRow` checks the row against the floor only before it takes its break, so a row that outgrew a fresh page would be drawn past the content floor with nothing left to stop it.
+	// What holds that closed is the model's own field caps, and this pins them through the layout the export runs.
+	const metrics = await exportFontMetrics();
+	const capped = buildInvoicePages(buildInvoiceViewModel(invoiceFor({ items: [capMaxItem()] }), "2026-10-03"), metrics);
+	const plain = buildInvoicePages(buildInvoiceViewModel(invoiceFor(), "2026-10-03"), metrics);
+	const rowHeight = (page) => {
+		const bottoms = itemRowBottoms(page);
+		assert.equal(bottoms.length, 1, "the fixture draws one item row on the page it lands on");
+		return bottoms[0] - firstRowTop(page);
+	};
+	const rowPages = capped.filter((page) => itemRowBottoms(page).length > 0);
+	assert.equal(rowPages.length, 1, "the one row is drawn on exactly one page");
+	const plainPage = plain.find((page) => itemRowBottoms(page).length > 0);
+	assert.ok(plainPage !== undefined, "the plain invoice draws its own single row");
+	const height = rowHeight(rowPages[0]);
+	assert.ok(height > rowHeight(plainPage), "the cap-max row is the taller of the two, so it is the case the unchecked break has to survive");
+
+	// The room a fresh page leaves a row: from the closing rule of the header it repeats, down to the content floor nothing may draw past.
+	// It is measured off a page that actually opens with that repeated column header rather than composed from the renderer's own top margin and header height, so a change to where a fresh page starts moves this bound with it.
+	const spilled = buildInvoicePages(buildInvoiceViewModel(invoiceFor({ items: manyItems(120) }), "2026-10-03"), metrics);
+	const freshRowPage = spilled.slice(1).find((page) => itemRowBottoms(page).length > 0);
+	assert.ok(freshRowPage !== undefined, "the fixture must spill rows onto a page that opens with the repeated column header");
+	const freshPageRoom = FLOOR_TOP - firstRowTop(freshRowPage);
+	assert.ok(height <= freshPageRoom, `the ${height.toFixed(1)}-point cap-max row must fit the ${freshPageRoom.toFixed(1)} points a fresh page leaves under its repeated column header`);
+	for (const page of capped) {
+		for (const bottom of itemRowBottoms(page)) {
+			assert.ok(bottom <= FLOOR_TOP, `an item row reaches the page's content floor: ${bottom} > ${FLOOR_TOP}`);
+		}
+	}
+	// The caps are what keeps the bound true, so the fixture pins the relationship rather than a figure: a longer description or a bigger quantity is refused where the invoice is created.
+	assert.throws(
+		() => invoiceFor({ items: [{ ...capMaxItem(), description: "n".repeat(MAX_DESCRIPTION_CHARS + 1) }] }),
+		InvalidInvoiceError,
+		"a description past the cap is refused",
+	);
+	assert.throws(
+		() => invoiceFor({ items: [{ ...capMaxItem(), quantity: fromBaseUnits(UINT256_MAX + 1n, 6) }] }),
+		InvalidInvoiceError,
+		"a quantity past the uint256 maximum is refused",
+	);
 });
