@@ -3,7 +3,7 @@
  *
  * Everything else in tests/ checks one module's contract; this file walks the product end to end at the seam level.
  * The payee's half is composed at the module level — `createInvoice` → `encodeShare` → the base32 blob → decode — while the payer's half runs through the real seams: the shell and router render the decoded invoice into the fake DOM, "Save as PDF" produces real bytes that are reopened with pdf-lib, and "Pay" drives a mock EIP-1193 wallet.
- * The create form and the share dialog themselves are canvassed by tests/ui.test.mjs and tests/view.test.mjs, not here.
+ * The create form and the share dialog themselves are canvassed by tests/ui.test.mjs and tests/view.test.mjs; this file drives the form only as far as the icon path needs, from choosing the file to the share link the dialog hands out.
  * What this file proves are the promises the app makes to a payer: no page-origin network I/O, no wallet access before an explicit Pay click, and no hostile share string or hostile invoice text reaching either the DOM or a transaction.
  * The static sweeps at the end are the reproducible half of the security checks: they fail if a network API, a markup sink, an absolute URL, a remote stylesheet reference, or a stale build ever appears under app/.
  */
@@ -17,6 +17,7 @@ import { codeOnly, languageFor } from "./helpers/code-only.mjs";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
 import { blockNetwork } from "./helpers/network-block.mjs";
 import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_UNIFIED_PAYEE } from "./helpers/payee-vectors.mjs";
+import { imageXObjects } from "./helpers/pdf-images.mjs";
 import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
 import { assertSymbolCells } from "./helpers/qr-symbol.mjs";
 import { refusalError, refusalMessage } from "./helpers/refusals.mjs";
@@ -30,6 +31,7 @@ import { listFiles } from "../scripts/vendor-manifest.mjs";
 import { parseHash } from "../app/js/app/router.js";
 import { bootApp, mountShell, renderRoute } from "../app/js/app/shell.js";
 import {
+	MAX_JSON_BYTES,
 	MAX_PAYLOAD_CHARS,
 	ShareFormatError,
 	UnsupportedShareVersionError,
@@ -39,6 +41,7 @@ import {
 	encodeInvoiceBlob,
 	serializeInvoice,
 } from "../app/js/invoice/codec.js";
+import { MAX_ICON_DIMENSION, MAX_ICON_SVG_BYTES } from "../app/js/invoice/icon.js";
 import {
 	InvalidInvoiceError,
 	UnsupportedInvoiceVersionError,
@@ -47,9 +50,11 @@ import {
 } from "../app/js/invoice/model.js";
 import { SHARE_FRAGMENT_PREFIX, buildShareUrl, decodeShare, encodeShare } from "../app/js/invoice/share.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
-import { QR_SYMBOL, buildInvoicePages, renderInvoicePdf } from "../app/js/pdf/renderer.js";
+import { QR_SYMBOL, buildInvoicePages, downloadPdf, invoiceFileName, renderInvoicePdf } from "../app/js/pdf/renderer.js";
+import { renderCreateView } from "../app/js/ui/create.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
+import { svgDataUrl } from "../app/js/util/data-url.js";
 import { base32nopad, bech32m, utf8 } from "../app/js/util/encoding.js";
 import { encodeQr } from "../app/js/util/qr.js";
 import { PDFDocument } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
@@ -76,6 +81,10 @@ const USDC_TOTAL = 424830000n;
 /** 1 × 1.5 ETH. */
 const ETH_TOTAL = 1500000000000000000n;
 const HOSTILE = "<img src=x onerror=\"alert(1)\"><script>alert(2)</script>";
+
+/** A minimal icon document the gate accepts, and the 1 by 1 PNG a substituted rasterizer hands the export. */
+const ICON_SVG = '<svg width="32" height="32"><rect width="32" height="32" fill="#123456"/></svg>';
+const ICON_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64");
 
 // The word channels, plus two that need a shape: `Image(` only when it is a bare call (the vendored pdf-lib carries `'Image'` as a PDF subtype string), and prefetch/dns-prefetch as HTML rel tokens.
 const NETWORK_APIS = /\b(fetch|XMLHttpRequest|WebSocket|EventSource|WebTransport|sendBeacon|importScripts|serviceWorker|RTCPeerConnection|ping)\b|\bImage\s*\(|\b(?:dns-)?prefetch\b/;
@@ -197,15 +206,56 @@ function installLocation(value) {
 	};
 }
 
-/** Mount the shell and render the route a link's fragment names, exactly as the page does. */
-function mountSharedLink(fragment) {
+/**
+ * Mount the shell and render the route a link's fragment names, exactly as the page does.
+ * `extra` overrides the seams the boot would otherwise default — the PDF export, the payment flow — so a case can substitute the one dependency it cannot run.
+ */
+function mountSharedLink(fragment, extra = {}) {
 	const shell = mountShell(document.createElement("div"));
 	renderRoute(shell, parseHash(fragment), {
 		baseUrl: "https://gateway.example/ipfs/bafy/index.html",
 		today: TODAY,
 		clipboard: null,
+		...extra,
 	});
 	return shell;
+}
+
+/** A notice sink for a view rendered without the shell, recording what it was told. */
+function noticeRecorder() {
+	const calls = [];
+	return {
+		calls,
+		showNotice(message, tone) {
+			calls.push({ message, tone });
+		},
+		clearNotice() {
+			calls.push(null);
+		},
+	};
+}
+
+/** The form control named `name`, so a case can fill the field it names. */
+function controlNamed(rootNode, name) {
+	const control = findAll(rootNode, (node) => node.attributes?.name === name)[0];
+	assert.ok(control, `no control named ${name}`);
+	return control;
+}
+
+function setControl(rootNode, name, value) {
+	const control = controlNamed(rootNode, name);
+	control.value = value;
+	control.dispatch("input");
+}
+
+/** Let the file read behind the icon input's change handler settle. */
+function drain() {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** The file shape the icon input reads: the byte size it claims and the text it yields. */
+function iconFile(text, size = text.length) {
+	return { size, text: async () => text };
 }
 
 /** Absolute paths of every file under `dir`, wrapping the shared listing the build tooling uses. */
@@ -1023,6 +1073,31 @@ test("index.html pins the policy the app's guarantees rest on", () => {
 	);
 });
 
+test("the README quotes the policy index.html pins, verbatim and once", () => {
+	const html = readFileSync(join(appDir, "index.html"), "utf8");
+	const policy = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]*)">/);
+	assert.ok(policy, "index.html must carry a CSP meta tag");
+	const readme = readFileSync(join(root, "README.md"), "utf8");
+	assert.ok(
+		readme.includes(`pins a CSP meta tag: \`${policy[1]}\``),
+		"the README quotes the policy index.html pins, so the documented policy cannot drift from the served one",
+	);
+	assert.equal(countOccurrences(readme, "default-src"), 1, "and the README spells the policy once, so no stale second copy can survive beside it");
+});
+
+test("the README's stated caps are the ones the code enforces", () => {
+	const readme = readFileSync(join(root, "README.md"), "utf8");
+	assert.ok(readme.includes(`${MAX_JSON_BYTES / 1024} KiB of JSON`), `the README states the payload cap the codec applies, ${MAX_JSON_BYTES} bytes`);
+	assert.ok(
+		readme.includes(`\`MAX_ICON_SVG_BYTES = ${MAX_ICON_SVG_BYTES}\` UTF-8 bytes`),
+		`the README states the byte cap the icon gate applies, ${MAX_ICON_SVG_BYTES}`,
+	);
+	assert.ok(
+		readme.includes(`\`MAX_ICON_DIMENSION = ${MAX_ICON_DIMENSION}\` pixels an axis`),
+		`the README states the dimension cap the icon gate applies, ${MAX_ICON_DIMENSION}`,
+	);
+});
+
 test("the committed app/ tree is a fresh build of its sources, with maps pointing back to ts/", async () => {
 	const problems = await servedTreeProblems();
 	assert.deepEqual(problems, [], problems.join("\n"));
@@ -1103,4 +1178,101 @@ test("a Monero invoice exports from the served page carrying its link and the sy
 		fake.restore();
 	}
 	assert.deepEqual(calls, [], `the export attempted network I/O: ${calls.join(", ")}`);
+});
+
+test("an icon chosen in the create form reaches the shared page's letterhead and the exported PDF", async () => {
+	const calls = [];
+	const fake = installInteractiveDocument();
+	const restoreNetwork = blockNetwork(calls);
+	const blobs = [];
+	const saved = [];
+	const revoked = [];
+	const originalCreate = URL.createObjectURL;
+	const originalRevoke = URL.revokeObjectURL;
+	const prototype = globalThis.HTMLElement.prototype;
+	const originalClick = prototype.click;
+	URL.createObjectURL = (blob) => {
+		blobs.push(blob);
+		return `blob:icon-${blobs.length}`;
+	};
+	URL.revokeObjectURL = (url) => revoked.push(url);
+	prototype.click = function click() {
+		if (this.hasAttribute("download")) saved.push([this.getAttribute("href"), this.getAttribute("download")]);
+	};
+	// The browser's canvas is the one dependency this path needs and the suite has none, so the rasterizer is substituted through its seam and the PNG it returns is a real 1 by 1 image the artifact parses.
+	const asked = [];
+	const rasterizer = {
+		async rasterize(svg) {
+			asked.push(svg);
+			return { png: ICON_PNG, width: 1, height: 1 };
+		},
+	};
+	let exported = null;
+	try {
+		// The payee's half: the icon is chosen in the create form, and the share link is the one the form's dialog hands out.
+		const create = renderCreateView({ baseUrl: "https://gateway.example/ipfs/bafy/index.html", today: TODAY, clipboard: null, notice: noticeRecorder() });
+		const iconInput = controlNamed(create, "icon");
+		iconInput.files = [iconFile(ICON_SVG)];
+		iconInput.dispatch("change");
+		await drain();
+		assert.equal(findAll(create, (node) => hasClass(node, "icon-preview"))[0].attributes.src, svgDataUrl(ICON_SVG), "the form previews the chosen icon through the leaf's own data URL");
+		setControl(create, "payeeName", "Studio Example Ltd");
+		setControl(create, "payeeAddress", PAYEE);
+		setControl(create, "item-0-description", "Design work");
+		setControl(create, "item-0-quantity", "2");
+		setControl(create, "item-0-unitPrice", "150");
+		findAll(create, (node) => node.tagName === "form")[0].dispatch("submit");
+		const dialog = document.body.children.find((child) => child.attributes?.class?.includes("dialog-backdrop"));
+		assert.ok(dialog, "the share dialog opens for the invoice the form built");
+		const url = findAll(dialog, (node) => node.attributes?.class === "share-value")[0].attributes.value;
+		const fragment = url.slice(url.indexOf("#"));
+		assert.equal(decodeShare(fragment).icon, ICON_SVG, "the share link's payload carries the icon the form chose");
+
+		// The payer's half: the shared link renders that icon in the letterhead, and its export hands the same icon text to the rasterizer.
+		const shell = mountSharedLink(fragment, {
+			exportPdf: async (invoice) => {
+				exported = invoice;
+				downloadPdf(await renderInvoicePdf(invoice, TODAY, rasterizer), invoiceFileName(invoice));
+			},
+		});
+		const letterhead = findAll(shell.content, (node) => hasClass(node, "letterhead-icon"));
+		assert.equal(letterhead.length, 1, "the decoded invoice draws its icon in the letterhead");
+		assert.equal(letterhead[0].tagName, "img", "as an image rather than inline markup");
+		assert.equal(letterhead[0].attributes.src, svgDataUrl(ICON_SVG), "carrying the leaf's own data URL of the icon the payload carried");
+		assert.equal(letterhead[0].attributes.alt, "", "decorative beside the payee's own name");
+
+		findButton(shell.content, "Save as PDF").dispatch("click", { type: "click" });
+		await waitFor(() => saved.length > 0 || shell.notice.children.length > 0, 400);
+		assert.equal(shell.notice.children.length, 0, "a successful export shows no notice");
+		assert.deepEqual(asked, [ICON_SVG], "the export hands the rasterizer the icon text the form chose");
+		assert.equal(exported.icon, ICON_SVG, "and the invoice it exports is the one the shared link carried");
+		assert.deepEqual(saved, [["blob:icon-1", "invoice-INV-20261003.pdf"]], "the download is the invoice's own file");
+		assert.equal(blobs.length, 1, "the export produced exactly one file");
+		assert.equal(blobs[0].type, "application/pdf");
+		// The renderer revokes the object URL a second after the click, so that wait is taken here rather than left to fire while another suite's spy is installed.
+		await waitFor(() => revoked.length > 0, 400);
+		assert.deepEqual(revoked, ["blob:icon-1"], "the object URL is released once the download is under way");
+
+		// The artifact carries the icon: one embedded image, of the pixels the rasterizer returned, and the layout behind those bytes places it first in the letterhead.
+		const bytes = new Uint8Array(await blobs[0].arrayBuffer());
+		assert.equal(new TextDecoder().decode(bytes.slice(0, 5)), "%PDF-", "the download is a real PDF");
+		const opened = await PDFDocument.load(bytes, { updateMetadata: false });
+		assert.equal(opened.getPageCount(), 1, "the exported icon invoice is one page");
+		assert.equal(opened.getTitle(), "Invoice #INV-20261003");
+		const images = imageXObjects(opened);
+		assert.equal(images.length, 1, "the icon is embedded exactly once");
+		assert.deepEqual([images[0].width, images[0].height], [1, 1], "and it is the rasterizer's own PNG, read back from the artifact");
+		const pages = buildInvoicePages(buildInvoiceViewModel(exported, TODAY), PDF_METRICS, { png: ICON_PNG, width: 1, height: 1 });
+		assert.equal(pages.length, opened.getPageCount(), "the layout paginates exactly as the exported file does");
+		assert.equal(pages[0].ops[0].kind, "image", "the icon is the first thing the letterhead draws");
+		assert.deepEqual(pages[0].ops[0].png, ICON_PNG, "drawn from the raster the rasterizer returned");
+	} finally {
+		URL.createObjectURL = originalCreate;
+		URL.revokeObjectURL = originalRevoke;
+		if (originalClick === undefined) delete prototype.click;
+		else prototype.click = originalClick;
+		restoreNetwork();
+		fake.restore();
+	}
+	assert.deepEqual(calls, [], `the icon export attempted network I/O: ${calls.join(", ")}`);
 });

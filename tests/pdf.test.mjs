@@ -9,7 +9,7 @@ import { encodeInvoice } from "../app/js/invoice/codec.js";
 import { InvalidInvoiceError, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ID_CHARS, MAX_NAME_CHARS, createInvoice } from "../app/js/invoice/model.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
-import { PDFDict, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
+import { PDFDocument, decodePDFRawStream } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
 import { MAX_ICON_DIMENSION } from "../app/js/invoice/icon.js";
 import { rasterizeSvgIcon } from "../app/js/pdf/rasterize.js";
 import { svgDataUrl } from "../app/js/util/data-url.js";
@@ -34,6 +34,7 @@ import {
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { installDocument, installInteractiveDocument } from "./helpers/dom.mjs";
 import { blockNetwork } from "./helpers/network-block.mjs";
+import { imageXObjects } from "./helpers/pdf-images.mjs";
 import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TRANSPARENT_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCells, moduleFills } from "./helpers/qr-symbol.mjs";
 import { findButton, textOf } from "./helpers/tree.mjs";
@@ -1079,25 +1080,6 @@ function installRasterDocument({ naturalWidth = 64, naturalHeight = 32, decode =
 	return { handle, image, canvas, created, drawn, blobTypes };
 }
 
-/** Every image XObject the first page's resources carry, with the pixel size the embedded PNG declares. */
-function imageXObjects(doc) {
-	const resources = doc.getPage(0).node.Resources();
-	const xobjects = resources === undefined ? undefined : resources.lookupMaybe(PDFName.of("XObject"), PDFDict);
-	if (xobjects === undefined) return [];
-	return xobjects
-		.entries()
-		.map(([, value]) => doc.context.lookup(value))
-		.filter((object) => object instanceof PDFRawStream && String(object.dict.get(PDFName.of("Subtype"))) === "/Image")
-		.map((object) => ({
-			width: Number(String(object.dict.get(PDFName.of("Width")))),
-			height: Number(String(object.dict.get(PDFName.of("Height")))),
-		}));
-}
-
-/**
- * Where a decoded content stream draws its one image: the resource name, the translation that places it, and the scale that sizes it, read off the operators pdf-lib wrote rather than recomputed from the renderer's constants.
- * pdf-lib wraps an image draw in a translation, a rotation, a scale and a skew matrix, so the translation is the first `cm` and the scale is the first later matrix whose diagonal is not the identity.
- */
 function imageDraw(stream) {
 	const draw = /\/([\w-]+)\s+Do/.exec(stream);
 	assert.ok(draw !== null, "the content stream draws an image XObject");
