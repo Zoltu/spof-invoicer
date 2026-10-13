@@ -4,10 +4,12 @@
  * The view is split in two layers so most of it is testable without a browser: the pure form state and its mapping to a validated {@link Invoice} live in the exported helpers at the top, and the DOM building at the bottom only wires those helpers to inputs.
  * The payee's own screen shows the invoice the form creates, not only its share link: the section `ui/payment-section.ts` owns is drawn into this view for each invoice the form builds, so the payee can pay it, or copy its link, its address, and its amount, without opening their own share link.
  * Every rendered string — a field value, a validation message, a share payload — reaches the page as a text child of `util/dom.ts`'s `h()`, so nothing a user or a share link supplies can become markup.
+ * An optional SVG icon is chosen from a file input and checked in place — the byte cap first, then the icon gate — before it enters the form state, so an over-cap or malformed file is refused under its own field and the invoice the form builds is untouched; the icon the form does carry is previewed through the icon leaf's own data URL, never as markup.
  */
 
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset, type Asset, type AssetFamily, type AssetId } from "../assets/registry.js";
 import { MAX_JSON_BYTES, encodedJsonBytes } from "../invoice/codec.js";
+import { MAX_ICON_DIMENSION, MAX_ICON_SVG_BYTES, validateIcon } from "../invoice/icon.js";
 import {
 	InvalidInvoiceError,
 	MAX_ITEMS,
@@ -19,6 +21,7 @@ import {
 	type LineItem,
 } from "../invoice/model.js";
 import { PaymentLinkBudgetError, requireLinkBudget } from "../payment/links.js";
+import { svgDataUrl } from "../util/data-url.js";
 import { toBaseUnits } from "../util/decimal.js";
 import { h } from "../util/dom.js";
 import { boundMessage, messageOf } from "../util/errors.js";
@@ -69,6 +72,7 @@ export interface CreateFormState {
 	taxLabel: string;
 	taxRate: string;
 	notes: string;
+	iconSvg: string;
 }
 
 /** A validation failure bound to the form field it should be shown under. */
@@ -119,6 +123,7 @@ export function emptyFormState(today: string): CreateFormState {
 		taxLabel: "Tax",
 		taxRate: "",
 		notes: "",
+		iconSvg: "",
 	};
 }
 
@@ -184,6 +189,7 @@ export function invoiceInputFromState(state: CreateFormState): InvoiceInput {
 		})),
 		...(state.taxEnabled ? { tax: { label: taxLabel === "" ? "Tax" : taxLabel, rate: state.taxRate.trim() } } : {}),
 		...(notes === "" ? {} : { notes }),
+		...(state.iconSvg === "" ? {} : { icon: state.iconSvg }),
 	};
 }
 
@@ -237,6 +243,18 @@ function fieldErrorFor(error: unknown): FieldError {
 	return { field: "form", message: messageOf(error) };
 }
 
+/**
+ * The icon gate's refusal, worded for the field it is shown under.
+ *
+ * The gate prefixes its message with the module that raised it, exactly as the model does, and this form shows the reason alone under the icon field — the same strip {@link fieldErrorFor} applies to a model refusal.
+ * The result is bounded like every other message this form renders, because the gate's own message names the rejected value.
+ */
+function iconRefusalMessage(error: unknown): string {
+	const message = messageOf(error);
+	const prefix = "invoice: ";
+	return boundMessage(message.startsWith(prefix) ? message.slice(prefix.length) : message, FIELD_MESSAGE_MAX);
+}
+
 /** The line index and control name an item field key such as `item-2-unitPrice` names, or `null` when the key scopes to something other than a line. */
 function itemFieldParts(field: string): { readonly index: number; readonly name: string } | null {
 	const match = /^item-(\d+)-(.+)$/.exec(field);
@@ -272,6 +290,7 @@ function fieldKeyForPath(path: string): string {
 		"tax.label": "taxLabel",
 		"tax.rate": "taxRate",
 		notes: "notes",
+		icon: "icon",
 		items: "items",
 	};
 	// Own properties only, so a field path that collides with an inherited Object.prototype member (for example "constructor") falls back to the generic form key rather than resolving through the prototype.
@@ -555,6 +574,9 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 		...ASSETS.map((asset) => h("option", { value: asset.id, selected: asset.id === state.assetId }, `${asset.symbol} — ${asset.name}`)),
 	);
 	const notes = h("textarea", { name: "notes", placeholder: "Payment terms, thank you note…" }, state.notes);
+	const iconInput = h("input", { type: "file", name: "icon", accept: "image/svg+xml,.svg" });
+	const iconPreview = h("div", { class: "icon-preview-slot" });
+	const iconRemove = h("button", { type: "button", class: "btn btn-secondary", hidden: true }, "Remove icon");
 
 	const taxToggle = h("input", { id: "tax-enabled", type: "checkbox", name: "taxEnabled", checked: state.taxEnabled });
 	const taxLabel = h("input", { type: "text", name: "taxLabel", value: state.taxLabel, placeholder: "Tax" });
@@ -624,6 +646,71 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 		payoutWarning.textContent = message;
 		payoutWarning.setAttribute("class", guidance === null ? "field-warning" : "field-hint");
 		payoutWarning.removeAttribute("hidden");
+	}
+
+	/** Draw the icon the form currently carries, or empty the slot when it carries none. */
+	function syncIconPreview(): void {
+		if (state.iconSvg === "") {
+			iconPreview.replaceChildren();
+			iconRemove.setAttribute("hidden", "");
+			return;
+		}
+		iconPreview.replaceChildren(h("img", { class: "icon-preview", src: svgDataUrl(state.iconSvg), alt: "" }));
+		iconRemove.removeAttribute("hidden");
+	}
+
+	/**
+	 * Show the icon field's own message, or clear it, without disturbing the other fields.
+	 *
+	 * A file refused at the input is reported under its own field rather than through `showErrors`: the rest of the form is not being re-checked, so a message already shown beside another field stays where it is.
+	 */
+	function showIconError(message: string): void {
+		const element = errorsByKey.get("icon");
+		if (element === undefined) return;
+		element.textContent = boundMessage(message, FIELD_MESSAGE_MAX);
+		element.removeAttribute("hidden");
+	}
+
+	function clearIconError(): void {
+		const element = errorsByKey.get("icon");
+		if (element === undefined) return;
+		element.textContent = "";
+		element.setAttribute("hidden", "");
+	}
+
+	/**
+	 * Read the payee's chosen file, check it in place, and store it.
+	 *
+	 * The cap is checked on `file.size` before the file is read, so an over-cap file is refused without being read, and the text is checked again after the read, because `file.size` measures the bytes on disk while the icon gate bounds the UTF-8 bytes of the value the invoice stores.
+	 * A refusal leaves the form's icon — and so the invoice the form would build — exactly as it was, and a file that passes is stored as the gate's own canonical text.
+	 */
+	async function applyIconFile(file: File): Promise<void> {
+		if (file.size > MAX_ICON_SVG_BYTES) {
+			showIconError(`The icon is ${file.size} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.`);
+			return;
+		}
+		let text: string;
+		try {
+			text = await file.text();
+		} catch (error) {
+			showIconError(`The icon file could not be read: ${boundMessage(messageOf(error), FIELD_MESSAGE_MAX)}`);
+			return;
+		}
+		if (text.length > MAX_ICON_SVG_BYTES) {
+			showIconError(`The icon is ${text.length} characters, over the ${MAX_ICON_SVG_BYTES}-byte limit.`);
+			return;
+		}
+		let svg: string;
+		try {
+			svg = validateIcon(text);
+		} catch (error) {
+			showIconError(iconRefusalMessage(error));
+			return;
+		}
+		state.iconSvg = svg;
+		clearIconError();
+		syncIconPreview();
+		sync();
 	}
 
 	/** Draw the invoice the form just created into this view, through the section the payer's document draws beside it. */
@@ -735,6 +822,18 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 		state.notes = notes.value;
 		sync();
 	});
+	iconInput.addEventListener("change", () => {
+		const file = iconInput.files?.[0];
+		if (file === undefined) return;
+		void applyIconFile(file);
+	});
+	iconRemove.addEventListener("click", () => {
+		state.iconSvg = "";
+		iconInput.value = "";
+		clearIconError();
+		syncIconPreview();
+		sync();
+	});
 	bind(taxLabel, () => {
 		state.taxLabel = taxLabel.value;
 		sync();
@@ -776,6 +875,14 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 			fieldGroup("payee-address", "Payout address", payeeAddress, errorsByKey, "payeeAddress", "The address this invoice pays to."),
 			payoutWarning,
 			fieldGroup("payee-email", "Contact email (optional)", payeeEmail, errorsByKey, "payeeEmail"),
+		),
+		h(
+			"fieldset",
+			{ class: "form-section" },
+			h("legend", {}, "Brand icon (optional)"),
+			fieldGroup("icon", "Icon", iconInput, errorsByKey, "icon", `An SVG up to ${MAX_ICON_SVG_BYTES} bytes and ${MAX_ICON_DIMENSION}×${MAX_ICON_DIMENSION} pixels. It is carried in the share link and never fetched.`),
+			iconPreview,
+			iconRemove,
 		),
 		h(
 			"fieldset",
@@ -866,6 +973,7 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	rebuildItems((index) => index);
 	sync();
 	syncPayoutWarning();
+	syncIconPreview();
 
 	return h(
 		"section",

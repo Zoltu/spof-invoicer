@@ -29,6 +29,7 @@ import {
 	type Invoice,
 } from "../invoice/model.js";
 import { MAX_PAYMENT_LINK_BYTES, PaymentLinkError, buildPaymentLink, type PaymentLink } from "../payment/links.js";
+import { svgDataUrl, type SvgDataUrl } from "../util/data-url.js";
 import { utf8ToBytes } from "../util/encoding.js";
 import { boundMessage } from "../util/errors.js";
 import { encodeQr, type QrMatrix } from "../util/qr.js";
@@ -218,6 +219,7 @@ export interface InvoiceLabels {
 export interface InvoiceViewModel {
 	readonly assetName: string;
 	readonly symbol: string;
+	readonly iconDataUrl: SvgDataUrl | null;
 	readonly documentNumber: string;
 	readonly status: InvoiceStatus;
 	readonly from: InvoicePartyView;
@@ -263,6 +265,7 @@ export const INVOICE_LABELS: InvoiceLabels = Object.freeze({
  * The payee term draws the address the link itself carries — the payout-address dispatcher's own return, which `payment/links.ts` exposes as the built link's `payee` — rather than the invoice's raw field, so an `Invoice` a caller assembled by hand cannot display one spelling of a payee beside a URI that encodes another.
  * The amount, the address, and the link terms carry `verbatim`, the one thing that marks a value a wallet takes verbatim: the on-screen view draws each of those in a single-line field with a copy control, so the value a payer clicks to copy is the same string the URI and the symbol carry rather than whatever their text selection spanned, and the print path and the PDF draw the same string whole rather than the field's own clipped overflow.
  * The payment link is built once, checked to survive that boundary unchanged, exposed by name, and its symbol is encoded from that one value, so the view model's own {@link InvoiceViewModel.paymentLink}, the term that displays it, and the encoded payload are one string rather than three spellings that happen to agree: a legal invoice's link always fits the encoder's widest symbol, so the two throws those boundaries can raise (`PaymentLinkError`, `RangeError`) are unreachable from a validated invoice and surface only for one a caller assembled by hand.
+ * The optional icon is armed here, once: the value is the icon leaf's own data URL, which is the type every image sink accepts, so the on-screen document and the PDF read one prepared value rather than each building a URL of its own.
  * The result is frozen; a renderer reads it and draws, it does not re-derive.
  */
 export function buildInvoiceViewModel(invoice: Invoice, today: string): InvoiceViewModel {
@@ -278,6 +281,7 @@ export function buildInvoiceViewModel(invoice: Invoice, today: string): InvoiceV
 	return Object.freeze({
 		assetName: asset.name,
 		symbol,
+		iconDataUrl: invoice.icon === undefined ? null : svgDataUrl(invoice.icon),
 		documentNumber: `#${clip(invoice.id, MAX_ID_CHARS)}`,
 		status: invoiceStatus(invoice, today),
 		from: Object.freeze({

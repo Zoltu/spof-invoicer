@@ -3,6 +3,7 @@
  *
  * This module is the single boundary that turns validated SVG text into the `data:image/svg+xml;base64,…` URL that an `HTMLImageElement` `src` loads or a `<canvas>` draws.
  * Neither {@link svgDataUrl} nor {@link isSvgDataUrl} makes any sink accept such a value: a caller that gates a `src` on {@link isSvgDataUrl} enforces that rule in its own code, and this leaf neither writes an attribute nor permits one, so sink-side enforcement is outside this module.
+ * What this module does state is the value's type: {@link svgDataUrl} returns the branded {@link SvgDataUrl}, which is the only type an image sink's `src` accepts, so a bare string cannot reach one by accident — and {@link isSvgDataUrl} is the matching runtime check for a value TypeScript could not narrow.
  * {@link svgDataUrl} enforces the byte cap the icon validator applies, refusing an empty or over-long value before it encodes, so the leaf does no work proportional to an unbounded input.
  * {@link isSvgDataUrl} is a bounded shape check that recognizes the URL {@link svgDataUrl} builds; it is a shape test rather than a content check, and what makes the result safe to load is the browser's image-context rendering, not this leaf.
  */
@@ -52,7 +53,7 @@ export function svgDataUrl(svg) {
     if (bytes.length === 0 || bytes.length > MAX_ICON_SVG_BYTES) {
         throw new RangeError(`data-url: refusing ${bytes.length} UTF-8 bytes, outside 1..${MAX_ICON_SVG_BYTES}`);
     }
-    return SVG_DATA_URL_PREFIX + base64.encode(bytes);
+    return `${SVG_DATA_URL_PREFIX}${base64.encode(bytes)}`;
 }
 /**
  * Test whether a value is the shape of an SVG data URL this module produced.
@@ -62,6 +63,7 @@ export function svgDataUrl(svg) {
  * The check validates the payload's spelling, not that it decodes to a whole SVG: a prefix-matching, well-shaped value such as `QUJD` is recognized, since only a value this module built ever reaches the caller that gates a `src` on this.
  *
  * The predicate is shape-only and non-authoritative — matching says the value looks like a URL this module builds, not that the bytes behind it are a safe SVG — and it is usable *only* to gate a value headed for an image sink (`HTMLImageElement` `src`, a `<canvas>` draw), never as a general-purpose untrusted-URL validator: it admits any well-shaped base64 payload and imposes no content check, and the security boundary for an icon is the browser's image-context rendering, not this predicate.
+ * It narrows to {@link SvgDataUrl}, the type an image sink's `src` accepts, so a value that passed the check reaches the attribute as the branded type rather than as a bare string.
  */
 export function isSvgDataUrl(value) {
     if (typeof value !== "string" || !value.startsWith(SVG_DATA_URL_PREFIX))

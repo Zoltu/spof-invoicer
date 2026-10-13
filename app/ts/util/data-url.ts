@@ -3,6 +3,7 @@
  *
  * This module is the single boundary that turns validated SVG text into the `data:image/svg+xml;base64,…` URL that an `HTMLImageElement` `src` loads or a `<canvas>` draws.
  * Neither {@link svgDataUrl} nor {@link isSvgDataUrl} makes any sink accept such a value: a caller that gates a `src` on {@link isSvgDataUrl} enforces that rule in its own code, and this leaf neither writes an attribute nor permits one, so sink-side enforcement is outside this module.
+ * What this module does state is the value's type: {@link svgDataUrl} returns the branded {@link SvgDataUrl}, which is the only type an image sink's `src` accepts, so a bare string cannot reach one by accident — and {@link isSvgDataUrl} is the matching runtime check for a value TypeScript could not narrow.
  * {@link svgDataUrl} enforces the byte cap the icon validator applies, refusing an empty or over-long value before it encodes, so the leaf does no work proportional to an unbounded input.
  * {@link isSvgDataUrl} is a bounded shape check that recognizes the URL {@link svgDataUrl} builds; it is a shape test rather than a content check, and what makes the result safe to load is the browser's image-context rendering, not this leaf.
  */
@@ -13,6 +14,14 @@ import { MAX_ICON_SVG_BYTES } from "./icon-capacity.js";
 
 /** The prefix of every SVG data URL this module builds. */
 const SVG_DATA_URL_PREFIX = "data:image/svg+xml;base64,";
+
+/**
+ * An SVG data URL built by {@link svgDataUrl}, branded so an ordinary string cannot stand in for one.
+ *
+ * The brand is what keeps an arbitrary value out of an image sink: `util/dom.ts` types its `src` attribute as this type, so `"logo.svg"` and a `data:text/html,…` string are compile errors at every `h()` call site, and the runtime check beside it ({@link isSvgDataUrl}) is what holds when a caller reaches the attribute through a value TypeScript could not narrow.
+ * The brand is a phantom: no value carries the property at runtime, and every value of this type came from {@link svgDataUrl} or from a cast the compiler accepted.
+ */
+export type SvgDataUrl = string & { readonly __svgDataUrlBrand: unique symbol };
 
 /**
  * The most base64 characters a payload this module could have built may carry: the encoded length of {@link MAX_ICON_SVG_BYTES} bytes, which is `4 * ceil(bytes / 3)`.
@@ -47,7 +56,7 @@ function decodedByteLength(payload: string): number {
  * It transports the exact text it is given, UTF-8 encoded and base64-armored, so no character of the document needs escaping inside an attribute.
  * The result is an image-sink value, meant for an `HTMLImageElement` `src` or a `<canvas>` draw and never for a navigation target, an inline markup sink, or a fetch.
  */
-export function svgDataUrl(svg: string): string {
+export function svgDataUrl(svg: string): SvgDataUrl {
 	if (typeof svg !== "string") {
 		throw new TypeError(`data-url: expected an SVG string, got ${preview(svg)}`);
 	}
@@ -58,7 +67,7 @@ export function svgDataUrl(svg: string): string {
 	if (bytes.length === 0 || bytes.length > MAX_ICON_SVG_BYTES) {
 		throw new RangeError(`data-url: refusing ${bytes.length} UTF-8 bytes, outside 1..${MAX_ICON_SVG_BYTES}`);
 	}
-	return SVG_DATA_URL_PREFIX + base64.encode(bytes);
+	return `${SVG_DATA_URL_PREFIX}${base64.encode(bytes)}` as SvgDataUrl;
 }
 
 /**
@@ -69,8 +78,9 @@ export function svgDataUrl(svg: string): string {
  * The check validates the payload's spelling, not that it decodes to a whole SVG: a prefix-matching, well-shaped value such as `QUJD` is recognized, since only a value this module built ever reaches the caller that gates a `src` on this.
  *
  * The predicate is shape-only and non-authoritative — matching says the value looks like a URL this module builds, not that the bytes behind it are a safe SVG — and it is usable *only* to gate a value headed for an image sink (`HTMLImageElement` `src`, a `<canvas>` draw), never as a general-purpose untrusted-URL validator: it admits any well-shaped base64 payload and imposes no content check, and the security boundary for an icon is the browser's image-context rendering, not this predicate.
+ * It narrows to {@link SvgDataUrl}, the type an image sink's `src` accepts, so a value that passed the check reaches the attribute as the branded type rather than as a bare string.
  */
-export function isSvgDataUrl(value: unknown): value is string {
+export function isSvgDataUrl(value: unknown): value is SvgDataUrl {
 	if (typeof value !== "string" || !value.startsWith(SVG_DATA_URL_PREFIX)) return false;
 	if (value.length > SVG_DATA_URL_PREFIX.length + MAX_SVG_DATA_URL_PAYLOAD) return false;
 	const payload = value.slice(SVG_DATA_URL_PREFIX.length);

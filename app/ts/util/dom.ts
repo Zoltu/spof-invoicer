@@ -1,19 +1,21 @@
 /**
  * The dynamic-DOM layer: the `h()` builder the whole app builds its markup with, and the attribute allow-list behind it.
  *
- * It is the app's one markup sink by construction: string and number children become text nodes, and an attribute outside {@link ALLOWED_ATTRIBUTES} — or an unsafe {@link safeUrl} target — throws rather than mutating the element, so no invoice field can become script or an event handler.
+ * It is the app's one markup sink by construction: string and number children become text nodes, and an attribute outside {@link ALLOWED_ATTRIBUTES} — or a value the attribute's own gate refuses — throws rather than mutating the element, so no invoice field can become script or an event handler.
  * {@link append} shares the same child handling, and nothing here reaches the network.
  */
 
-import { describe } from "./errors.js";
+import { isSvgDataUrl, type SvgDataUrl } from "./data-url.js";
+import { describe, preview } from "./errors.js";
 
 /** Children accepted by {@link h}: real nodes, text, or skipped holes from conditional rendering. */
 export type DomChild = Node | string | number | null | undefined | false;
 
 /**
  * The attribute names {@link h} will set, and the single source of truth for both the type and the runtime allow-list.
- * An explicit set — rather than an index signature — keeps a call site that spreads parsed invoice data from introducing event handlers (`onclick`), script-bearing URLs (`src`, `srcdoc`), inline CSS (`style`), or a `javascript:` `href`.
- * `href` is present but its value is validated by {@link safeUrl}.
+ * An explicit set — rather than an index signature — keeps a call site that spreads parsed invoice data from introducing event handlers (`onclick`), script-bearing URLs (`srcdoc`, an arbitrary `src`), inline CSS (`style`), or a `javascript:` `href`.
+ * The names whose values carry meaning beyond text are gated: `href` through {@link safeUrl}, which admits only a same-origin reference or a `#` target, and `src` through {@link isSvgDataUrl}, which admits only the data URL the icon leaf builds.
+ * `accept` and `alt` are free text — a file-picker filter and an image's alternative text — and neither is a sink.
  */
 const ALLOWED_ATTRIBUTES = [
 	"class",
@@ -34,12 +36,15 @@ const ALLOWED_ATTRIBUTES = [
 	"name",
 	"value",
 	"placeholder",
+	"accept",
+	"alt",
 	"for",
 	"colspan",
 	"rowspan",
 	"scope",
 	"headers",
 	"href",
+	"src",
 	"aria-label",
 	"aria-modal",
 	"aria-hidden",
@@ -55,8 +60,13 @@ const ALLOWED: ReadonlySet<string> = new Set(ALLOWED_ATTRIBUTES);
 /** Every attribute name {@link h} will set, one member per entry in its allow-list. */
 export type DomAttributeName = (typeof ALLOWED_ATTRIBUTES)[number];
 
-/** The attribute bag {@link h} accepts: allow-listed names mapped to the primitive values it can render. */
-export type DomAttributes = Partial<Record<DomAttributeName, string | number | boolean | null | undefined>>;
+/**
+ * The attribute bag {@link h} accepts: allow-listed names mapped to the primitive values it can render.
+ * `src` is stated apart from the rest because its value is an image sink rather than text: it accepts only the branded {@link SvgDataUrl} the icon leaf builds, so a bare string is a compile error here and {@link checkedAttributeValue} refuses one at runtime.
+ */
+export type DomAttributes = Partial<Record<Exclude<DomAttributeName, "src">, string | number | boolean | null | undefined>> & {
+	readonly src?: SvgDataUrl | null | undefined;
+};
 
 const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 
@@ -92,12 +102,19 @@ export function safeUrl(value: unknown): string {
 const FORBIDDEN_TAGS: ReadonlySet<string> = new Set(["script"]);
 
 /**
- * Validate an attribute name, and a URL-bearing value through {@link safeUrl}, returning the value to write.
- * A URL attribute resolves to `safeUrl`'s normalized result, so `h` sets the attribute to exactly the string that passed the check.
+ * Validate an attribute name, and a gated value, returning the value to write.
+ * A URL attribute resolves to {@link safeUrl}'s normalized result, so `h` sets the attribute to exactly the string that passed the check.
+ * `src` is the one image sink `h` can build, and it accepts nothing but the icon leaf's own data URL — not a relative path, not a remote reference, and not any other `data:` type — so the attribute carries only what the icon leaf's `svgDataUrl` produced.
  */
 function checkedAttributeValue(name: string, value: string | number | boolean): string | number | boolean {
 	if (!ALLOWED.has(name)) {
 		throw new TypeError(`dom: refusing the attribute ${describe(name)} — it is not on the h() allow-list`);
+	}
+	if (name === "src") {
+		if (!isSvgDataUrl(value)) {
+			throw new TypeError(`dom: refusing the src ${preview(value)} — only the icon leaf's own data URL may reach an image sink`);
+		}
+		return value;
 	}
 	if (URL_ATTRIBUTES.has(name)) {
 		return safeUrl(value);
@@ -110,7 +127,7 @@ function checkedAttributeValue(name: string, value: string | number | boolean): 
  *
  * String and number children become text nodes (never markup), so invoice free text cannot become script; `null`, `undefined` and `false` children are skipped.
  * A `true` attribute value becomes a valueless attribute (e.g. `disabled`), and `null`/`undefined`/`false` attributes are left off.
- * An attribute name outside {@link ALLOWED_ATTRIBUTES}, or an unsafe value for a URL-bearing attribute, throws instead of mutating the element; a URL-bearing attribute is set to {@link safeUrl}'s normalized result, not the raw value.
+ * An attribute name outside {@link ALLOWED_ATTRIBUTES}, an unsafe value for a URL-bearing attribute, or a `src` that is not the icon leaf's own data URL throws instead of mutating the element; a URL-bearing attribute is set to {@link safeUrl}'s normalized result, not the raw value.
  * A tag that can carry executable script ({@link FORBIDDEN_TAGS}) throws rather than building one.
  */
 export function h<K extends keyof HTMLElementTagNameMap>(

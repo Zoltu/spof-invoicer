@@ -292,6 +292,46 @@ function isSanctionedDataUrlStatement(hit) {
 	return DATA_URL_LEAVES.has(hit.file) && hit.text === SANCTIONED_DATA_URL_STATEMENT;
 }
 
+/**
+ * The whole allow-list for the raw `src`-setter sweep, each site named with the justification that exempts it.
+ *
+ * `h()` is the app's only builder, so a literal `setAttribute("src", …)` is a second route to an image sink that bypasses its allow-list entirely; the sweep reports one anywhere in the runtime, and the exemption admits it only in the two files that own an image sink and only when the value handed over is the leaf's own builder.
+ * `util/dom.ts` sets attributes from its checked bag rather than from a literal name, and `pdf/rasterize.ts` is the browser-only rasterizer's own `<img>`; a literal setter in either that does not hand the leaf's builder to the attribute is still reported, and so is one in any other file.
+ */
+const SRC_SETTER_SITES = new Set(["app/ts/util/dom.ts", "app/js/util/dom.js", "app/ts/pdf/rasterize.ts", "app/js/pdf/rasterize.js"]);
+/** A raw `setAttribute("src", …)` call, in any casing. */
+const RAW_SRC_SETTER = /\bsetAttribute\s*\(\s*["'`]src["'`]/i;
+/** The one value a sanctioned setter may hand the attribute: the icon leaf's own builder. */
+const SANCTIONED_SRC_SETTER_VALUE = /\bsetAttribute\s*\(\s*["'`]src["'`]\s*,\s*svgDataUrl\s*\(/;
+function isSanctionedSrcSetter(hit) {
+	return SRC_SETTER_SITES.has(hit.file) && SANCTIONED_SRC_SETTER_VALUE.test(hit.text);
+}
+
+/**
+ * The containment invariant for the icon's image context: the constructs that would put an SVG document into the live DOM rather than into an image sink.
+ *
+ * `createElementNS` and `DOMParser` both build or parse markup rather than load an image, and an inline `h("svg", …)` would put the document's own elements — and whatever script they carry — into the page instead of rendering them in secure static image mode.
+ */
+const CONTAINMENT_SINKS = /\bcreateElementNS\b|\bDOMParser\b|\bh\s*\(\s*["'`]svg["'`]/i;
+
+/**
+ * The SVG media type, and the whole allow-list for the sweep that confines it.
+ *
+ * The type names an image context: an SVG document loaded as an image is rendered in secure static image mode, while the same text inlined as markup is not, so every spelling of the type in the served tree is pinned here rather than left to a reader's reading of the runtime.
+ * The leaf's prefix declaration is the one place the type is part of a URL, the page's own favicon declaration names the type of a static same-origin asset, and the create form's file-picker filter names it to the picker alone; a spelling anywhere else, or a different one on a sanctioned line, is reported.
+ */
+const SVG_MEDIA_TYPE = /image\/svg\+xml/i;
+const ICON_ACCEPT_LEAVES = new Set(["app/ts/ui/create.ts", "app/js/ui/create.js"]);
+/** The page's own favicon declaration, the one place `index.html` names the type. */
+const FAVICON_TYPE_STATEMENT = '<link rel="icon" type="image/svg+xml" href="images/favicon.svg">';
+/** The create form's file-picker filter, the one place the type is named to a file input: the attribute and its exact value, which the emitted line may carry either on its own or as part of the whole `h()` call. */
+const ICON_ACCEPT_STATEMENT = /accept:\s*"image\/svg\+xml,\.svg"/;
+function isSanctionedSvgMediaType(hit) {
+	if (DATA_URL_LEAVES.has(hit.file) && hit.text === SANCTIONED_DATA_URL_STATEMENT) return true;
+	if (hit.file === "app/index.html" && hit.text === FAVICON_TYPE_STATEMENT) return true;
+	return ICON_ACCEPT_LEAVES.has(hit.file) && ICON_ACCEPT_STATEMENT.test(hit.text);
+}
+
 test("a created invoice survives the share link and its blob container unchanged", () => {
 	const invoice = usdcInvoice();
 	assert.equal(computeTotals(invoice).total.text, "424.83");
@@ -696,6 +736,17 @@ test("no served runtime module can build markup, evaluate code, or reach the net
 		[],
 		"a runtime file assigns a src or carries a script-bearing URL scheme",
 	);
+	assert.deepEqual(
+		occurrences(runtime, RAW_SRC_SETTER, { htmlComments: true, except: isSanctionedSrcSetter }),
+		[],
+		"a runtime file sets a src attribute outside the sanctioned sites",
+	);
+	assert.deepEqual(occurrences(runtime, CONTAINMENT_SINKS, { htmlComments: true }), [], "a runtime file builds or parses inline SVG markup");
+	assert.deepEqual(
+		occurrences(runtime, SVG_MEDIA_TYPE, { htmlComments: true, except: isSanctionedSvgMediaType }),
+		[],
+		"the SVG media type is spelled outside the sanctioned statements",
+	);
 	assert.deepEqual(occurrences(runtime, /https?:\/\//, { htmlComments: true }), [], "a runtime file names an absolute URL");
 	assert.deepEqual(occurrences(runtime, /\.style\b/, { htmlComments: true }), [], "a runtime file styles an element from script");
 });
@@ -810,6 +861,50 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 		"and the same literal in another file is not exempt",
 	);
 	assert.ok(!SCRIPT_URL_VECTORS.test("const record = { updateMetadata: false };"), "a plain property is not a URL scheme");
+	// The containment sweeps' own pins: every construct they name is reported, the leaf's image sink is not one of them, and each allow-list admits exactly the statements it names.
+	assert.ok(RAW_SRC_SETTER.test('img.setAttribute("src", url);'), "the raw-src sweep catches a literal setter");
+	assert.ok(RAW_SRC_SETTER.test("img.setAttribute('SRC', url);"), "in any casing of the attribute name");
+	assert.ok(
+		isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", svgDataUrl(svg));' }),
+		"the rasterizer's own sink is exempt when it hands the leaf's builder to the attribute",
+	);
+	assert.ok(
+		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", url);' }),
+		"and not when it hands over anything else",
+	);
+	assert.ok(
+		!isSanctionedSrcSetter({ file: "app/ts/ui/view.ts", text: 'img.setAttribute("src", svgDataUrl(svg));' }),
+		"the leaf's builder in a third file exempts nothing",
+	);
+	for (const vector of ['document.createElementNS(ns, "svg");', "const parser = new DOMParser();", 'h("svg", {});']) {
+		assert.ok(CONTAINMENT_SINKS.test(vector), `the containment sweep misses ${vector}`);
+	}
+	assert.ok(!CONTAINMENT_SINKS.test('h("img", { src: svgDataUrl(svg) });'), "the image sink is the sanctioned route, not a containment breach");
+	assert.deepEqual(
+		occurrences([join(appDir, "index.html")], SVG_MEDIA_TYPE, { htmlComments: true, except: isSanctionedSvgMediaType }),
+		[],
+		"the page's own favicon declaration is the only spelling the page may carry",
+	);
+	assert.ok(
+		isSanctionedSvgMediaType({ file: "app/index.html", text: FAVICON_TYPE_STATEMENT }),
+		"the favicon declaration is exempt",
+	);
+	assert.ok(
+		!isSanctionedSvgMediaType({ file: "app/index.html", text: '<link rel="icon" type="image/svg+xml" href="https://evil.example/x.svg">' }),
+		"and another line naming the type in the page is not",
+	);
+	assert.ok(
+		isSanctionedSvgMediaType({ file: "app/ts/ui/create.ts", text: '\t\t\taccept: "image/svg+xml,.svg",' }),
+		"the create form's file-picker filter is exempt",
+	);
+	assert.ok(
+		!isSanctionedSvgMediaType({ file: "app/ts/ui/create.ts", text: 'type: "image/svg+xml",' }),
+		"nor another spelling of the type in the create form",
+	);
+	assert.ok(
+		isSanctionedSvgMediaType({ file: "app/js/ui/create.js", text: '    const iconInput = h("input", { type: "file", name: "icon", accept: "image/svg+xml,.svg" });' }),
+		"and the emitted copy of that same call is exempt too",
+	);
 });
 
 test("the hand-off sentence has one spelling across the authored tree and the README", async () => {
@@ -896,7 +991,7 @@ test("index.html pins the policy the app's guarantees rest on", () => {
 		"script-src-attr": ["'none'"],
 		"style-src": ["'self'"],
 		"style-src-attr": ["'none'"],
-		"img-src": ["'self'"],
+		"img-src": ["'self'", "data:"],
 		"font-src": ["'none'"],
 		"connect-src": ["'none'"],
 		"require-trusted-types-for": ["'script'"],

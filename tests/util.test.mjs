@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fromBaseUnits, toBaseUnits, UINT256_MAX } from "../app/js/util/decimal.js";
 import { append, h, safeUrl } from "../app/js/util/dom.js";
+import { svgDataUrl } from "../app/js/util/data-url.js";
 import { base58, base58check, base58xmr, bech32, bech32m, hexToBytes, sha256, toHex, utf8ToBytes } from "../app/js/util/encoding.js";
 import { describe, preview } from "../app/js/util/errors.js";
 import { boundRaw } from "../app/js/util/text.js";
@@ -276,7 +277,6 @@ test("h refuses attributes outside the allow-list", () => {
 		for (const attributes of [
 			{ onclick: "alert(1)" },
 			{ onmouseover: "alert(1)" },
-			{ src: "logo.svg" },
 			{ srcdoc: "<script>alert(1)</script>" },
 			{ style: "color:red" },
 			{ "xlink:href": "javascript:alert(1)" },
@@ -288,6 +288,36 @@ test("h refuses attributes outside the allow-list", () => {
 				`h must refuse ${JSON.stringify(attributes)}`,
 			);
 		}
+	} finally {
+		fake.restore();
+	}
+});
+
+test("h refuses a src that is not the icon leaf's own data URL", () => {
+	const fake = installFakeDocument();
+	try {
+		const url = svgDataUrl('<svg width="16" height="16"></svg>');
+		assert.equal(h("img", { src: url }).attributes.src, url, "the leaf's own data URL reaches the attribute");
+		assert.equal(h("img", { alt: "", src: url }).attributes.alt, "", "and the alt text beside it is free text");
+		for (const value of [
+			"logo.svg",
+			"#/create",
+			"data:text/html,<script>alert(1)</script>",
+			"blob:https://example/x",
+			"javascript:alert(1)",
+		]) {
+			assert.throws(
+				() => h("img", { src: value }),
+				/only the icon leaf's own data URL may reach an image sink/,
+				`h must refuse the src ${JSON.stringify(value)}`,
+			);
+		}
+		assert.throws(() => h("img", { src: 42 }), /only the icon leaf's own data URL/, "a non-string src is refused too");
+		assert.throws(
+			() => h("a", { href: "data:text/html,x" }),
+			/refusing an absolute "data:" URL/,
+			"a data: URL is still refused in an href, where safeUrl is unchanged",
+		);
 	} finally {
 		fake.restore();
 	}

@@ -23,6 +23,7 @@ import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES } from "../app/js/ui/messag
 import { CHAIN_NAMES, chainName, requireNamedNetworks } from "../app/js/ui/network-labels.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
+import { svgDataUrl } from "../app/js/util/data-url.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
 import { encodeQr } from "../app/js/util/qr.js";
 import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
@@ -606,6 +607,11 @@ test("index.html links the local stylesheets and icon with no external reference
 test("the invoice letterhead uses the local logo image", () => {
 	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
 	assert.match(invoiceCss, /url\("\.\.\/images\/logo\.svg"\)/, "the letterhead uses the local logo");
+	assert.match(
+		invoiceCss,
+		/\.letterhead-icon \{\n\tdisplay: inline-block;\n\twidth: 3rem;\n\theight: 3rem;\n\tflex: 0 0 auto;\n\tobject-fit: contain;\n\}/,
+		"and the payee's own mark is sized by the shared-document stylesheet",
+	);
 });
 
 test("print.css gates itself to print and keeps the document whole", () => {
@@ -1168,4 +1174,28 @@ test("the hand-off sentence is owned by the neutral messages module, not the wal
 	const view = readFileSync(join(root, "app", "ts", "ui", "view.ts"), "utf8");
 	assert.match(view, /from "\.\/messages\.js"/, "the document renderer imports the neutral module");
 	assert.ok(!/from "\.\/pay\.js"/.test(view), "and does not import the wallet panel for it");
+});
+
+test("the letterhead draws the invoice's own icon, and draws none when it carries none", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const icon = '<svg width="48" height="48"><rect width="48" height="48" fill="#0a7"/></svg>';
+		const invoice = invoiceFor({ icon });
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+
+		const brand = findAll(view, (node) => hasClass(node, "letterhead-brand"))[0];
+		assert.ok(brand, "the letterhead carries its brand block");
+		const icons = findAll(brand, (node) => hasClass(node, "letterhead-icon"));
+		assert.equal(icons.length, 1, "exactly one icon is drawn there");
+		assert.equal(icons[0].tagName, "img");
+		assert.equal(icons[0].attributes.src, svgDataUrl(icon), "and it is the leaf's own data URL rather than markup");
+		assert.equal(icons[0].attributes.alt, "", "decorative beside the payee's own name");
+		assert.equal(buildInvoiceViewModel(invoice, VIEW_OPTIONS.today).iconDataUrl, svgDataUrl(icon), "the view model prepares the value the document draws");
+
+		const bare = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		assert.deepEqual(findAll(bare, (node) => hasClass(node, "letterhead-icon")), [], "an icon-less invoice draws none");
+		assert.equal(buildInvoiceViewModel(invoiceFor(), VIEW_OPTIONS.today).iconDataUrl, null, "and its view model carries none");
+	} finally {
+		fake.restore();
+	}
 });

@@ -45,12 +45,15 @@ export interface ViewOptions {
 export function renderInvoiceView(invoice: Invoice, options: ViewOptions): HTMLElement {
 	const view = buildInvoiceViewModel(invoice, options.today);
 
+	// The payee's own mark, when the invoice carries one: it is the leaf's data URL in an image context, never the document's markup, and it is left out entirely rather than rendered empty.
+	const letterheadIcon = view.iconDataUrl === null ? null : h("img", { class: "letterhead-icon", src: view.iconDataUrl, alt: "" });
 	const letterhead = h(
 		"header",
 		{ class: "invoice-letterhead" },
 		h(
 			"div",
 			{ class: "letterhead-brand" },
+			letterheadIcon,
 			h("span", { class: "invoice-logo", role: "img", "aria-label": "Invoicing brand mark" }),
 			h(
 				"div",

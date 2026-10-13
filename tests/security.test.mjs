@@ -100,7 +100,7 @@ test("index.html pins a CSP whose only connect-src is none", () => {
 	assert.deepEqual(directives.get("script-src"), ["'self'"]);
 	assert.deepEqual(directives.get("script-src-elem"), ["'self'", "'unsafe-inline'"]);
 	assert.deepEqual(directives.get("style-src"), ["'self'"]);
-	assert.deepEqual(directives.get("img-src"), ["'self'"]);
+	assert.deepEqual(directives.get("img-src"), ["'self'", "data:"]);
 	assert.deepEqual(directives.get("font-src"), ["'none'"]);
 	assert.deepEqual(directives.get("frame-src"), ["'none'"]);
 	assert.deepEqual(directives.get("object-src"), ["'none'"]);

@@ -12,6 +12,7 @@ import { readSymbol } from "./helpers/qr-reader.mjs";
 import { findAll, findButton, hasClass, inputValues, textOf } from "./helpers/tree.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
 import { MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
+import { MAX_ICON_SVG_BYTES } from "../app/js/invoice/icon.js";
 import { MAX_JSON_BYTES, encodeInvoice } from "../app/js/invoice/codec.js";
 import { decodeShare } from "../app/js/invoice/share.js";
 import { parseHash } from "../app/js/app/router.js";
@@ -38,6 +39,7 @@ import {
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { buildShareBundle, copyText } from "../app/js/ui/share.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
+import { svgDataUrl } from "../app/js/util/data-url.js";
 import { base32nopad, utf8 } from "../app/js/util/encoding.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -99,6 +101,18 @@ function b32(text) {
 	return base32nopad.encode(utf8.decode(text));
 }
 
+/** Let the file read behind the icon input's change handler settle. */
+function drain() {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** A minimal icon document the gate accepts, and the file shape the icon input reads. */
+const ICON_SVG = '<svg width="32" height="32"><rect width="32" height="32" fill="#123456"/></svg>';
+
+function iconFile(text, size = text.length) {
+	return { size, text: async () => text };
+}
+
 test("emptyFormState seeds one blank line and today's invoice number", () => {
 	const state = emptyFormState("2026-10-03");
 	assert.equal(state.invoiceId, "INV-20261003");
@@ -107,6 +121,7 @@ test("emptyFormState seeds one blank line and today's invoice number", () => {
 	assert.equal(state.items.length, 1);
 	assert.deepEqual(state.items[0], { description: "", quantity: "1", unitPrice: "" });
 	assert.equal(state.taxEnabled, false);
+	assert.equal(state.iconSvg, "", "no icon is chosen until a file is read");
 });
 
 test("addItem appends up to MAX_ITEMS and then refuses", () => {
@@ -155,6 +170,8 @@ test("invoiceInputFromState trims text and omits empty optional fields", () => {
 	assert.equal("email" in input.payee, false);
 	assert.equal("tax" in input, false);
 	assert.equal(input.chainId, "0x1", "the chain comes from the selected asset");
+	assert.equal("icon" in input, false, "an empty icon field is omitted like the other optional fields");
+	assert.equal(invoiceInputFromState({ ...formState(), iconSvg: ICON_SVG }).icon, ICON_SVG, "a chosen icon rides in the input the model validates");
 });
 
 test("parseFormState builds a validated invoice", () => {
@@ -883,3 +900,89 @@ for (const path of PRIVACY_CREATE_PATH) {
 		}
 	});
 }
+
+test("a good icon file sets the form's icon and previews the leaf's own data URL", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		assert.equal(input.attributes.type, "file");
+		assert.equal(input.attributes.accept, "image/svg+xml,.svg", "the picker offers SVG files");
+		const remove = findButton(view, "Remove icon");
+		assert.ok(remove, "the form carries a control that clears the icon");
+		assert.equal(remove.attributes.hidden, "", "hidden until an icon is chosen");
+
+		input.files = [iconFile(ICON_SVG)];
+		input.dispatch("change");
+		await drain();
+
+		const preview = findAll(view, (node) => hasClass(node, "icon-preview"))[0];
+		assert.ok(preview, "the chosen icon is previewed in place");
+		assert.equal(preview.tagName, "img", "as an image rather than inline markup");
+		assert.equal(preview.attributes.src, svgDataUrl(ICON_SVG), "carrying the leaf's own data URL");
+		assert.equal(remove.attributes.hidden, undefined, "and the remove control is offered once one is set");
+		assert.equal(findAll(view, (node) => node.attributes?.id === "icon-error")[0].attributes.hidden, "", "with no message shown");
+
+		setControl(view, "payeeName", "Studio Example");
+		setControl(view, "payeeAddress", PAYEE);
+		setControl(view, "item-0-description", "Design work");
+		setControl(view, "item-0-quantity", "2");
+		setControl(view, "item-0-unitPrice", "150");
+		view.children[2].dispatch("submit");
+		const backdrop = document.body.children.find((child) => child.attributes?.class?.includes("dialog-backdrop"));
+		assert.ok(backdrop, "the share dialog opens for the invoice the form built");
+		const url = findAll(backdrop, (node) => node.attributes?.class === "share-value")[0].attributes.value;
+		const shared = decodeShare(url.slice(url.indexOf("#")));
+		assert.equal(shared.icon, ICON_SVG, "the shared invoice carries the icon, in the gate's own canonical text");
+
+		remove.dispatch("click");
+		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "Remove icon clears the preview");
+		assert.equal(remove.attributes.hidden, "", "and hides itself again");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("an over-cap or wrong-format icon is refused in place and leaves the invoice without one", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
+		assert.equal(message().attributes.hidden, "", "nothing is shown before a file is chosen");
+
+		const oversized = `<svg width="32" height="32">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
+		input.files = [iconFile(oversized)];
+		input.dispatch("change");
+		await drain();
+		assert.equal(message().attributes.hidden, undefined, "an over-cap file is refused in place");
+		assert.match(textOf(message()), /over the 8192-byte limit/);
+		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "and nothing is previewed");
+
+		// The cap bounds the value the invoice stores rather than the bytes a file claims, so a size that understates the text is caught after the read.
+		input.files = [iconFile(oversized, 8)];
+		input.dispatch("change");
+		await drain();
+		assert.match(textOf(message()), /characters, over the 8192-byte limit/);
+
+		input.files = [iconFile("not an svg at all")];
+		input.dispatch("change");
+		await drain();
+		assert.match(textOf(message()), /must contain a single <svg> root element/, "a wrong-format file is refused with the gate's own reason");
+		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "and still nothing is previewed");
+
+		setControl(view, "payeeName", "Studio Example");
+		setControl(view, "payeeAddress", PAYEE);
+		setControl(view, "item-0-description", "Design work");
+		setControl(view, "item-0-quantity", "2");
+		setControl(view, "item-0-unitPrice", "150");
+		view.children[2].dispatch("submit");
+		const backdrop = document.body.children.find((child) => child.attributes?.class?.includes("dialog-backdrop"));
+		assert.ok(backdrop, "the form still builds and shares its invoice");
+		const url = findAll(backdrop, (node) => node.attributes?.class === "share-value")[0].attributes.value;
+		const shared = decodeShare(url.slice(url.indexOf("#")));
+		assert.equal("icon" in shared, false, "a refused icon never reaches the invoice");
+	} finally {
+		fake.restore();
+	}
+});
