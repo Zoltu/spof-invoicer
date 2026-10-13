@@ -266,14 +266,20 @@ function isOurModule(file) {
  * `util/dom.ts`'s `h()` builder has one sanctioned call, `document.createElement(tag)`, safe because the tag it hands over is the parameter `h()` has already checked against its own forbidden tags.
  * The exemption names that call site, so a tag literal in that file (`script`, `iframe`, …) or any other `createElement` call in it is still reported.
  * The PDF export's download anchor in `pdf/renderer.ts` is the exception `README.md` documents: it is built on the fly to take an app-generated `blob:` URL that `h()` itself would refuse, and its tag is the literal `"a"`.
+ * `pdf/rasterize.ts` builds the browser-only rasterizer's own two elements — the `<img>` that loads the icon leaf's data URL and the `<canvas>` its pixels are drawn into — which is the image context the icon is rendered in and neither of which can carry script.
  * Any other call, in any other file — and any other call in these files — is not exempt.
  */
 const ELEMENT_BUILDERS = new Set(["app/ts/util/dom.ts", "app/js/util/dom.js"]);
 const DOWNLOAD_ANCHORS = new Set(["app/ts/pdf/renderer.ts", "app/js/pdf/renderer.js"]);
+/** The rasterizer's file, in both trees. */
+const RASTERIZER_SITES = new Set(["app/ts/pdf/rasterize.ts", "app/js/pdf/rasterize.js"]);
 /** The builder's one sanctioned call site: `h()` passing the tag parameter it has already refused a forbidden value for. */
 const SANCTIONED_BUILDER_CALL = /\bdocument\s*\.\s*createElement\s*\(\s*tag\s*\)/;
+/** The rasterizer's two sanctioned calls, pinned to the two tags it may build: an image element and the canvas it is drawn into. */
+const SANCTIONED_RASTERIZER_CALLS = /\bdocument\s*\.\s*createElement\s*\(\s*["'`](?:img|canvas)["'`]\s*\)/;
 function isSanctionedElementBuilder(hit) {
 	if (ELEMENT_BUILDERS.has(hit.file) && SANCTIONED_BUILDER_CALL.test(hit.text)) return true;
+	if (RASTERIZER_SITES.has(hit.file) && SANCTIONED_RASTERIZER_CALLS.test(hit.text)) return true;
 	return DOWNLOAD_ANCHORS.has(hit.file) && /\bdocument\s*\.\s*createElement\s*\(\s*["'`]a["'`]\s*\)/.test(hit.text);
 }
 
@@ -791,6 +797,18 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 	assert.ok(
 		!isSanctionedElementBuilder({ file: "app/ts/pdf/renderer.ts", text: "const link = document.createElement(tag);" }),
 		"another tag in the anchor's file is not",
+	);
+	assert.ok(
+		isSanctionedElementBuilder({ file: "app/ts/pdf/rasterize.ts", text: 'const image = document.createElement("img");' }),
+		"the rasterizer's image element is exempt",
+	);
+	assert.ok(
+		isSanctionedElementBuilder({ file: "app/ts/pdf/rasterize.ts", text: 'const canvas = document.createElement("canvas");' }),
+		"and the canvas it draws into",
+	);
+	assert.ok(
+		!isSanctionedElementBuilder({ file: "app/ts/pdf/rasterize.ts", text: 'const frame = document.createElement("iframe");' }),
+		"but no other tag literal in the rasterizer is",
 	);
 	assert.ok(
 		!isSanctionedElementBuilder({ file: "app/ts/ui/view.ts", text: 'document.createElement("a");' }),

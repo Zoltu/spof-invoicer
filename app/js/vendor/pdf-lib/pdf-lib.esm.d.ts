@@ -51,6 +51,12 @@ export interface PDFFont {
 	encodeText(text: string): PDFEncodedText;
 }
 
+/** One embedded image, as `PDFDocument.embedPng` returns it: the pixel size the PNG carries, which a draw scales to the box it is given. */
+export interface PDFImage {
+	readonly width: number;
+	readonly height: number;
+}
+
 export interface PDFPageDrawTextOptions {
 	color?: Color;
 	font?: PDFFont;
@@ -83,6 +89,14 @@ export interface PDFPageDrawRectangleOptions {
 	borderOpacity?: number;
 }
 
+export interface PDFPageDrawImageOptions {
+	x?: number;
+	y?: number;
+	width?: number;
+	height?: number;
+	opacity?: number;
+}
+
 export interface PDFPage {
 	getSize(): { width: number; height: number };
 	getWidth(): number;
@@ -92,6 +106,7 @@ export interface PDFPage {
 	drawText(text: string, options?: PDFPageDrawTextOptions): void;
 	drawLine(options: PDFPageDrawLineOptions): void;
 	drawRectangle(options?: PDFPageDrawRectangleOptions): void;
+	drawImage(image: PDFImage, options?: PDFPageDrawImageOptions): void;
 	/** Register `font` in the page's resources and return its key there, which is the name a font-setting operator carries. */
 	setOrEmbedFont(font: PDFFont): { readonly oldFont: PDFFont; readonly oldFontKey: string | undefined; readonly newFont: PDFFont; readonly newFontKey: string };
 	/** Append operators to the page's content stream, after everything drawn before them. */
@@ -104,6 +119,7 @@ export interface PDFDocument {
 	getPages(): PDFPage[];
 	getPageCount(): number;
 	embedFont(font: string | Uint8Array | ArrayBuffer): Promise<PDFFont>;
+	embedPng(png: Uint8Array | ArrayBuffer | string): Promise<PDFImage>;
 	embedStandardFont(font: string): PDFFont;
 	setTitle(title: string): void;
 	setAuthor(author: string): void;

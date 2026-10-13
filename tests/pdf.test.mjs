@@ -9,7 +9,10 @@ import { encodeInvoice } from "../app/js/invoice/codec.js";
 import { InvalidInvoiceError, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ID_CHARS, MAX_NAME_CHARS, createInvoice } from "../app/js/invoice/model.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
-import { PDFDocument, decodePDFRawStream } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
+import { PDFDict, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
+import { MAX_ICON_DIMENSION } from "../app/js/invoice/icon.js";
+import { rasterizeSvgIcon } from "../app/js/pdf/rasterize.js";
+import { svgDataUrl } from "../app/js/util/data-url.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
 import {
@@ -29,7 +32,7 @@ import {
 	wrapText,
 } from "../app/js/pdf/renderer.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
-import { installInteractiveDocument } from "./helpers/dom.mjs";
+import { installDocument, installInteractiveDocument } from "./helpers/dom.mjs";
 import { blockNetwork } from "./helpers/network-block.mjs";
 import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TRANSPARENT_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCells, moduleFills } from "./helpers/qr-symbol.mjs";
@@ -672,6 +675,8 @@ test("the renderer references no external resource and no network API", () => {
 	);
 	assert.ok(!/https?:\/\//.test(source), "the renderer must not name an absolute URL");
 	assert.ok(!/<svg/i.test(source), "the letterhead is drawn, not loaded as SVG");
+	assert.ok(!/from\s+"\.\/rasterize\.js"/.test(source), "the browser-only rasterizer is not a static import of the renderer");
+	assert.match(source, /await import\("\.\/rasterize\.js"\)/, "it is reached through a dynamic import, so it loads only for an export that carries an icon");
 });
 
 test("a privacy-chain invoice draws its payment link and the symbol of that same URI", () => {
@@ -1024,4 +1029,200 @@ test("the model's own caps bound an item row inside a fresh page's capacity", as
 		InvalidInvoiceError,
 		"a quantity past the uint256 maximum is refused",
 	);
+});
+
+/** The icon every icon case in this file uses: a 64 by 32 SVG, so its own aspect ratio is not the letterhead box's. */
+const ICON_SVG = '<svg width="64" height="32" viewBox="0 0 64 32"><rect width="64" height="32" fill="#123456"/></svg>';
+
+/** A real 1 by 1 PNG, so the embed path parses actual image bytes rather than a stand-in. */
+const ICON_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64");
+
+/**
+ * A fake document for the browser-only rasterizer: an `img` that records the source it is given, reports the intrinsic size it is told to, and decodes when the case releases it, and a `canvas` that records its size and the image drawn into it.
+ * The rasterizer is the one module that needs a browser, so this is the stub the suite runs it against; nothing here is a real canvas.
+ */
+function installRasterDocument({ naturalWidth = 64, naturalHeight = 32, decode = async () => {} } = {}) {
+	const created = [];
+	const drawn = [];
+	const blobTypes = [];
+	const image = {
+		attributes: {},
+		setAttribute(name, value) {
+			this.attributes[name] = String(value);
+		},
+		decode,
+		naturalWidth,
+		naturalHeight,
+	};
+	const canvas = {
+		width: 0,
+		height: 0,
+		getContext(kind) {
+			assert.equal(kind, "2d", "the rasterizer asks for a 2d context");
+			return {
+				drawImage(source, x, y, width, height) {
+					drawn.push({ source, x, y, width, height });
+				},
+			};
+		},
+		toBlob(callback, type) {
+			blobTypes.push(type);
+			callback(new Blob([ICON_PNG], { type }));
+		},
+	};
+	const handle = installDocument({
+		createElement(tag) {
+			created.push(tag);
+			return tag === "img" ? image : canvas;
+		},
+	});
+	return { handle, image, canvas, created, drawn, blobTypes };
+}
+
+/** Every image XObject the first page's resources carry, with the pixel size the embedded PNG declares. */
+function imageXObjects(doc) {
+	const resources = doc.getPage(0).node.Resources();
+	const xobjects = resources === undefined ? undefined : resources.lookupMaybe(PDFName.of("XObject"), PDFDict);
+	if (xobjects === undefined) return [];
+	return xobjects
+		.entries()
+		.map(([, value]) => doc.context.lookup(value))
+		.filter((object) => object instanceof PDFRawStream && String(object.dict.get(PDFName.of("Subtype"))) === "/Image")
+		.map((object) => ({
+			width: Number(String(object.dict.get(PDFName.of("Width")))),
+			height: Number(String(object.dict.get(PDFName.of("Height")))),
+		}));
+}
+
+/**
+ * Where a decoded content stream draws its one image: the resource name, the translation that places it, and the scale that sizes it, read off the operators pdf-lib wrote rather than recomputed from the renderer's constants.
+ * pdf-lib wraps an image draw in a translation, a rotation, a scale and a skew matrix, so the translation is the first `cm` and the scale is the first later matrix whose diagonal is not the identity.
+ */
+function imageDraw(stream) {
+	const draw = /\/([\w-]+)\s+Do/.exec(stream);
+	assert.ok(draw !== null, "the content stream draws an image XObject");
+	const matrices = [...stream.slice(0, draw.index).matchAll(/([\d.-]+) 0 0 ([\d.-]+) ([\d.-]+) ([\d.-]+) cm/g)].map((match) =>
+		match.slice(1, 5).map(Number),
+	);
+	const translate = matrices[0];
+	const scale = matrices.find((matrix, index) => index > 0 && (matrix[0] !== 1 || matrix[1] !== 1));
+	assert.ok(translate !== undefined && scale !== undefined, "the image draw is placed and sized by its own cm matrices");
+	return { name: draw[1], x: translate[2], y: translate[3], width: scale[0], height: scale[1] };
+}
+
+test("the rasterizer decodes the icon before drawing it, at the icon's own intrinsic size", async () => {
+	const fixture = installRasterDocument({ naturalWidth: 64, naturalHeight: 32 });
+	try {
+		const raster = await rasterizeSvgIcon(ICON_SVG);
+		assert.equal(fixture.image.attributes.src, svgDataUrl(ICON_SVG), "the image loads the leaf's own data URL, so the canvas is same-origin and never tainted");
+		assert.deepEqual(fixture.created, ["img", "canvas"], "the rasterizer builds an image and a canvas, and nothing else");
+		assert.deepEqual([fixture.canvas.width, fixture.canvas.height], [64, 32], "the canvas takes the icon's own width and height");
+		assert.deepEqual(
+			fixture.drawn.map((entry) => [entry.x, entry.y, entry.width, entry.height]),
+			[[0, 0, 64, 32]],
+			"the whole image is drawn into the canvas at that size",
+		);
+		assert.deepEqual([...raster.bytes], [...ICON_PNG], "the PNG bytes come back as the canvas encoded them");
+		assert.deepEqual([raster.width, raster.height], [64, 32], "and the raster reports the size it was drawn at");
+		assert.deepEqual(fixture.blobTypes, ["image/png"], "the canvas is read back as a PNG");
+	} finally {
+		fixture.handle.restore();
+	}
+});
+
+test("the rasterizer draws nothing until the image has decoded", async () => {
+	let release;
+	const decoded = new Promise((resolve) => {
+		release = resolve;
+	});
+	const fixture = installRasterDocument({ decode: () => decoded });
+	try {
+		const pending = rasterizeSvgIcon(ICON_SVG);
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.deepEqual(fixture.drawn, [], "nothing is drawn while the image is still decoding, which is where a blank raster would come from");
+		release();
+		const raster = await pending;
+		assert.equal(fixture.drawn.length, 1, "the draw happens once the decode resolves");
+		assert.equal(raster.bytes.length, ICON_PNG.length);
+	} finally {
+		fixture.handle.restore();
+	}
+});
+
+test("a raster size the icon does not declare is bounded by the icon's own dimension cap", async () => {
+	const fixture = installRasterDocument({ naturalWidth: 0, naturalHeight: 0 });
+	try {
+		const raster = await rasterizeSvgIcon(ICON_SVG);
+		assert.deepEqual([raster.width, raster.height], [MAX_ICON_DIMENSION, MAX_ICON_DIMENSION], "an image that reports no intrinsic size is rasterized at the validator's own cap");
+		assert.deepEqual([fixture.canvas.width, fixture.canvas.height], [MAX_ICON_DIMENSION, MAX_ICON_DIMENSION], "so the canvas is bounded by the cap rather than by a size of the rasterizer's choosing");
+	} finally {
+		fixture.handle.restore();
+	}
+});
+
+test("a decode the browser refuses is a rejection, never a blank raster", async () => {
+	const fixture = installRasterDocument({
+		decode: async () => {
+			throw new Error("decode failed");
+		},
+	});
+	try {
+		await assert.rejects(() => rasterizeSvgIcon(ICON_SVG), /decode failed/);
+		assert.deepEqual(fixture.drawn, [], "nothing is drawn and no raster is returned");
+	} finally {
+		fixture.handle.restore();
+	}
+});
+
+test("an icon invoice embeds one image XObject at the letterhead, and an icon-less export never rasterizes", async () => {
+	const raster = { png: ICON_PNG, width: 1, height: 1 };
+	const asked = [];
+	const rasterizer = {
+		async rasterize(svg) {
+			asked.push(svg);
+			return raster;
+		},
+	};
+	const invoice = invoiceFor({ icon: ICON_SVG });
+
+	const bytes = await renderInvoicePdf(invoice, "2026-10-03", rasterizer);
+	assert.deepEqual(asked, [ICON_SVG], "the renderer hands the rasterizer the invoice's own icon text");
+	const doc = await PDFDocument.load(bytes, { updateMetadata: false });
+	const images = imageXObjects(doc);
+	assert.equal(images.length, 1, "the icon is embedded exactly once");
+	assert.deepEqual([images[0].width, images[0].height], [1, 1], "the embedded image is the rasterizer's own PNG, read back from the artifact");
+
+	// The artifact draws that image where the layout placed it: the letterhead's own left edge and top, sized to the box the layout reserved, and before the wordmark it stands beside.
+	const layout = buildInvoicePages(buildInvoiceViewModel(invoice, "2026-10-03"), METRICS, raster);
+	const op = layout[0].ops.find((entry) => entry.kind === "image");
+	assert.ok(op !== undefined, "the layout places the icon in the letterhead");
+	assert.equal(layout[0].ops[0], op, "the icon is the first thing the letterhead draws");
+	const draw = imageDraw((await contentStreams(bytes))[0]);
+	assertClose(draw.x, op.x, "the artifact draws the icon at the x the layout placed it at");
+	assertClose(draw.y, op.y, "and at the y the layout placed it at");
+	assertClose(draw.width, op.width, "in the width the layout reserved");
+	assertClose(draw.height, op.height, "and the height it reserved");
+	assertClose(op.x, PAGE.marginX, "the icon takes the letterhead's left content edge");
+	assertClose(PAGE.height - (op.y + op.height), PAGE.marginTop, "and its top edge is the letterhead's own top");
+	const brand = layout[0].ops.find((entry) => entry.kind === "text" && entry.text === "Invoicing");
+	assert.ok(brand !== undefined && brand.x >= op.x + op.width, "the wordmark starts after the icon's box rather than under it");
+
+	const plain = await renderInvoicePdf(invoiceFor(), "2026-10-03");
+	assert.equal(imageXObjects(await PDFDocument.load(plain, { updateMetadata: false })).length, 0, "an icon-less invoice embeds no image");
+	const unused = {
+		async rasterize() {
+			throw new Error("the icon-less export must not rasterize");
+		},
+	};
+	assert.deepEqual(await renderInvoicePdf(invoiceFor(), "2026-10-03", unused), plain, "an icon-less export never reaches the rasterizer, and its bytes are the ones it always produced");
+});
+
+test("a rasterizer that fails is a rejection with no PDF bytes behind it", async () => {
+	const failing = {
+		async rasterize() {
+			throw new Error("no canvas");
+		},
+	};
+	await assert.rejects(() => renderInvoicePdf(invoiceFor({ icon: ICON_SVG }), "2026-10-03", failing), /no canvas/);
 });

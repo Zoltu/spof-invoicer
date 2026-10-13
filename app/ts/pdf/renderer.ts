@@ -101,6 +101,15 @@ export type DrawOp =
 			readonly height: number;
 			readonly color: PdfColor;
 			readonly border?: { readonly color: PdfColor; readonly width: number };
+	}
+	| {
+			readonly kind: "image";
+			readonly x: number;
+			readonly y: number;
+			readonly width: number;
+			readonly height: number;
+			/** The icon's PNG bytes, as `pdf/rasterize.ts` produced them; the renderer embeds them and draws the result at this box. */
+			readonly png: Uint8Array;
 	};
 
 /** One page's worth of drawing, in PDF coordinates (origin at the bottom-left). */
@@ -118,6 +127,21 @@ export interface PdfDownloader {
 	createObjectUrl(blob: Blob): string;
 	revokeObjectUrl(url: string): void;
 	save(url: string, fileName: string): void;
+}
+
+/** A rasterized icon: the PNG bytes the document embeds, and the pixel size they were rasterized at. */
+export interface PdfIconRaster {
+	readonly png: Uint8Array;
+	readonly width: number;
+	readonly height: number;
+}
+
+/**
+ * The seam between the export and the browser-only rasterizer, so the renderer is usable where there is no DOM.
+ * The default implementation is the browser's own, imported on the first export that carries an icon; the test suite, which has no canvas, substitutes a raster of its own and reads the drawn runs back out of the exported bytes.
+ */
+export interface IconRasterizer {
+	rasterize(svg: string): Promise<PdfIconRaster>;
 }
 
 const CONTENT_LEFT = PAGE.marginX;
@@ -173,6 +197,9 @@ const GAP = Object.freeze({
 	/** Between the payment terms' column and the symbol drawn beside it. */
 	termsToSymbol: 18,
 });
+
+/** The gap between the letterhead icon's box and the brand mark the icon stands beside, so the payee's mark reads as its own element rather than as part of the wordmark. */
+const LETTERHEAD_ICON_GAP = 12;
 
 /** The type scale, in points; every run of text names one of these. */
 const SIZE = Object.freeze({
@@ -335,11 +362,11 @@ export function wrapText(
 
 /**
  * Lay an invoice out into pages of drawing ops, with pagination resolved: the column header repeats on every page, the totals block stays whole, notes and payment terms flow rather than overflow, and no op leaves the page.
- * Pure — the caller supplies the measurement — so the pagination can be asserted without embedding a font or rendering a byte.
+ * Pure — the caller supplies the measurement and, for an invoice that carries one, the already-rasterized icon — so the pagination can be asserted without embedding a font, rendering a byte, or owning a canvas.
  */
-export function buildInvoicePages(view: InvoiceViewModel, metrics: FontMetrics): readonly PdfPageLayout[] {
+export function buildInvoicePages(view: InvoiceViewModel, metrics: FontMetrics, icon: PdfIconRaster | null = null): readonly PdfPageLayout[] {
 	const flow = new Flow(metrics);
-	drawLetterhead(flow, view);
+	drawLetterhead(flow, view, icon);
 	drawParties(flow, view);
 	drawTableHeader(flow, view.labels);
 	view.lines.forEach((line, index) => drawItemRow(flow, line, index, view.labels));
@@ -352,14 +379,21 @@ export function buildInvoicePages(view: InvoiceViewModel, metrics: FontMetrics):
 
 /**
  * Build the PDF bytes for a validated invoice.
- * No DOM, no clock and no network: the document is created with pdf-lib's automatic metadata stamping off, and every metadata field is written from the invoice itself, so the same invoice always renders to the same bytes.
+ * No clock and no network: the document is created with pdf-lib's automatic metadata stamping off, and every metadata field is written from the invoice itself, so the same invoice always renders to the same bytes.
+ * The one outside dependency is the icon rasterizer, and only an invoice that carries an icon reaches it: the default is the browser's own — `pdf/rasterize.ts`, imported on the first such export — and a caller with no canvas, the test suite included, substitutes its own.
+ * The icon is rasterized before the document is created, so a rasterizer that fails leaves no half-written artifact behind: the export either produces the whole file or reports the error to its caller.
  */
-export async function renderInvoicePdf(invoice: Invoice, today: string): Promise<Uint8Array> {
+export async function renderInvoicePdf(
+	invoice: Invoice,
+	today: string,
+	iconRasterizer: IconRasterizer = browserIconRasterizer,
+): Promise<Uint8Array> {
 	const view = buildInvoiceViewModel(invoice, today);
+	const icon = invoice.icon === undefined ? null : await iconRasterizer.rasterize(invoice.icon);
 	const doc = await PDFDocument.create({ updateMetadata: false });
 	const fonts = await embedFonts(doc);
-	for (const layout of buildInvoicePages(view, metricsFor(fonts))) {
-		drawOps(doc.addPage([PAGE.width, PAGE.height]), layout.ops, fonts);
+	for (const layout of buildInvoicePages(view, metricsFor(fonts), icon)) {
+		await drawOps(doc, doc.addPage([PAGE.width, PAGE.height]), layout.ops, fonts);
 	}
 	doc.setTitle(toPdfText(`Invoice ${view.documentNumber}`));
 	doc.setAuthor(toPdfText(view.from.name));
@@ -396,6 +430,18 @@ export async function renderPdf(invoice: Invoice, today: string, downloader?: Pd
 	const bytes = await renderInvoicePdf(invoice, today);
 	downloadPdf(bytes, invoiceFileName(invoice), downloader);
 }
+
+/**
+ * The default icon rasterizer: the browser-only module, loaded through a dynamic `import()` on the first export that carries an icon.
+ * The dynamic form is what keeps `pdf/rasterize.js` — which needs a DOM and a canvas — out of the module graph every other export and the test suite load.
+ */
+const browserIconRasterizer: IconRasterizer = {
+	async rasterize(svg: string): Promise<PdfIconRaster> {
+		const { rasterizeSvgIcon } = await import("./rasterize.js");
+		const raster = await rasterizeSvgIcon(svg);
+		return { png: raster.bytes, width: raster.width, height: raster.height };
+	},
+};
 
 const browserDownloader: PdfDownloader = {
 	createObjectUrl: (blob) => URL.createObjectURL(blob),
@@ -600,6 +646,12 @@ class Flow {
 			...(border === undefined ? {} : { border }),
 		});
 	}
+
+	/** Draw an embedded image in the box `width` by `height` at `top`; a box that does not clear the floor is dropped rather than clamped, so the mark is never squeezed out of its own proportions. */
+	image(x: number, top: number, width: number, height: number, png: Uint8Array): void {
+		if (!this.clearsFloor(top, height)) return;
+		this.ops.push({ kind: "image", x, y: PAGE.height - top - height, width, height, png });
+	}
 }
 
 interface PartyLine {
@@ -614,13 +666,28 @@ interface PartyBlock {
 	readonly lines: readonly PartyLine[];
 }
 
-function drawLetterhead(flow: Flow, view: InvoiceViewModel): void {
+/**
+ * The letterhead: the payee's own mark when the invoice carries one, the brand mark, the wordmark and tagline, the document kind and number, and the status badge, closed by the heavy rule.
+ *
+ * The icon takes the letterhead's left edge and everything the brand draws shifts right past it, mirroring the on-screen letterhead's own order; its box is the wordmark block's height, so the mark stands as tall as the name beside it and the block grows no taller.
+ * An invoice with no icon draws exactly what it drew before: no box is reserved, and the brand starts at the content edge.
+ */
+function drawLetterhead(flow: Flow, view: InvoiceViewModel, icon: PdfIconRaster | null): void {
 	const top = flow.top;
+	const brandHeight = leading(SIZE.brand) + leading(SIZE.tagline);
+	const metaHeight = leading(SIZE.kind) + leading(SIZE.documentNumber) + 3 + 16;
 
-	flow.fill(CONTENT_LEFT, top + 1, 11, 11, PALETTE.accent);
-	flow.text(CONTENT_LEFT + 18, top, view.labels.brand, SIZE.brand, "sansBold", PALETTE.ink);
+	let markLeft = CONTENT_LEFT;
+	if (icon !== null) {
+		const box = fitIconBox(icon, brandHeight);
+		flow.image(CONTENT_LEFT, top + (brandHeight - box.height) / 2, box.width, box.height, icon.png);
+		markLeft += box.width + LETTERHEAD_ICON_GAP;
+	}
+
+	flow.fill(markLeft, top + 1, 11, 11, PALETTE.accent);
+	flow.text(markLeft + 18, top, view.labels.brand, SIZE.brand, "sansBold", PALETTE.ink);
 	flow.text(
-		CONTENT_LEFT + 18,
+		markLeft + 18,
 		top + leading(SIZE.brand),
 		view.labels.tagline.toUpperCase(),
 		SIZE.tagline,
@@ -649,11 +716,18 @@ function drawLetterhead(flow: Flow, view: InvoiceViewModel): void {
 	});
 	flow.textRight(CONTENT_RIGHT - 9, centerTop(badgeTop, 16, SIZE.status), label, SIZE.status, "sansBold", status.ink);
 
-	const brandHeight = leading(SIZE.brand) + leading(SIZE.tagline);
-	const metaHeight = leading(SIZE.kind) + leading(SIZE.documentNumber) + 3 + 16;
 	flow.advance(Math.max(brandHeight, metaHeight) + GAP.letterheadToRule);
 	flow.rule(flow.top, CONTENT_LEFT, CONTENT_RIGHT, 2, PALETTE.ink);
 	flow.advance(GAP.afterSectionRule);
+}
+
+/**
+ * The box the letterhead icon is drawn in: the raster's own aspect ratio fitted inside a `side`-point square.
+ * The raster carries the icon's own pixels, so this box is the only size the document imposes on it, and fitting rather than stretching keeps a non-square mark's proportions — what the on-screen `object-fit: contain` does for the same image.
+ */
+function fitIconBox(icon: PdfIconRaster, side: number): { readonly width: number; readonly height: number } {
+	const scale = Math.min(side / icon.width, side / icon.height);
+	return { width: icon.width * scale, height: icon.height * scale };
 }
 
 function drawParties(flow: Flow, view: InvoiceViewModel): void {
@@ -1001,7 +1075,11 @@ function metricsFor(fonts: Record<PdfFontRole, PDFFont>): FontMetrics {
 	return { widthOfText: (text, size, font) => fonts[font].widthOfTextAtSize(text, size) };
 }
 
-function drawOps(page: PDFPage, ops: readonly DrawOp[], fonts: Record<PdfFontRole, PDFFont>): void {
+/**
+ * Draw one page's ops onto a pdf-lib page.
+ * Asynchronous because an image op is embedded as it is drawn — `embedPng` hands back the image's promise — and an image op exists only where the layout placed one, so a document with no icon awaits nothing new.
+ */
+async function drawOps(doc: PDFDocument, page: PDFPage, ops: readonly DrawOp[], fonts: Record<PdfFontRole, PDFFont>): Promise<void> {
 	for (const op of ops) {
 		switch (op.kind) {
 			case "text":
@@ -1029,6 +1107,11 @@ function drawOps(page: PDFPage, ops: readonly DrawOp[], fonts: Record<PdfFontRol
 					...(op.border === undefined ? {} : { borderColor: op.border.color, borderWidth: op.border.width }),
 				});
 				break;
+			case "image": {
+				const image = await doc.embedPng(op.png);
+				page.drawImage(image, { x: op.x, y: op.y, width: op.width, height: op.height });
+				break;
+			}
 		}
 	}
 }
