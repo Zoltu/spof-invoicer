@@ -84,6 +84,7 @@ function bytesToJson(bytes) {
  * The canonical JSON text of a validated invoice: fixed key order, no whitespace, absent optional fields omitted.
  * This is the wire form; changing it changes the format, so it is pinned by a test.
  * Items and the tax carry the canonical numeric spellings {@link validateInvoice} stored, so this emits exactly the one encoding the decoder accepts.
+ * The optional icon is written last, after `notes`, and carries the NFC-composed text {@link validateInvoice} stored, so an icon is transported verbatim and an icon-less invoice keeps the payload it had before the field existed.
  */
 export function serializeInvoice(invoice) {
     return JSON.stringify({
@@ -108,6 +109,7 @@ export function serializeInvoice(invoice) {
         })),
         ...(invoice.tax === undefined ? {} : { tax: { label: invoice.tax.label, rate: invoice.tax.rate } }),
         ...(invoice.notes === undefined ? {} : { notes: invoice.notes }),
+        ...(invoice.icon === undefined ? {} : { icon: invoice.icon }),
     });
 }
 /**

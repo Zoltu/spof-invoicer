@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { UINT256_MAX } from "../app/js/util/decimal.js";
 import { base32nopad, utf8 } from "../app/js/util/encoding.js";
+import { MAX_ICON_SVG_BYTES } from "../app/js/invoice/icon.js";
 import {
 	INVOICE_KIND,
 	INVOICE_VERSION,
@@ -73,6 +74,22 @@ function rejects(label, run, errorType, pattern) {
 	);
 }
 
+/** Refuse `run` and return the `InvalidInvoiceError` it raised under the icon path, so a case can read the field and the cause. */
+function iconRefusal(label, run) {
+	let refusal = null;
+	try {
+		run();
+	} catch (error) {
+		refusal = error;
+	}
+	assert.ok(
+		refusal instanceof InvalidInvoiceError,
+		`${label}: expected an InvalidInvoiceError, got ${refusal?.name}: ${refusal?.message}`,
+	);
+	assert.equal(refusal.path, "icon", `${label}: the refusal names the icon field`);
+	return refusal;
+}
+
 const MINIMAL = make();
 const RICH = make({
 	id: "INV-2026-0042",
@@ -93,6 +110,12 @@ const RICH = make({
 });
 
 const GOLDEN_JSON = "{\"v\":1,\"t\":\"invoice\",\"id\":\"INV-0001\",\"issued\":\"2026-10-03\",\"payee\":{\"name\":\"Studio Example\",\"address\":\"0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\"},\"chainId\":\"0x1\",\"asset\":\"usdc\",\"items\":[{\"description\":\"Design work\",\"quantity\":\"2\",\"unitPrice\":\"150\"}]}";
+
+/** A valid icon for the share tests: a 32×32 document the icon gate accepts. */
+const ICON = '<svg width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="12" fill="#c00"/></svg>';
+/** The same document with a precomposed label, and its NFD spelling, so a payload can carry a spelling validation has to compose. */
+const ICON_NFC = '<svg width="32" height="32" data-label="caf\u00e9"><rect width="32" height="32"/></svg>';
+const ICON_NFD = '<svg width="32" height="32" data-label="cafe\u0301"><rect width="32" height="32"/></svg>';
 
 test("createInvoice fills the version and kind and canonicalizes the payee address", () => {
 	assert.equal(MINIMAL.v, INVOICE_VERSION);
@@ -759,6 +782,84 @@ test("text is normalized to NFC, so an NFD spelling is not canonical", () => {
 	);
 	const nfdJson = serializeInvoice(make({ payee: { name: nfc, address: PAYEE } })).replace(nfc, nfd);
 	rejects("an NFD payload", () => decodeInvoice(b32(nfdJson)), ShareFormatError, /not in the canonical form/);
+});
+
+test("an optional icon round-trips through the share containers", () => {
+	const invoice = make({ icon: ICON, notes: "Thanks!" });
+	assert.equal(invoice.icon, ICON, "the validated text is stored as it was read");
+	assert.ok(Object.isFrozen(invoice), "an invoice carrying an icon is frozen like any other");
+	assert.match(serializeInvoice(invoice), /"notes":"Thanks!","icon":"<svg/, "the icon is written last, after notes");
+	for (const [label, container] of [
+		["the fragment payload", encodeInvoice(invoice)],
+		["the base32 blob", encodeInvoiceBlob(invoice)],
+		["the full fragment", `${SHARE_FRAGMENT_PREFIX}${encodeInvoice(invoice)}`],
+	]) {
+		assert.deepEqual(decodeShare(container), invoice, label);
+	}
+	assert.deepEqual(decodeInvoiceBlob(encodeInvoiceBlob(invoice)), invoice, "the blob decoder returns the same invoice");
+	assert.equal(
+		encodeInvoice(decodeInvoice(encodeInvoice(invoice))),
+		encodeInvoice(invoice),
+		"and the payload re-encodes byte for byte",
+	);
+});
+
+test("an icon-less invoice keeps the payload it had before the field existed", () => {
+	assert.equal(serializeInvoice(MINIMAL), GOLDEN_JSON);
+	assert.equal(serializeInvoice(MINIMAL).includes('"icon"'), false, "an absent icon is not written");
+	assert.equal(serializeInvoice(RICH).includes('"icon"'), false, "and a richer icon-less invoice writes none either");
+	assert.equal(decodeInvoice(encodeInvoice(MINIMAL)).icon, undefined, "a decoded invoice carries no icon key");
+});
+
+test("an icon is validated as it is read, under the icon path", () => {
+	const overCap = `<svg width="64" height="64">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
+	const cases = [
+		["an over-cap icon", overCap, "InvalidIconError", /must be 1 to 8192 bytes of UTF-8/],
+		["a script-bearing icon", '<svg width="32" height="32"><script>alert(1)</script></svg>', "InvalidIconError", /must not contain a <script> element/],
+		["an icon with trailing whitespace", `${ICON} `, "InvalidIconError", /must not start or end with whitespace/],
+		["a null icon", null, "TypeError", /expected an SVG string, got null/],
+		["a numeric icon", 42, "TypeError", /expected an SVG string, got 42/],
+	];
+	for (const [label, value, cause, pattern] of cases) {
+		const refusal = iconRefusal(label, () => make({ icon: value }));
+		assert.equal(refusal.cause?.name, cause, `${label}: the gate's own error travels as the cause`);
+		assert.match(refusal.message, pattern, label);
+	}
+	assert.equal(make({ icon: ICON }).icon, ICON, "a well-formed icon is accepted");
+});
+
+test("a payload whose icon is not the canonical text is refused", () => {
+	const encoded = JSON.stringify(ICON_NFC);
+	const json = serializeInvoice(make({ icon: ICON_NFC }));
+	assert.ok(json.includes(encoded), "the fixture carries the icon as the encoder wrote it");
+	assert.equal(make({ icon: ICON_NFD }).icon, ICON_NFC, "validation composes an NFD icon to NFC");
+
+	rejects(
+		"an NFD icon",
+		() => decodeInvoice(b32(json.replace(encoded, JSON.stringify(ICON_NFD)))),
+		ShareFormatError,
+		/not in the canonical form/,
+	);
+	rejects(
+		"an icon with trailing whitespace",
+		() => decodeInvoice(b32(json.replace(encoded, JSON.stringify(`${ICON_NFC} `)))),
+		InvalidInvoiceError,
+		/icon: /,
+	);
+
+	const withNotes = serializeInvoice(make({ icon: ICON_NFC, notes: "note" }));
+	const reordered = withNotes.replace(`"notes":"note","icon":${encoded}`, `"icon":${encoded},"notes":"note"`);
+	assert.notEqual(reordered, withNotes, "the fixture really writes the icon before notes");
+	rejects(
+		"an icon written before notes",
+		() => decodeInvoice(b32(reordered)),
+		ShareFormatError,
+		/not in the canonical form/,
+	);
+
+	const nullIcon = serializeInvoice(MINIMAL).replace('{"v":1', '{"icon":null,"v":1');
+	const refusal = iconRefusal("a null icon in a payload", () => decodeInvoice(b32(nullIcon)));
+	assert.match(refusal.message, /expected an SVG string/);
 });
 
 test("compact invoices fit the share string and oversized ones are refused", () => {

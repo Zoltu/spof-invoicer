@@ -1,9 +1,10 @@
 /**
  * The invoice model.
  *
- * An {@link Invoice} is the wire object and nothing more: an id, dates, the parties, the asset, the line items, an optional tax and free text.
+ * An {@link Invoice} is the wire object and nothing more: an id, dates, the parties, the asset, the line items, an optional tax, an optional icon and free text.
  * Totals are never transported — {@link computeTotals} derives them from the invoice's own inputs, so a share string cannot smuggle in a total that disagrees with its own lines.
  * {@link validateInvoice} checks every field of an untrusted parsed object and fails closed with a field path; {@link createInvoice} is the same validation for an object built in memory.
+ * The optional icon is the one field whose rules live outside this module: `invoice/icon.ts` bounds and canonicalizes it, and {@link validateInvoice} reads that gate's refusal under the `icon` path.
  *
  * Text is normalized to Unicode NFC as it is validated, so one visible string has a single encoded form and an NFD spelling of a name is not a second, equally valid spelling of the same invoice.
  * Invisible and direction-formatting characters (zero-width spaces, bidi marks and overrides, the soft hyphen, the byte-order mark, and other default-ignorable formatting) are refused, a single-line field also refuses the Unicode line and paragraph separators, and the C1 control block is refused alongside the C0 controls, so a stored name or id cannot be made to render differently from how it reads.
@@ -21,6 +22,7 @@ import { UINT256_MAX, canonicalAmount, fractionalDigits, fromBaseUnits, toBaseUn
 import { boundMessage, describe, messageOf, preview } from "../util/errors.js";
 import { INVISIBLE_FORMATTING, LONE_SURROGATE, MULTI_LINE_CONTROL, SINGLE_LINE_CONTROL } from "../util/text.js";
 import { requirePayoutAddress } from "../wallet/payout-address.js";
+import { validateIcon } from "./icon.js";
 /** The only invoice schema version this build writes and reads. */
 export const INVOICE_VERSION = 1;
 /** The payload kind, so a decoded object says what it is next to its version. */
@@ -46,7 +48,7 @@ export const TAX_RATE_DECIMALS = 6;
 /**
  * Raised by {@link validateInvoice} for a field that is missing, mis-shaped, or out of range; `path` names the offending field.
  *
- * A refusal this module wraps from another validator — a payout address, a money input — is kept as the error's own `cause`, so a surface above the model can classify the refusal by the class that raised it rather than by reading the message it was worded into.
+ * A refusal this module wraps from another validator — a payout address, a money input, an icon — is kept as the error's own `cause`, so a surface above the model can classify the refusal by the class that raised it rather than by reading the message it was worded into.
  */
 export class InvalidInvoiceError extends Error {
     /** The offending field, e.g. `payee.address` or `items[0].quantity`. Empty for the root object. */
@@ -77,6 +79,7 @@ const INVOICE_FIELDS = [
     "items",
     "tax",
     "notes",
+    "icon",
 ];
 const PAYEE_FIELDS = ["name", "address", "email", "notes"];
 const PAYER_FIELDS = ["name", "email"];
@@ -197,6 +200,20 @@ function chainField(value, path, asset) {
 function payoutAddress(value, path, asset) {
     try {
         return requirePayoutAddress(value, asset);
+    }
+    catch (error) {
+        throw new InvalidInvoiceError(path, boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX), { cause: error });
+    }
+}
+/**
+ * The optional icon, validated by the icon gate and refused under this field's path.
+ *
+ * The gate owns the rules — the byte cap, the NFC composition, the root `<svg>` dimension bound, and the construct denylist — and its refusal reaches the field this module read the value from, bounded with the same cap the other wrapped messages use, because the message names the rejected value.
+ * The gate's own error travels with it as the `cause`, so a surface that acts on the refusal reads the class the validator raised — an `InvalidIconError` for a malformed document, a `TypeError` for a value that is not text — rather than a wording to match.
+ */
+function iconField(value, path) {
+    try {
+        return validateIcon(value);
     }
     catch (error) {
         throw new InvalidInvoiceError(path, boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX), { cause: error });
@@ -345,6 +362,7 @@ export function computeTotals(invoice) {
  * Optional fields may be absent or `undefined`; both mean the same thing.
  * Dates are compared as `YYYY-MM-DD` strings, which orders identically to the calendar.
  * Text is composed to NFC, invisible formatting is refused, and money fields are folded to their canonical spelling.
+ * An optional icon is read through {@link iconField}, so a decoded invoice carries the canonical text the icon gate returned and an icon this build would not have stored is refused rather than kept.
  * The result is frozen.
  */
 export function validateInvoice(value) {
@@ -375,6 +393,7 @@ export function validateInvoice(value) {
     const items = itemsField(source.items, "items", asset.decimals);
     const tax = source.tax === undefined ? undefined : taxField(source.tax, "tax");
     const notes = source.notes === undefined ? undefined : text(source.notes, "notes", { max: MAX_INVOICE_NOTES_CHARS, multiline: true });
+    const icon = source.icon === undefined ? undefined : iconField(source.icon, "icon");
     const invoice = Object.freeze({
         v: INVOICE_VERSION,
         t: INVOICE_KIND,
@@ -388,6 +407,7 @@ export function validateInvoice(value) {
         items,
         ...(tax === undefined ? {} : { tax }),
         ...(notes === undefined ? {} : { notes }),
+        ...(icon === undefined ? {} : { icon }),
     });
     computeTotals(invoice);
     return invoice;
