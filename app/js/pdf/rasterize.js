@@ -8,22 +8,23 @@
  * It is deliberately kept out of the renderer's static module graph: `pdf/renderer.ts` reaches it through a dynamic `import()` on the first export that carries an icon, so a page — and the test suite, which has no DOM and no canvas — never loads it until an icon actually has to be drawn.
  * The module touches `document` only inside {@link rasterizeSvgIcon}, so importing it costs nothing beyond its own parse.
  */
-import { MAX_ICON_DIMENSION } from "../invoice/icon.js";
-import { svgDataUrl } from "../util/data-url.js";
+import { MAX_ICON_DIMENSION } from "../util/icon-capacity.js";
 /** The media type of the bytes this module produces, and the only one the canvas is asked for. */
 const RASTER_MIME = "image/png";
 /**
- * Rasterize an SVG document to PNG bytes, at the icon's own intrinsic size and never past {@link MAX_ICON_DIMENSION} on an axis.
+ * Rasterize an SVG data URL to PNG bytes, at the icon's own intrinsic size and never past {@link MAX_ICON_DIMENSION} on an axis.
  *
+ * The caller hands over the icon leaf's own {@link SvgDataUrl} — the value `ui/presentation.ts`'s view model armed once — so this module neither builds nor re-encodes one, and the on-screen `<img>` and this module's canvas load one prepared value rather than two spellings of it.
  * The image is fully decoded before it is drawn: `decode()` resolves only once the browser holds the decoded pixels, and drawing an SVG before that — on the `load` event, or straight after setting `src` — yields a blank raster in browsers that rasterize lazily.
  * The raster size is the icon's own: each axis takes the image's `naturalWidth`/`naturalHeight`, floored, and capped at {@link MAX_ICON_DIMENSION}, and an axis that reports no intrinsic size (a `naturalWidth` of 0, or a value that is not finite) falls back to that cap rather than to a size of this module's choosing — so an SVG the validator admitted is rasterized at the size it declares, and one that somehow declares nothing is still bounded by the icon's own dimension cap.
- * The raster is deterministic for a given icon: it is drawn once, into a canvas of the same size, with no clock, no randomness, and no dependence on the page.
+ * The raster's geometry is deterministic for a given icon: it is drawn once, into a canvas of that size, with no clock, no randomness, and no dependence on the page.
+ * The PNG bytes themselves are the browser canvas encoder's own, so two browsers — or two versions of one — are not guaranteed to encode the same pixels to the same bytes.
  *
- * Failure is a rejection carrying the reason — an unencodable or over-cap value from the leaf, a decode the browser refuses, a canvas with no 2d context, or a canvas that produces no blob — so a caller either gets a complete raster or an error it can report, never a blank or half-built image.
+ * Failure is a rejection carrying the reason — a decode the browser refuses, a canvas with no 2d context, or a canvas that produces no blob — so a caller either gets a complete raster or an error it can report, never a blank or half-built image.
  */
-export async function rasterizeSvgIcon(svg) {
+export async function rasterizeSvgIcon(dataUrl) {
     const image = document.createElement("img");
-    image.setAttribute("src", svgDataUrl(svg));
+    image.setAttribute("src", dataUrl);
     await image.decode();
     const width = rasterSide(image.naturalWidth);
     const height = rasterSide(image.naturalHeight);

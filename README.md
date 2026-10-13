@@ -183,11 +183,14 @@ blob        pinv1b-<base32>           standalone, for pasting anywhere
   Money is a decimal string in the asset's own units (`"150.00"`), never a JSON number and never base units; **totals are never transported** — they are recomputed from the line items at both ends.
 - Limits: 64 KiB of JSON, 200 line items, names ≤ 200 chars, descriptions ≤ 500 chars, invoice notes ≤ 2000 chars, an optional icon of at most `MAX_ICON_SVG_BYTES = 8192` UTF-8 bytes whose root `<svg>` element declares a numeric `width` and `height` within `MAX_ICON_DIMENSION = 256` pixels an axis, amounts within `uint256` with at most the asset's decimals and more than zero.
   The invoice payload is deliberately **not compressed** — the codec never runs a compressor, even though the vendored pdf-lib bundle embeds pako's deflate/inflate for its own PDF streams.
+- The share link carries that JSON base32-encoded at about 1.6 characters per byte, so a link is roughly 1.6× the payload it holds and the 64 KiB limit above becomes about 102 KiB of link.
+  The optional `icon` is the largest field a payee can add — up to `MAX_ICON_SVG_BYTES` bytes of JSON, about 13 KB in the link.
 - Base32 is the sole encoding: its encode is a linear, uncapped pass over the bytes, so it scales with the invoice size and the 64 KiB limit above is the format's real cap.
   base58 was considered and rejected because its big-number conversion is quadratic and does not scale.
 
 A share link carries the payload in the URL **fragment**, which browsers never send to a server — so a payee can hand the invoice to a payer through any transport without it reaching a log, a proxy, or the IPFS gateway.
 The trade-off is URL length: chat clients and older browsers truncate long URLs, so a large invoice should be shared as a `pinv1b-` blob instead.
+An icon alone can push a short invoice into that length: it is the largest optional field, and the link carries it at the same 1.6 characters per byte.
 
 ## Supported assets and chains
 

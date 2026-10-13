@@ -676,7 +676,8 @@ test("the renderer references no external resource and no network API", () => {
 	);
 	assert.ok(!/https?:\/\//.test(source), "the renderer must not name an absolute URL");
 	assert.ok(!/<svg/i.test(source), "the letterhead is drawn, not loaded as SVG");
-	assert.ok(!/from\s+"\.\/rasterize\.js"/.test(source), "the browser-only rasterizer is not a static import of the renderer");
+	const valueImports = source.replace(/^import\s+type\b[^;]*;/gm, "");
+	assert.ok(!/from\s+"\.\/rasterize\.js"/.test(valueImports), "the browser-only rasterizer is not a static value import of the renderer, so the DOM module stays out of its emitted graph");
 	assert.match(source, /await import\("\.\/rasterize\.js"\)/, "it is reached through a dynamic import, so it loads only for an export that carries an icon");
 });
 
@@ -1095,7 +1096,7 @@ function imageDraw(stream) {
 test("the rasterizer decodes the icon before drawing it, at the icon's own intrinsic size", async () => {
 	const fixture = installRasterDocument({ naturalWidth: 64, naturalHeight: 32 });
 	try {
-		const raster = await rasterizeSvgIcon(ICON_SVG);
+		const raster = await rasterizeSvgIcon(svgDataUrl(ICON_SVG));
 		assert.equal(fixture.image.attributes.src, svgDataUrl(ICON_SVG), "the image loads the leaf's own data URL, so the canvas is same-origin and never tainted");
 		assert.deepEqual(fixture.created, ["img", "canvas"], "the rasterizer builds an image and a canvas, and nothing else");
 		assert.deepEqual([fixture.canvas.width, fixture.canvas.height], [64, 32], "the canvas takes the icon's own width and height");
@@ -1119,7 +1120,7 @@ test("the rasterizer draws nothing until the image has decoded", async () => {
 	});
 	const fixture = installRasterDocument({ decode: () => decoded });
 	try {
-		const pending = rasterizeSvgIcon(ICON_SVG);
+		const pending = rasterizeSvgIcon(svgDataUrl(ICON_SVG));
 		await Promise.resolve();
 		await Promise.resolve();
 		assert.deepEqual(fixture.drawn, [], "nothing is drawn while the image is still decoding, which is where a blank raster would come from");
@@ -1135,7 +1136,7 @@ test("the rasterizer draws nothing until the image has decoded", async () => {
 test("a raster size the icon does not declare is bounded by the icon's own dimension cap", async () => {
 	const fixture = installRasterDocument({ naturalWidth: 0, naturalHeight: 0 });
 	try {
-		const raster = await rasterizeSvgIcon(ICON_SVG);
+		const raster = await rasterizeSvgIcon(svgDataUrl(ICON_SVG));
 		assert.deepEqual([raster.width, raster.height], [MAX_ICON_DIMENSION, MAX_ICON_DIMENSION], "an image that reports no intrinsic size is rasterized at the validator's own cap");
 		assert.deepEqual([fixture.canvas.width, fixture.canvas.height], [MAX_ICON_DIMENSION, MAX_ICON_DIMENSION], "so the canvas is bounded by the cap rather than by a size of the rasterizer's choosing");
 	} finally {
@@ -1150,7 +1151,7 @@ test("a decode the browser refuses is a rejection, never a blank raster", async 
 		},
 	});
 	try {
-		await assert.rejects(() => rasterizeSvgIcon(ICON_SVG), /decode failed/);
+		await assert.rejects(() => rasterizeSvgIcon(svgDataUrl(ICON_SVG)), /decode failed/);
 		assert.deepEqual(fixture.drawn, [], "nothing is drawn and no raster is returned");
 	} finally {
 		fixture.handle.restore();
@@ -1158,7 +1159,7 @@ test("a decode the browser refuses is a rejection, never a blank raster", async 
 });
 
 test("an icon invoice embeds one image XObject at the letterhead, and an icon-less export never rasterizes", async () => {
-	const raster = { png: ICON_PNG, width: 1, height: 1 };
+	const raster = { bytes: ICON_PNG, width: 1, height: 1 };
 	const asked = [];
 	const rasterizer = {
 		async rasterize(svg) {
@@ -1169,7 +1170,7 @@ test("an icon invoice embeds one image XObject at the letterhead, and an icon-le
 	const invoice = invoiceFor({ icon: ICON_SVG });
 
 	const bytes = await renderInvoicePdf(invoice, "2026-10-03", rasterizer);
-	assert.deepEqual(asked, [ICON_SVG], "the renderer hands the rasterizer the invoice's own icon text");
+	assert.deepEqual(asked, [svgDataUrl(ICON_SVG)], "the renderer hands the rasterizer the view model's prepared data URL");
 	const doc = await PDFDocument.load(bytes, { updateMetadata: false });
 	const images = imageXObjects(doc);
 	assert.equal(images.length, 1, "the icon is embedded exactly once");
@@ -1197,7 +1198,8 @@ test("an icon invoice embeds one image XObject at the letterhead, and an icon-le
 			throw new Error("the icon-less export must not rasterize");
 		},
 	};
-	assert.deepEqual(await renderInvoicePdf(invoiceFor(), "2026-10-03", unused), plain, "an icon-less export never reaches the rasterizer, and its bytes are the ones it always produced");
+	// Byte stability is asserted for the icon-less case alone: an icon invoice embeds the browser canvas encoder's PNG bytes, which two encoders need not produce identically.
+	assert.deepEqual(await renderInvoicePdf(invoiceFor(), "2026-10-03", unused), plain, "an icon-less export never reaches the rasterizer, and it is the case whose bytes are stable, so they are the ones it always produced");
 });
 
 test("a rasterizer that fails is a rejection with no PDF bytes behind it", async () => {

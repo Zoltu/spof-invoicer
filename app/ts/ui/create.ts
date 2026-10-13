@@ -629,7 +629,7 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 			return;
 		}
 		shareSizeNote.textContent = hint.fits
-			? `Encoded size: ${hint.bytes} of ${hint.limit} bytes.`
+			? `Encoded size: ${hint.bytes} of ${hint.limit} bytes of JSON; the share link carries about 1.6 characters per byte, and the optional icon is the largest field.`
 			: `Encoded size: ${hint.bytes} bytes — over the ${hint.limit}-byte share limit. Remove line items or shorten descriptions.`;
 		shareSizeNote.setAttribute("class", hint.fits ? "field-hint share-size" : "field-error share-size");
 	}

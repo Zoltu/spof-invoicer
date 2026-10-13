@@ -18,20 +18,18 @@
  */
 import { utf8ToBytes } from "../util/encoding.js";
 import { preview } from "../util/errors.js";
-import { MAX_ICON_SVG_BYTES } from "../util/icon-capacity.js";
+import { MAX_ICON_DIMENSION, MAX_ICON_SVG_BYTES } from "../util/icon-capacity.js";
 import { INVISIBLE_FORMATTING, LONE_SURROGATE, MULTI_LINE_CONTROL } from "../util/text.js";
 /**
- * The most bytes of UTF-8 the canonical icon may carry: `util/icon-capacity.ts`'s one statement of the bound, re-exported here under the name this validator's own bound is read by.
+ * The two bounds this gate applies, re-exported from `util/icon-capacity.ts` under the names this validator's own bounds are read by: the UTF-8 byte cap and the per-axis dimension cap.
  */
-export { MAX_ICON_SVG_BYTES };
+export { MAX_ICON_DIMENSION, MAX_ICON_SVG_BYTES };
 /**
  * How many code units the raw, not-yet-composed spelling may carry before the validator refuses it without composing.
  *
  * Composition is the first unbounded step, so a caller that hands this gate a multi-megabyte string must be turned back before it; the room is generous enough that the longest canonical decomposition of a within-cap document is never refused, since a canonical decomposition is at most a small multiple of the code points it decomposes.
  */
 const MAX_RAW_ICON_CODE_UNITS = MAX_ICON_SVG_BYTES * 8;
-/** The largest `width` or `height` an icon's root `<svg>` element may declare; a document declaring a larger intrinsic size is refused rather than silently downscaled by the rasterizer. */
-export const MAX_ICON_DIMENSION = 256;
 /** The largest area an icon's root `<svg>` element may declare, in pixels: {@link MAX_ICON_DIMENSION} squared, so the two caps bound one and the same corner and the area check states a bound the dimension cap already implies rather than narrowing it. */
 export const MAX_ICON_PIXELS = MAX_ICON_DIMENSION * MAX_ICON_DIMENSION;
 /**

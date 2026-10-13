@@ -614,6 +614,20 @@ test("the invoice letterhead uses the local logo image", () => {
 	);
 });
 
+test("the create form's icon preview is a fixed box with the image fitted inside it", () => {
+	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
+	assert.match(
+		appCss,
+		/\.icon-preview-slot \{\n\tdisplay: flex;\n\twidth: 3rem;\n\theight: 3rem;\n\}/,
+		"the preview slot is a bounded box whatever size the icon file declares",
+	);
+	assert.match(
+		appCss,
+		/\.icon-preview \{\n\twidth: 100%;\n\theight: 100%;\n\tobject-fit: contain;\n\}/,
+		"and the preview is scaled to fit inside it rather than rendered at the file's own size",
+	);
+});
+
 test("print.css gates itself to print and keeps the document whole", () => {
 	const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
 	assert.match(printCss, /@media print/);

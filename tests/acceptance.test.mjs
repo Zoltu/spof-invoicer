@@ -351,14 +351,14 @@ function isSanctionedDataUrlStatement(hit) {
 /**
  * The whole allow-list for the raw `src`-setter sweep, each site named with the justification that exempts it.
  *
- * `h()` is the app's only builder, so a literal `setAttribute("src", …)` is a second route to an image sink that bypasses its allow-list entirely; the sweep reports one anywhere in the runtime, and the exemption admits it only in the two files that own an image sink and only when the value handed over is the leaf's own builder.
- * `util/dom.ts` sets attributes from its checked bag rather than from a literal name, and `pdf/rasterize.ts` is the browser-only rasterizer's own `<img>`; a literal setter in either that does not hand the leaf's builder to the attribute is still reported, and so is one in any other file.
+ * `h()` is the app's only builder, so a literal `setAttribute("src", …)` is a second route to an image sink that bypasses its allow-list entirely; the sweep reports one anywhere in the runtime, and the exemption admits it only in the two files that own an image sink and only when the value handed over is the icon leaf's own.
+ * `util/dom.ts` sets attributes from its checked bag rather than from a literal name, and `pdf/rasterize.ts` is the browser-only rasterizer's own `<img>`, whose `dataUrl` parameter is the branded `SvgDataUrl` the view model armed once; a literal setter in either that hands over anything else is still reported, and so is one in any other file.
  */
 const SRC_SETTER_SITES = new Set(["app/ts/util/dom.ts", "app/js/util/dom.js", "app/ts/pdf/rasterize.ts", "app/js/pdf/rasterize.js"]);
 /** A raw `setAttribute("src", …)` call, in any casing. */
 const RAW_SRC_SETTER = /\bsetAttribute\s*\(\s*["'`]src["'`]/i;
-/** The one value a sanctioned setter may hand the attribute: the icon leaf's own builder. */
-const SANCTIONED_SRC_SETTER_VALUE = /\bsetAttribute\s*\(\s*["'`]src["'`]\s*,\s*svgDataUrl\s*\(/;
+/** The values a sanctioned setter may hand the attribute: the icon leaf's own builder, or the rasterizer's branded `SvgDataUrl` parameter. */
+const SANCTIONED_SRC_SETTER_VALUE = /\bsetAttribute\s*\(\s*["'`]src["'`]\s*,\s*(?:svgDataUrl\s*\(|dataUrl\s*\))/;
 function isSanctionedSrcSetter(hit) {
 	return SRC_SETTER_SITES.has(hit.file) && SANCTIONED_SRC_SETTER_VALUE.test(hit.text);
 }
@@ -937,6 +937,10 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 		"the rasterizer's own sink is exempt when it hands the leaf's builder to the attribute",
 	);
 	assert.ok(
+		isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", dataUrl);' }),
+		"and when it hands over the branded data URL the view model armed, which is the value the seam carries",
+	);
+	assert.ok(
 		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", url);' }),
 		"and not when it hands over anything else",
 	);
@@ -1202,9 +1206,9 @@ test("an icon chosen in the create form reaches the shared page's letterhead and
 	// The browser's canvas is the one dependency this path needs and the suite has none, so the rasterizer is substituted through its seam and the PNG it returns is a real 1 by 1 image the artifact parses.
 	const asked = [];
 	const rasterizer = {
-		async rasterize(svg) {
-			asked.push(svg);
-			return { png: ICON_PNG, width: 1, height: 1 };
+		async rasterize(dataUrl) {
+			asked.push(dataUrl);
+			return { bytes: ICON_PNG, width: 1, height: 1 };
 		},
 	};
 	let exported = null;
@@ -1244,7 +1248,7 @@ test("an icon chosen in the create form reaches the shared page's letterhead and
 		findButton(shell.content, "Save as PDF").dispatch("click", { type: "click" });
 		await waitFor(() => saved.length > 0 || shell.notice.children.length > 0, 400);
 		assert.equal(shell.notice.children.length, 0, "a successful export shows no notice");
-		assert.deepEqual(asked, [ICON_SVG], "the export hands the rasterizer the icon text the form chose");
+		assert.deepEqual(asked, [svgDataUrl(ICON_SVG)], "the export hands the rasterizer the view model's prepared data URL");
 		assert.equal(exported.icon, ICON_SVG, "and the invoice it exports is the one the shared link carried");
 		assert.deepEqual(saved, [["blob:icon-1", "invoice-INV-20261003.pdf"]], "the download is the invoice's own file");
 		assert.equal(blobs.length, 1, "the export produced exactly one file");
@@ -1262,7 +1266,7 @@ test("an icon chosen in the create form reaches the shared page's letterhead and
 		const images = imageXObjects(opened);
 		assert.equal(images.length, 1, "the icon is embedded exactly once");
 		assert.deepEqual([images[0].width, images[0].height], [1, 1], "and it is the rasterizer's own PNG, read back from the artifact");
-		const pages = buildInvoicePages(buildInvoiceViewModel(exported, TODAY), PDF_METRICS, { png: ICON_PNG, width: 1, height: 1 });
+		const pages = buildInvoicePages(buildInvoiceViewModel(exported, TODAY), PDF_METRICS, { bytes: ICON_PNG, width: 1, height: 1 });
 		assert.equal(pages.length, opened.getPageCount(), "the layout paginates exactly as the exported file does");
 		assert.equal(pages[0].ops[0].kind, "image", "the icon is the first thing the letterhead draws");
 		assert.deepEqual(pages[0].ops[0].png, ICON_PNG, "drawn from the raster the rasterizer returned");

@@ -232,6 +232,26 @@ textarea:disabled {
 	width: auto;
 }
 
+/*
+ * The create form's icon preview: a fixed box whatever size the chosen file declares, so a 256×256 mark and a 1×1 one both confirm the choice in the same space.
+ * The slot collapses while it holds no icon, so an empty field shows no blank frame, and the preview is fitted inside the box rather than stretched to it.
+ */
+.icon-preview-slot {
+	display: flex;
+	width: 3rem;
+	height: 3rem;
+}
+
+.icon-preview-slot:empty {
+	display: none;
+}
+
+.icon-preview {
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+
 .field-hint {
 	margin: 0;
 	font-size: 0.8125rem;

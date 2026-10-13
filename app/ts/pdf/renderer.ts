@@ -43,7 +43,9 @@ import {
 	type InvoicePaymentTermView,
 	type InvoiceViewModel,
 } from "../ui/presentation.js";
+import type { SvgDataUrl } from "../util/data-url.js";
 import type { QrMatrix } from "../util/qr.js";
+import type { IconRaster } from "./rasterize.js";
 
 /** The media type the exported artifact's download blob carries. */
 export const PDF_MIME = "application/pdf";
@@ -129,19 +131,12 @@ export interface PdfDownloader {
 	save(url: string, fileName: string): void;
 }
 
-/** A rasterized icon: the PNG bytes the document embeds, and the pixel size they were rasterized at. */
-export interface PdfIconRaster {
-	readonly png: Uint8Array;
-	readonly width: number;
-	readonly height: number;
-}
-
 /**
  * The seam between the export and the browser-only rasterizer, so the renderer is usable where there is no DOM.
  * The default implementation is the browser's own, imported on the first export that carries an icon; the test suite, which has no canvas, substitutes a raster of its own and reads the drawn runs back out of the exported bytes.
  */
 export interface IconRasterizer {
-	rasterize(svg: string): Promise<PdfIconRaster>;
+	rasterize(dataUrl: SvgDataUrl): Promise<IconRaster>;
 }
 
 const CONTENT_LEFT = PAGE.marginX;
@@ -364,7 +359,7 @@ export function wrapText(
  * Lay an invoice out into pages of drawing ops, with pagination resolved: the column header repeats on every page, the totals block stays whole, notes and payment terms flow rather than overflow, and no op leaves the page.
  * Pure — the caller supplies the measurement and, for an invoice that carries one, the already-rasterized icon — so the pagination can be asserted without embedding a font, rendering a byte, or owning a canvas.
  */
-export function buildInvoicePages(view: InvoiceViewModel, metrics: FontMetrics, icon: PdfIconRaster | null = null): readonly PdfPageLayout[] {
+export function buildInvoicePages(view: InvoiceViewModel, metrics: FontMetrics, icon: IconRaster | null = null): readonly PdfPageLayout[] {
 	const flow = new Flow(metrics);
 	drawLetterhead(flow, view, icon);
 	drawParties(flow, view);
@@ -379,8 +374,10 @@ export function buildInvoicePages(view: InvoiceViewModel, metrics: FontMetrics, 
 
 /**
  * Build the PDF bytes for a validated invoice.
- * No clock and no network: the document is created with pdf-lib's automatic metadata stamping off, and every metadata field is written from the invoice itself, so the same invoice always renders to the same bytes.
+ * No clock and no network: the document is created with pdf-lib's automatic metadata stamping off, and every metadata field is written from the invoice itself, so an icon-less invoice always renders to the same bytes.
+ * An invoice that carries an icon embeds the browser canvas encoder's own PNG bytes, so its bytes are reproducible for one rasterizer but not guaranteed identical across browsers or versions.
  * The one outside dependency is the icon rasterizer, and only an invoice that carries an icon reaches it: the default is the browser's own — `pdf/rasterize.ts`, imported on the first such export — and a caller with no canvas, the test suite included, substitutes its own.
+ * The value it is handed is the view model's own prepared data URL, the same one the on-screen document loads, so the icon is armed once rather than rebuilt here.
  * The icon is rasterized before the document is created, so a rasterizer that fails leaves no half-written artifact behind: the export either produces the whole file or reports the error to its caller.
  */
 export async function renderInvoicePdf(
@@ -389,7 +386,7 @@ export async function renderInvoicePdf(
 	iconRasterizer: IconRasterizer = browserIconRasterizer,
 ): Promise<Uint8Array> {
 	const view = buildInvoiceViewModel(invoice, today);
-	const icon = invoice.icon === undefined ? null : await iconRasterizer.rasterize(invoice.icon);
+	const icon = view.iconDataUrl === null ? null : await iconRasterizer.rasterize(view.iconDataUrl);
 	const doc = await PDFDocument.create({ updateMetadata: false });
 	const fonts = await embedFonts(doc);
 	for (const layout of buildInvoicePages(view, metricsFor(fonts), icon)) {
@@ -436,10 +433,9 @@ export async function renderPdf(invoice: Invoice, today: string, downloader?: Pd
  * The dynamic form is what keeps `pdf/rasterize.js` — which needs a DOM and a canvas — out of the module graph every other export and the test suite load.
  */
 const browserIconRasterizer: IconRasterizer = {
-	async rasterize(svg: string): Promise<PdfIconRaster> {
+	async rasterize(dataUrl: SvgDataUrl): Promise<IconRaster> {
 		const { rasterizeSvgIcon } = await import("./rasterize.js");
-		const raster = await rasterizeSvgIcon(svg);
-		return { png: raster.bytes, width: raster.width, height: raster.height };
+		return rasterizeSvgIcon(dataUrl);
 	},
 };
 
@@ -672,7 +668,7 @@ interface PartyBlock {
  * The icon takes the letterhead's left edge and everything the brand draws shifts right past it, mirroring the on-screen letterhead's own order; its box is the wordmark block's height, so the mark stands as tall as the name beside it and the block grows no taller.
  * An invoice with no icon draws exactly what it drew before: no box is reserved, and the brand starts at the content edge.
  */
-function drawLetterhead(flow: Flow, view: InvoiceViewModel, icon: PdfIconRaster | null): void {
+function drawLetterhead(flow: Flow, view: InvoiceViewModel, icon: IconRaster | null): void {
 	const top = flow.top;
 	const brandHeight = leading(SIZE.brand) + leading(SIZE.tagline);
 	const metaHeight = leading(SIZE.kind) + leading(SIZE.documentNumber) + 3 + 16;
@@ -680,7 +676,7 @@ function drawLetterhead(flow: Flow, view: InvoiceViewModel, icon: PdfIconRaster 
 	let markLeft = CONTENT_LEFT;
 	if (icon !== null) {
 		const box = fitIconBox(icon, brandHeight);
-		flow.image(CONTENT_LEFT, top + (brandHeight - box.height) / 2, box.width, box.height, icon.png);
+		flow.image(CONTENT_LEFT, top + (brandHeight - box.height) / 2, box.width, box.height, icon.bytes);
 		markLeft += box.width + LETTERHEAD_ICON_GAP;
 	}
 
@@ -725,7 +721,7 @@ function drawLetterhead(flow: Flow, view: InvoiceViewModel, icon: PdfIconRaster 
  * The box the letterhead icon is drawn in: the raster's own aspect ratio fitted inside a `side`-point square.
  * The raster carries the icon's own pixels, so this box is the only size the document imposes on it, and fitting rather than stretching keeps a non-square mark's proportions — what the on-screen `object-fit: contain` does for the same image.
  */
-function fitIconBox(icon: PdfIconRaster, side: number): { readonly width: number; readonly height: number } {
+function fitIconBox(icon: IconRaster, side: number): { readonly width: number; readonly height: number } {
 	const scale = Math.min(side / icon.width, side / icon.height);
 	return { width: icon.width * scale, height: icon.height * scale };
 }
