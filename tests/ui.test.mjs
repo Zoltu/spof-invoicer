@@ -758,6 +758,21 @@ test("the create form follows the selected asset's family in the payout-address 
 	}
 });
 
+test("the create form places the asset selection before the payout-address field", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const controls = findAll(view, (node) => node.tagName === "select" || node.tagName === "input");
+		const assetAt = controls.findIndex((node) => node.attributes.name === "asset");
+		const addressAt = controls.findIndex((node) => node.attributes.name === "payeeAddress");
+		assert.notEqual(assetAt, -1, "the form carries an asset selection");
+		assert.notEqual(addressAt, -1, "the form carries a payout-address field");
+		assert.ok(assetAt < addressAt, `the asset selection precedes the address field (asset at ${assetAt}, address at ${addressAt})`);
+	} finally {
+		fake.restore();
+	}
+});
+
 test("the payout-address placeholder is read by own property and fails closed", () => {
 	// A plain object literal resolves through `Object.prototype`, so a family name that collides with an inherited member would otherwise yield a function rather than a placeholder; the field then shows no placeholder at all.
 	for (const family of ["constructor", "toString", "hasOwnProperty", "bitcoin", ""]) {

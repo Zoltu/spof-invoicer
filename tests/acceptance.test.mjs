@@ -83,8 +83,19 @@ const NETWORK_APIS = /\b(fetch|XMLHttpRequest|WebSocket|EventSource|WebTransport
 const STORAGE_APIS = /\b(localStorage|sessionStorage|indexedDB|history)\b|\bwindow\s*\.\s*name\b|\bdocument\s*\.\s*cookie\b/;
 // The markup and script sinks, plus the DOM, import, and navigation routes to executable script: a `document.createElement(...)` call, whatever tag it is handed — a variable tag can become `<script>`, and a literal one is exempt only through the allow-list below — a computed `import()`, `window.open`, and a `location` assignment are each such a route, so the sweep names them beside the literal sinks that build or load a `<script>`.
 const MARKUP_SINKS = /\b(innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval|new Function|createContextualFragment)\b|createElement\s*\(\s*["'`]script["'`]|\bh\s*\(\s*["'`]script["'`]|\bscript\s*\.\s*textContent\s*=|\bdocument\s*\.\s*createElement\s*\(|\bimport\s*\(\s*[^"'`\s)]|\bwindow\s*\.\s*open\s*\(|\blocation\s*\.\s*(?:assign|replace)\s*\(|\blocation\s*\.\s*href\s*=/;
-// A direct `src` assignment and a script-bearing URL scheme in a string literal. Swept over the app's own runtime only: the vendored pdf-lib bundle legitimately sets `this.src` and builds `data:` URIs, so neither is a vendored-code sink.
-const SCRIPT_URL_VECTORS = /\.\s*src\s*=|["'`](?:javascript|data|vbscript|blob|file):/i;
+/** The one flag set every vector pattern is built with, so the composed sweep and the two patterns it is built from cannot disagree on case. */
+const VECTOR_FLAGS = "i";
+/** A direct `src` assignment, one of the two vectors the script-URL sweep below names. */
+const SRC_ASSIGNMENT = new RegExp("\\.\\s*src\\s*=", VECTOR_FLAGS);
+/**
+ * A script-bearing URL scheme in a string literal: `javascript:`, `data:`, `vbscript:`, `blob:`, or `file:` right after a quote or backtick.
+ *
+ * The list is the single source of truth for every scheme the script-URL sweep refuses, so a scheme added here reaches the script-URL sweep.
+ * The `data:` exemption below does not consult this pattern: it admits a line only when the whole comment-stripped line equals {@link SANCTIONED_DATA_URL_STATEMENT}, the leaf's declaration of its prefix constant, so renaming that constant drops the exemption rather than moving with it.
+ */
+const URL_SCHEME_LITERAL = new RegExp("[\"'`](?:javascript|data|vbscript|blob|file):", VECTOR_FLAGS);
+// A direct `src` assignment and a script-bearing URL scheme in a string literal, composed from the two patterns above. Swept over the app's own runtime only: the vendored pdf-lib bundle legitimately sets `this.src` and builds `data:` URIs, so neither is a vendored-code sink.
+const SCRIPT_URL_VECTORS = new RegExp(`${SRC_ASSIGNMENT.source}|${URL_SCHEME_LITERAL.source}`, VECTOR_FLAGS);
 
 /** A deterministic half-em stand-in for font metrics; the layout only needs consistent widths. */
 const PDF_METRICS = { widthOfText: (text, size) => text.length * size * 0.5 };
@@ -264,6 +275,21 @@ const SANCTIONED_BUILDER_CALL = /\bdocument\s*\.\s*createElement\s*\(\s*tag\s*\)
 function isSanctionedElementBuilder(hit) {
 	if (ELEMENT_BUILDERS.has(hit.file) && SANCTIONED_BUILDER_CALL.test(hit.text)) return true;
 	return DOWNLOAD_ANCHORS.has(hit.file) && /\bdocument\s*\.\s*createElement\s*\(\s*["'`]a["'`]\s*\)/.test(hit.text);
+}
+
+/**
+ * The whole allow-list for the script-URL sweep: the one runtime file that arms an icon, and the one statement it may spell there.
+ *
+ * `util/data-url.ts` turns a validated SVG into the `data:image/svg+xml;base64,…` URL an image sink loads, so it is the one place the runtime spells a `data:` scheme, and `app/js/util/data-url.js` is the compiled copy of that same statement.
+ * The exemption is content-specific rather than file-wide: it admits exactly the statement that declares the leaf's prefix constant, as {@link isSanctionedElementBuilder} admits exactly the builder's one sanctioned call, so the same literal on any other line of the leaf — a `javascript:`/`vbscript:`/`blob:`/`file:` literal, a second `data:` literal, or a `.src =` assignment — is still reported.
+ */
+const DATA_URL_LEAVES = new Set(["app/ts/util/data-url.ts", "app/js/util/data-url.js"]);
+/** The exact prefix literal the leaf may spell, and the only `data:` spelling any exemption covers. */
+const SANCTIONED_DATA_URL_LITERAL = "data:image/svg+xml;base64,";
+/** The one statement the exemption admits: the leaf's declaration of its own prefix constant, composed from the literal above so the two cannot disagree. */
+const SANCTIONED_DATA_URL_STATEMENT = `const SVG_DATA_URL_PREFIX = "${SANCTIONED_DATA_URL_LITERAL}";`;
+function isSanctionedDataUrlStatement(hit) {
+	return DATA_URL_LEAVES.has(hit.file) && hit.text === SANCTIONED_DATA_URL_STATEMENT;
 }
 
 test("a created invoice survives the share link and its blob container unchanged", () => {
@@ -665,7 +691,11 @@ test("no served runtime module can build markup, evaluate code, or reach the net
 		[],
 		"a runtime file names a markup or script sink",
 	);
-	assert.deepEqual(occurrences(runtime, SCRIPT_URL_VECTORS, { htmlComments: true }), [], "a runtime file assigns a src or carries a script-bearing URL scheme");
+	assert.deepEqual(
+		occurrences(runtime, SCRIPT_URL_VECTORS, { htmlComments: true, except: isSanctionedDataUrlStatement }),
+		[],
+		"a runtime file assigns a src or carries a script-bearing URL scheme",
+	);
 	assert.deepEqual(occurrences(runtime, /https?:\/\//, { htmlComments: true }), [], "a runtime file names an absolute URL");
 	assert.deepEqual(occurrences(runtime, /\.style\b/, { htmlComments: true }), [], "a runtime file styles an element from script");
 });
@@ -681,9 +711,9 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 	for (const vector of vectors) {
 		assert.ok(MARKUP_SINKS.test(vector), `the sweep misses ${vector}`);
 	}
-	assert.ok(SCRIPT_URL_VECTORS.test("el.src = url;"), "the sweep catches a direct src assignment");
-	for (const literal of ["\"javascript:alert(1)\"", "'data:text/html,x'", "\"blob:https://example/x\""]) {
-		assert.ok(SCRIPT_URL_VECTORS.test(literal), `the scheme sweep misses ${literal}`);
+	assert.ok(SCRIPT_URL_VECTORS.test("el.src = url;"), "the script-URL sweep catches a direct src assignment");
+	for (const literal of ["\"javascript:alert(1)\"", "'data:text/html,x'", "\"vbscript:msgbox(1)\"", "\"blob:https://example/x\"", "'file:///etc/passwd'"]) {
+		assert.ok(SCRIPT_URL_VECTORS.test(literal), `the script-URL sweep misses ${literal}`);
 	}
 	assert.ok(MARKUP_SINKS.test("const element = document.createElement(\"a\");"), "a DOM-creation call is a sink whatever tag it is handed, so the allow-list is what exempts one, not the tag");
 	// The sweep's whole allow-list, pinned so it cannot widen unnoticed: the builder's one sanctioned call, the documented download anchor, and neither a forbidden tag literal nor any other call anywhere.
@@ -725,6 +755,60 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 	assert.ok(commentedCall !== undefined, "the call beside a trailing comment is reported");
 	assert.equal(commentedCall.text, 'const frame = document.createElement("iframe");', "and the hit is the line's code, not the comment beside it");
 	assert.ok(!isSanctionedElementBuilder(commentedCall), "so a trailing comment naming the sanctioned call exempts no other call on the line");
+	// The script-URL sweep's whole allow-list, pinned the same way: the statement declaring the leaf's prefix constant is exempt through the script-URL sweep's own path, and no other spelling or line is.
+	assert.deepEqual(
+		occurrences([join(appDir, "ts", "util", "data-url.ts")], SCRIPT_URL_VECTORS, { htmlComments: true, except: isSanctionedDataUrlStatement }),
+		[],
+		"the statement declaring the leaf's prefix constant is exempt in the file the script-URL sweep reads",
+	);
+	assert.ok(
+		isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: SANCTIONED_DATA_URL_STATEMENT }),
+		"the statement declaring the leaf's prefix constant is exempt",
+	);
+	assert.ok(
+		isSanctionedDataUrlStatement({ file: "app/js/util/data-url.js", text: SANCTIONED_DATA_URL_STATEMENT }),
+		"and the compiled copy of that line is too",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: 'const url = "javascript:alert(1)";' }),
+		"a script-bearing scheme in the leaf is not",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: 'const url = "data:text/html,x";' }),
+		"nor another `data:` literal in it",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: 'const url = "blob:https://example/x";' }),
+		"nor a `blob:` literal in it",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: 'const url = "vbscript:msgbox(1)";' }),
+		"nor a `vbscript:` literal in it",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: 'const url = "file:///etc/passwd";' }),
+		"nor a `file:` literal in it",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: `el.src = "${SANCTIONED_DATA_URL_LITERAL}";` }),
+		"nor a `src` assignment carrying the sanctioned literal",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: `el.href = "${SANCTIONED_DATA_URL_LITERAL}";` }),
+		"nor a sibling sink handed the same literal, which the exact-statement pin reports",
+	);
+	assert.ok(
+		SCRIPT_URL_VECTORS.test(`el.SRC = "${SANCTIONED_DATA_URL_LITERAL}";`),
+		"the script-URL sweep catches a `src` assignment in any casing",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: `el.SRC = "${SANCTIONED_DATA_URL_LITERAL}";` }),
+		"and the exemption agrees, so a mixed-case assignment carrying the sanctioned literal is still reported",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/ui/view.ts", text: SANCTIONED_DATA_URL_STATEMENT }),
+		"and the same literal in another file is not exempt",
+	);
 	assert.ok(!SCRIPT_URL_VECTORS.test("const record = { updateMetadata: false };"), "a plain property is not a URL scheme");
 });
 

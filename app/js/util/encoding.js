@@ -1,5 +1,5 @@
 /**
- * The single re-export surface for the vendored encoding primitives: lower-case hex, UTF-8, RFC 4648 base32, base58 and its Monero variant, bech32/bech32m, the Base58Check factory, and the keccak-256 and sha-256 digests.
+ * The single re-export surface for the vendored encoding primitives: lower-case hex, UTF-8, RFC 4648 base32, RFC 4648 base64, base58 and its Monero variant, bech32/bech32m, the Base58Check factory, and the keccak-256 and sha-256 digests.
  *
  * Every other module imports these names from here rather than reaching into `app/js/vendor/`, so the vendored file layout stays in one place and the two renames the app makes — `bytesToHex` re-exported as `toHex` and noble's `keccak_256` re-exported as `keccak256` — sit beside it.
  *
@@ -17,6 +17,8 @@ export { utf8 } from "../../js/vendor/scure-base/index.js";
 export { base32 } from "../../js/vendor/scure-base/index.js";
 /** RFC 4648 base32, unpadded. */
 export { base32nopad } from "../../js/vendor/scure-base/index.js";
+/** RFC 4648 base64, padded. */
+export { base64 } from "../../js/vendor/scure-base/index.js";
 /**
  * Bitcoin base58 (`123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz`).
  * Its big-number conversion is quadratic in the input length, so the vendored implementation caps the input at 2048 bytes to encode and 4096 characters to decode and throws beyond either; base32 is the linear, uncapped encoding this app uses for invoice payloads.

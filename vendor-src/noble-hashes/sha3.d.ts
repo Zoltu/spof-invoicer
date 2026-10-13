@@ -1,4 +1,4 @@
-// Hand-written shim for the vendored @noble/hashes keccak module — declares only the surface this app uses.
+// Hand-written shim for the vendored @noble/hashes keccak module — declares the vendored exports the app's modules import or re-export.
 export interface Keccak256Hasher {
 	update(data: Uint8Array): Keccak256Hasher;
 	digest(): Uint8Array;

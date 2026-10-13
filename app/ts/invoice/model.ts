@@ -29,7 +29,7 @@ import {
 } from "../assets/registry.js";
 import { UINT256_MAX, canonicalAmount, fractionalDigits, fromBaseUnits, toBaseUnits } from "../util/decimal.js";
 import { boundMessage, describe, messageOf, preview } from "../util/errors.js";
-import { INVISIBLE_FORMATTING, MULTI_LINE_CONTROL, SINGLE_LINE_CONTROL } from "../util/text.js";
+import { INVISIBLE_FORMATTING, LONE_SURROGATE, MULTI_LINE_CONTROL, SINGLE_LINE_CONTROL } from "../util/text.js";
 import { requirePayoutAddress, type PayoutAddress } from "../wallet/payout-address.js";
 
 /** The only invoice schema version this build writes and reads. */
@@ -191,8 +191,6 @@ const TAX_FIELDS = ["label", "rate"] as const;
 
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
-/** A high surrogate with no low surrogate after it, or a low surrogate with no high surrogate before it — a lone surrogate code unit rather than one half of a valid pair. */
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 /** The largest accepted tax rate, expressed in `TAX_RATE_DECIMALS`-scaled percent units. */

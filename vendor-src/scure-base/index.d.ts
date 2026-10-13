@@ -18,6 +18,7 @@ export interface Bech32 {
 
 export declare const base32: BytesCoder;
 export declare const base32nopad: BytesCoder;
+export declare const base64: BytesCoder;
 export declare const base58: BytesCoder;
 export declare const base58xmr: BytesCoder;
 export declare const bech32: Bech32;

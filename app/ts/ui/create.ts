@@ -770,8 +770,9 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 		h(
 			"fieldset",
 			{ class: "form-section" },
-			h("legend", {}, "Your details"),
+			h("legend", {}, "Your details and asset"),
 			fieldGroup("payee-name", "Payee name", payeeName, errorsByKey, "payeeName"),
+			fieldGroup("asset", "Asset", assetSelect, errorsByKey, "asset"),
 			fieldGroup("payee-address", "Payout address", payeeAddress, errorsByKey, "payeeAddress", "The address this invoice pays to."),
 			payoutWarning,
 			fieldGroup("payee-email", "Contact email (optional)", payeeEmail, errorsByKey, "payeeEmail"),
@@ -783,7 +784,6 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 			fieldGroup("invoice-id", "Invoice number", invoiceId, errorsByKey, "invoiceId"),
 			fieldGroup("issued", "Issue date", issued, errorsByKey, "issued", "YYYY-MM-DD"),
 			fieldGroup("due", "Due date (optional)", due, errorsByKey, "due", "YYYY-MM-DD"),
-			fieldGroup("asset", "Asset", assetSelect, errorsByKey, "asset"),
 		),
 		h(
 			"fieldset",
