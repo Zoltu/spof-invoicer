@@ -35,6 +35,20 @@ export const PAGE = Object.freeze({
     /** The running footer's baseline, measured from the bottom. */
     footerBaseline: 46,
 });
+/**
+ * The raster the export lays out, refused unless both axes are a positive, finite number of pixels.
+ *
+ * The icon's box is the raster's own aspect ratio fitted inside the letterhead square, so a zero or non-finite axis would divide to `NaN` or `Infinity` and put undefined geometry into the image op.
+ * This is checked at {@link buildInvoicePages}, the single geometric entry point both the export and a direct layout caller reach, so the invariant holds whichever caller supplied the raster; the refusal is a thrown error like the rasterizer's own failures, so a malformed raster leaves no PDF geometry — and no PDF bytes — behind.
+ */
+function requirePositiveRaster(icon) {
+    const widthOk = Number.isFinite(icon.width) && icon.width >= 1;
+    const heightOk = Number.isFinite(icon.height) && icon.height >= 1;
+    if (!widthOk || !heightOk) {
+        throw new Error(`pdf: refusing an icon raster of ${icon.width}x${icon.height} pixels, which is not a positive finite size`);
+    }
+    return icon;
+}
 const CONTENT_LEFT = PAGE.marginX;
 /** The document's right content edge: the x every right-aligned draw and the payment symbol's block align to. */
 export const CONTENT_RIGHT = PAGE.width - PAGE.marginX;
@@ -243,10 +257,11 @@ export function wrapText(text, maxWidth, size, font, metrics) {
 /**
  * Lay an invoice out into pages of drawing ops, with pagination resolved: the column header repeats on every page, the totals block stays whole, notes and payment terms flow rather than overflow, and no op leaves the page.
  * Pure — the caller supplies the measurement and, for an invoice that carries one, the already-rasterized icon — so the pagination can be asserted without embedding a font, rendering a byte, or owning a canvas.
+ * A raster whose width or height is not a positive, finite number is refused here rather than divided into the icon box, so both this exported layout and {@link renderInvoicePdf} are held to the same geometric invariant.
  */
 export function buildInvoicePages(view, metrics, icon = null) {
     const flow = new Flow(metrics);
-    drawLetterhead(flow, view, icon);
+    drawLetterhead(flow, view, icon === null ? null : requirePositiveRaster(icon));
     drawParties(flow, view);
     drawTableHeader(flow, view.labels);
     view.lines.forEach((line, index) => drawItemRow(flow, line, index, view.labels));
@@ -308,7 +323,7 @@ export async function renderPdf(invoice, today, downloader) {
 }
 /**
  * The default icon rasterizer: the browser-only module, loaded through a dynamic `import()` on the first export that carries an icon.
- * The dynamic form is what keeps `pdf/rasterize.js` — which needs a DOM and a canvas — out of the module graph every other export and the test suite load.
+ * The dynamic form is what keeps `pdf/rasterize.js` — which needs a DOM and a canvas — out of the module graph a page loads until an icon actually has to be drawn; the only static import of it is the test suite's, which installs a stand-in document and canvas of its own.
  */
 const browserIconRasterizer = {
     async rasterize(dataUrl) {

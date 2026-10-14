@@ -102,7 +102,11 @@ async function copyInto({ from, to, label, filter }, outRoot) {
 	console.log(`build: copied ${from}/ -> ${to}/`);
 }
 
-function findTsc() {
+/**
+ * The resolved path of the TypeScript compiler: the one Node resolves, falling back to the local install, or `null` when TypeScript is not installed.
+ * Shared with the test suite's compile-time probe so both compile under the same compiler the build uses rather than each resolving its own.
+ */
+export function findTsc() {
 	try {
 		return require.resolve("typescript/bin/tsc");
 	} catch {

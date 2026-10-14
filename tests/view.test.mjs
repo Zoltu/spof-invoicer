@@ -23,7 +23,7 @@ import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES } from "../app/js/ui/messag
 import { CHAIN_NAMES, chainName, requireNamedNetworks } from "../app/js/ui/network-labels.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
-import { svgDataUrl } from "../app/js/util/data-url.js";
+import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
 import { encodeQr } from "../app/js/util/qr.js";
 import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";

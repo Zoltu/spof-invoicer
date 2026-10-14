@@ -813,19 +813,34 @@ test("an icon-less invoice keeps the payload it had before the field existed", (
 
 test("an icon is validated as it is read, under the icon path", () => {
 	const overCap = `<svg width="64" height="64">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
+	// Every case pins the whole message the refusal carries, so the byte-cap refusal and the empty-icon clause are asserted as themselves rather than as "some error": the gate words the reason and the model states it under the icon path, with the `invoice:` namespace applied once.
 	const cases = [
-		["an over-cap icon", overCap, "InvalidIconError", /must be 1 to 8192 bytes of UTF-8/],
-		["a script-bearing icon", '<svg width="32" height="32"><script>alert(1)</script></svg>', "InvalidIconError", /must not contain a <script> element/],
-		["an icon with trailing whitespace", `${ICON} `, "InvalidIconError", /must not start or end with whitespace/],
-		["a null icon", null, "TypeError", /expected an SVG string, got null/],
-		["a numeric icon", 42, "TypeError", /expected an SVG string, got 42/],
+		["an over-cap icon", overCap, "InvalidIconError", `The icon is ${Buffer.byteLength(overCap, "utf8")} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.`],
+		["an empty icon", "", "InvalidIconError", "must not be empty"],
+		["a script-bearing icon", '<svg width="32" height="32"><script>alert(1)</script></svg>', "InvalidIconError", "must not contain a <script> element"],
+		["an icon with trailing whitespace", `${ICON} `, "InvalidIconError", "must not start or end with whitespace"],
+		["a null icon", null, "TypeError", "expected an SVG string, got null"],
+		["a numeric icon", 42, "TypeError", "expected an SVG string, got 42"],
 	];
-	for (const [label, value, cause, pattern] of cases) {
+	for (const [label, value, cause, reason] of cases) {
 		const refusal = iconRefusal(label, () => make({ icon: value }));
 		assert.equal(refusal.cause?.name, cause, `${label}: the gate's own error travels as the cause`);
-		assert.match(refusal.message, pattern, label);
+		assert.equal(refusal.message, `invoice: icon: ${reason}`, label);
 	}
 	assert.equal(make({ icon: ICON }).icon, ICON, "a well-formed icon is accepted");
+});
+
+test("the notice a payer sees for a shared link whose icon is refused carries the namespace once", () => {
+	// The route notice is the message the model raised, verbatim, so this pins the wording a payer reads end to end: one field path and one reason, never `invoice: icon: invoice: …`.
+	const overCap = `<svg width="64" height="64">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
+	const json = serializeInvoice(MINIMAL).replace('{"v":1', `{"icon":${JSON.stringify(overCap)},"v":1`);
+	const route = parseHash(`#/i/${b32(json)}`);
+	assert.equal(route.kind, "error", "the payload carrying the refused icon is refused rather than rendered");
+	assert.equal(
+		route.message,
+		`invoice: icon: The icon is ${Buffer.byteLength(overCap, "utf8")} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.`,
+		"the payer reads the field path once and the gate's reason once",
+	);
 });
 
 test("a payload whose icon is not the canonical text is refused", () => {

@@ -4,7 +4,7 @@
  * The view is split in two layers so most of it is testable without a browser: the pure form state and its mapping to a validated {@link Invoice} live in the exported helpers at the top, and the DOM building at the bottom only wires those helpers to inputs.
  * The payee's own screen shows the invoice the form creates, not only its share link: the section `ui/payment-section.ts` owns is drawn into this view for each invoice the form builds, so the payee can pay it, or copy its link, its address, and its amount, without opening their own share link.
  * Every rendered string — a field value, a validation message, a share payload — reaches the page as a text child of `util/dom.ts`'s `h()`, so nothing a user or a share link supplies can become markup.
- * An optional SVG icon is chosen from a file input and checked in place — the byte cap first, then the icon gate — before it enters the form state, so an over-cap or malformed file is refused under its own field and the invoice the form builds is untouched; the icon the form does carry is previewed through the icon leaf's own data URL, never as markup.
+ * An optional SVG icon is chosen from a file input and checked in place — a generous raw read ceiling on the file's own size first, then the byte cap on the NFC-composed value, then the icon gate — before it enters the form state, so an over-large, over-cap, or malformed file is refused under its own field and the icon the form already carries stays; the icon the form does carry is previewed through the icon leaf's own data URL, never as markup.
  */
 
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset, type Asset, type AssetFamily, type AssetId } from "../assets/registry.js";
@@ -21,10 +21,12 @@ import {
 	type LineItem,
 } from "../invoice/model.js";
 import { PaymentLinkBudgetError, requireLinkBudget } from "../payment/links.js";
-import { svgDataUrl } from "../util/data-url.js";
+import { svgDataUrl } from "../util/svg-data-url.js";
 import { toBaseUnits } from "../util/decimal.js";
 import { h } from "../util/dom.js";
 import { boundMessage, messageOf } from "../util/errors.js";
+import { iconByteLength } from "../util/icon-byte-length.js";
+import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS, iconByteCapRefusal, iconRawCodeUnitRefusal } from "../util/icon-capacity.js";
 import { checksumStatus } from "../wallet/address.js";
 import { EVM_ADDRESS_FORMS } from "../wallet/address.js";
 import { MONERO_ADDRESS_FORMS } from "../wallet/monero-address.js";
@@ -246,13 +248,41 @@ function fieldErrorFor(error: unknown): FieldError {
 /**
  * The icon gate's refusal, worded for the field it is shown under.
  *
- * The gate prefixes its message with the module that raised it, exactly as the model does, and this form shows the reason alone under the icon field — the same strip {@link fieldErrorFor} applies to a model refusal.
+ * The gate words its refusals as reasons with no namespace of this form's own — `invoice/model.ts` publishes one under the icon field's own `invoice: icon: ` prefix — so the reason reaches this field as it stands.
  * The result is bounded like every other message this form renders, because the gate's own message names the rejected value.
  */
 function iconRefusalMessage(error: unknown): string {
-	const message = messageOf(error);
-	const prefix = "invoice: ";
-	return boundMessage(message.startsWith(prefix) ? message.slice(prefix.length) : message, FIELD_MESSAGE_MAX);
+	return boundMessage(messageOf(error), FIELD_MESSAGE_MAX);
+}
+
+/** The decision the icon field makes about the text a chosen file yields: the canonical SVG to store, or the message to show under the icon field. */
+export type IconCheck =
+	| { readonly ok: true; readonly svg: string }
+	| { readonly ok: false; readonly message: string };
+
+/**
+ * Decide whether the text a chosen icon file yields is one the form may carry, as a value rather than by mutating the form, so the decision is testable without a browser.
+ *
+ * The bounds apply to a value only once it is known to be a string, and the gate's own raw code-unit bound is applied first, before anything measures or composes it, so a caller that reaches this helper without the form's file-size pre-check cannot make it normalize an unbounded string or slip past the gate's pre-composition guard; the refusal that bound yields is {@link iconRawCodeUnitRefusal}, the one wording of it, which the gate raises for the same value.
+ * A string is then measured with {@link iconByteLength} — the same NFC-composed UTF-8 byte length the icon gate bounds — so an over-cap document is refused under the field with {@link iconByteCapRefusal}, the one wording of that refusal, which the gate raises for the same value; the form checks first, so the gate's own copy of it never reaches this field, and the gate supplies the reason for every other refusal through {@link iconRefusalMessage}.
+ * A value that is not a string skips both bounds and reaches the gate, whose own `TypeError` becomes this field's refusal through that same bounded reason — so a file read that answers something other than text is refused under the field rather than escaping as an unhandled rejection from the change handler that does not await it.
+ * The DOM layer keeps the file read and the form mutation around this decision.
+ */
+export function checkIconText(text: unknown): IconCheck {
+	if (typeof text === "string") {
+		if (text.length > MAX_ICON_RAW_CODE_UNITS) {
+			return { ok: false, message: iconRawCodeUnitRefusal(text.length) };
+		}
+		const bytes = iconByteLength(text);
+		if (bytes > MAX_ICON_SVG_BYTES) {
+			return { ok: false, message: iconByteCapRefusal(bytes) };
+		}
+	}
+	try {
+		return { ok: true, svg: validateIcon(text) };
+	} catch (error) {
+		return { ok: false, message: iconRefusalMessage(error) };
+	}
 }
 
 /** The line index and control name an item field key such as `item-2-unitPrice` names, or `null` when the key scopes to something other than a line. */
@@ -428,7 +458,7 @@ export function planShare(state: CreateFormState, baseUrl: string): SharePlan {
 }
 
 function tooLargeMessage(bytes: number): string {
-	return `This invoice is too large to share: its encoded form is ${bytes} bytes, past the ${MAX_JSON_BYTES}-byte share limit. Remove line items or shorten descriptions, then try again.`;
+	return `This invoice is too large to share: its encoded form is ${bytes} bytes, past the ${MAX_JSON_BYTES}-byte share limit. Remove the optional icon — the largest field — or trim line items and descriptions, then try again.`;
 }
 
 /** How close a form is to the share cap, once it is valid enough to measure. */
@@ -557,6 +587,8 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	const errorsByKey = new Map<string, HTMLElement>();
 	const amountCells: HTMLElement[] = [];
 	let shownErrors: readonly FieldError[] = [];
+	// The most recent icon pick: a read that settles after a later pick takes the form's icon only while its own token is still current.
+	let iconSelection = 0;
 
 	const errorSummary = h("div", { class: "error-summary", role: "alert", hidden: true });
 	const payeeName = h("input", { type: "text", name: "payeeName", value: state.payeeName, placeholder: "Acme Studio" });
@@ -630,7 +662,7 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 		}
 		shareSizeNote.textContent = hint.fits
 			? `Encoded size: ${hint.bytes} of ${hint.limit} bytes of JSON; the share link carries about 1.6 characters per byte, and the optional icon is the largest field.`
-			: `Encoded size: ${hint.bytes} bytes — over the ${hint.limit}-byte share limit. Remove line items or shorten descriptions.`;
+			: `Encoded size: ${hint.bytes} bytes — over the ${hint.limit}-byte share limit. Remove the optional icon — the largest field — or trim line items and descriptions.`;
 		shareSizeNote.setAttribute("class", hint.fits ? "field-hint share-size" : "field-error share-size");
 	}
 
@@ -671,6 +703,17 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 		element.removeAttribute("hidden");
 	}
 
+	/**
+	 * Refuse a pick under the icon field, clearing the input's own value as it does.
+	 *
+	 * An engine fires `change` only for a selection that differs from the input's current value, so a value left standing by a refused pick keeps the same file from being chosen again, and the only other control that clears it is the removal button, which is hidden while the form carries no icon.
+	 * Clearing the value here is what makes the refusal retryable; the picker replaces it on the next pick either way, so no part of the form reads it.
+	 */
+	function refuseIconPick(message: string): void {
+		iconInput.value = "";
+		showIconError(message);
+	}
+
 	function clearIconError(): void {
 		const element = errorsByKey.get("icon");
 		if (element === undefined) return;
@@ -681,33 +724,33 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	/**
 	 * Read the payee's chosen file, check it in place, and store it.
 	 *
-	 * The cap is checked on `file.size` before the file is read, so an over-cap file is refused without being read, and the text is checked again after the read, because `file.size` measures the bytes on disk while the icon gate bounds the UTF-8 bytes of the value the invoice stores.
-	 * A refusal leaves the form's icon — and so the invoice the form would build — exactly as it was, and a file that passes is stored as the gate's own canonical text.
+	 * The file is refused on its own declared size before it is read at all, so one far past {@link MAX_ICON_FILE_BYTES} is never decoded, and the text it yields is then decided by {@link checkIconText}, which measures the NFC-composed value with the same byte length the icon gate bounds.
+	 * Each pick claims the form's own selection token before its read and answers only while that token is still current, so two overlapping picks resolve in pick order and the last pick wins rather than whichever read settles last; a later pick or a removal that bumps the token makes this read stale, and a stale read applies neither its failure nor its success.
+	 * A refusal leaves the form's icon — and so the invoice the form would build — exactly as it was, clears the input through {@link refuseIconPick} so the refused file can be chosen again, and a file that passes is stored as the gate's own canonical text.
 	 */
 	async function applyIconFile(file: File): Promise<void> {
-		if (file.size > MAX_ICON_SVG_BYTES) {
-			showIconError(`The icon is ${file.size} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.`);
+		const selection = (iconSelection += 1);
+		if (file.size > MAX_ICON_FILE_BYTES) {
+			refuseIconPick(`The icon file is ${file.size} bytes, over the ${MAX_ICON_FILE_BYTES}-byte read limit.`);
 			return;
 		}
 		let text: string;
 		try {
 			text = await file.text();
 		} catch (error) {
-			showIconError(`The icon file could not be read: ${boundMessage(messageOf(error), FIELD_MESSAGE_MAX)}`);
+			// A later pick or a removal has already answered, so this read's failure is stale: reporting it would paint an error for a pick the form no longer stands behind.
+			if (selection !== iconSelection) return;
+			refuseIconPick(`The icon file could not be read: ${boundMessage(messageOf(error), FIELD_MESSAGE_MAX)}`);
 			return;
 		}
-		if (text.length > MAX_ICON_SVG_BYTES) {
-			showIconError(`The icon is ${text.length} characters, over the ${MAX_ICON_SVG_BYTES}-byte limit.`);
+		// A later pick or a removal has already answered, so this read is stale: applying it would overwrite the newer icon.
+		if (selection !== iconSelection) return;
+		const check = checkIconText(text);
+		if (!check.ok) {
+			refuseIconPick(check.message);
 			return;
 		}
-		let svg: string;
-		try {
-			svg = validateIcon(text);
-		} catch (error) {
-			showIconError(iconRefusalMessage(error));
-			return;
-		}
-		state.iconSvg = svg;
+		state.iconSvg = check.svg;
 		clearIconError();
 		syncIconPreview();
 		sync();
@@ -828,6 +871,8 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 		void applyIconFile(file);
 	});
 	iconRemove.addEventListener("click", () => {
+		// The removal is the form's latest answer, so any in-flight pick is stale and must not re-apply the icon the user just cleared.
+		iconSelection += 1;
 		state.iconSvg = "";
 		iconInput.value = "";
 		clearIconError();

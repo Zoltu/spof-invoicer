@@ -45,7 +45,6 @@ import {
 } from "../ui/presentation.js";
 import type { SvgDataUrl } from "../util/data-url.js";
 import type { QrMatrix } from "../util/qr.js";
-import type { IconRaster } from "./rasterize.js";
 
 /** The media type the exported artifact's download blob carries. */
 export const PDF_MIME = "application/pdf";
@@ -137,6 +136,33 @@ export interface PdfDownloader {
  */
 export interface IconRasterizer {
 	rasterize(dataUrl: SvgDataUrl): Promise<IconRaster>;
+}
+
+/**
+ * A rasterized icon: the PNG bytes a PDF embeds, and the pixel size they were rasterized at.
+ *
+ * `width` and `height` are each a positive, finite number of pixels: the renderer divides by them to fit the raster into the letterhead box, so a zero, negative, or non-finite axis would produce undefined box geometry.
+ * The shape lives here, beside {@link IconRasterizer}, because it is that seam's output; `pdf/rasterize.ts` names it through a type-only import the compiler erases, so the DOM-free renderer and the browser-only rasterizer share the shape without a static import between them.
+ */
+export interface IconRaster {
+	readonly bytes: Uint8Array;
+	readonly width: number;
+	readonly height: number;
+}
+
+/**
+ * The raster the export lays out, refused unless both axes are a positive, finite number of pixels.
+ *
+ * The icon's box is the raster's own aspect ratio fitted inside the letterhead square, so a zero or non-finite axis would divide to `NaN` or `Infinity` and put undefined geometry into the image op.
+ * This is checked at {@link buildInvoicePages}, the single geometric entry point both the export and a direct layout caller reach, so the invariant holds whichever caller supplied the raster; the refusal is a thrown error like the rasterizer's own failures, so a malformed raster leaves no PDF geometry — and no PDF bytes — behind.
+ */
+function requirePositiveRaster(icon: IconRaster): IconRaster {
+	const widthOk = Number.isFinite(icon.width) && icon.width >= 1;
+	const heightOk = Number.isFinite(icon.height) && icon.height >= 1;
+	if (!widthOk || !heightOk) {
+		throw new Error(`pdf: refusing an icon raster of ${icon.width}x${icon.height} pixels, which is not a positive finite size`);
+	}
+	return icon;
 }
 
 const CONTENT_LEFT = PAGE.marginX;
@@ -358,10 +384,11 @@ export function wrapText(
 /**
  * Lay an invoice out into pages of drawing ops, with pagination resolved: the column header repeats on every page, the totals block stays whole, notes and payment terms flow rather than overflow, and no op leaves the page.
  * Pure — the caller supplies the measurement and, for an invoice that carries one, the already-rasterized icon — so the pagination can be asserted without embedding a font, rendering a byte, or owning a canvas.
+ * A raster whose width or height is not a positive, finite number is refused here rather than divided into the icon box, so both this exported layout and {@link renderInvoicePdf} are held to the same geometric invariant.
  */
 export function buildInvoicePages(view: InvoiceViewModel, metrics: FontMetrics, icon: IconRaster | null = null): readonly PdfPageLayout[] {
 	const flow = new Flow(metrics);
-	drawLetterhead(flow, view, icon);
+	drawLetterhead(flow, view, icon === null ? null : requirePositiveRaster(icon));
 	drawParties(flow, view);
 	drawTableHeader(flow, view.labels);
 	view.lines.forEach((line, index) => drawItemRow(flow, line, index, view.labels));
@@ -430,7 +457,7 @@ export async function renderPdf(invoice: Invoice, today: string, downloader?: Pd
 
 /**
  * The default icon rasterizer: the browser-only module, loaded through a dynamic `import()` on the first export that carries an icon.
- * The dynamic form is what keeps `pdf/rasterize.js` — which needs a DOM and a canvas — out of the module graph every other export and the test suite load.
+ * The dynamic form is what keeps `pdf/rasterize.js` — which needs a DOM and a canvas — out of the module graph a page loads until an icon actually has to be drawn; the only static import of it is the test suite's, which installs a stand-in document and canvas of its own.
  */
 const browserIconRasterizer: IconRasterizer = {
 	async rasterize(dataUrl: SvgDataUrl): Promise<IconRaster> {

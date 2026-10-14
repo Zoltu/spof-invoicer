@@ -9,10 +9,11 @@ import { installInteractiveDocument } from "./helpers/dom.mjs";
 import { ZEC_PAYEE, XMR_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
 import { readSymbol } from "./helpers/qr-reader.mjs";
+import { refusalMessage } from "./helpers/refusals.mjs";
 import { findAll, findButton, hasClass, inputValues, textOf } from "./helpers/tree.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
 import { MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
-import { MAX_ICON_SVG_BYTES } from "../app/js/invoice/icon.js";
+import { MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { MAX_JSON_BYTES, encodeInvoice } from "../app/js/invoice/codec.js";
 import { decodeShare } from "../app/js/invoice/share.js";
 import { parseHash } from "../app/js/app/router.js";
@@ -21,6 +22,7 @@ import { PaymentLinkBudgetError } from "../app/js/payment/links.js";
 import {
 	addItem,
 	canAddItem,
+	checkIconText,
 	emptyFormState,
 	invoiceInputFromState,
 	liveLineAmount,
@@ -39,8 +41,9 @@ import {
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { buildShareBundle, copyText } from "../app/js/ui/share.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
-import { svgDataUrl } from "../app/js/util/data-url.js";
+import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { base32nopad, utf8 } from "../app/js/util/encoding.js";
+import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS } from "../app/js/util/icon-capacity.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
@@ -959,17 +962,22 @@ test("an over-cap or wrong-format icon is refused in place and leaves the invoic
 		assert.match(textOf(message()), /over the 8192-byte limit/);
 		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "and nothing is previewed");
 
-		// The cap bounds the value the invoice stores rather than the bytes a file claims, so a size that understates the text is caught after the read.
+		// The cap is measured on the text the file yields rather than the size it claims, so a file that understates its own size is still caught.
 		input.files = [iconFile(oversized, 8)];
 		input.dispatch("change");
 		await drain();
-		assert.match(textOf(message()), /characters, over the 8192-byte limit/);
+		assert.match(textOf(message()), /bytes, over the 8192-byte limit/);
 
 		input.files = [iconFile("not an svg at all")];
 		input.dispatch("change");
 		await drain();
 		assert.match(textOf(message()), /must contain a single <svg> root element/, "a wrong-format file is refused with the gate's own reason");
 		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "and still nothing is previewed");
+
+		input.files = [iconFile("")];
+		input.dispatch("change");
+		await drain();
+		assert.equal(textOf(message()), "must not be empty", "a zero-byte file is refused as its own fault rather than as a cap it exceeded");
 
 		setControl(view, "payeeName", "Studio Example");
 		setControl(view, "payeeAddress", PAYEE);
@@ -982,6 +990,275 @@ test("an over-cap or wrong-format icon is refused in place and leaves the invoic
 		const url = findAll(backdrop, (node) => node.attributes?.class === "share-value")[0].attributes.value;
 		const shared = decodeShare(url.slice(url.indexOf("#")));
 		assert.equal("icon" in shared, false, "a refused icon never reaches the invoice");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a refused pick clears the input, so the same file can be chosen again", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
+
+		// A picker sets the input's own value, and an engine fires `change` only for a selection that differs from it, so a refusal that left the value standing would keep that same file from being retried; the removal control that would clear it is hidden while the form carries no icon.
+		input.value = "C:/fakepath/not-an-svg.txt";
+		input.files = [iconFile("not an svg at all")];
+		input.dispatch("change");
+		await drain();
+		assert.equal(message().attributes.hidden, undefined, "the file is refused under the field");
+		assert.equal(input.value, "", "and the input's own value is cleared, so the same file can be picked again");
+
+		input.value = "C:/fakepath/oversized.svg";
+		input.files = [iconFile("x", MAX_ICON_FILE_BYTES + 1)];
+		input.dispatch("change");
+		await drain();
+		assert.equal(input.value, "", "a file refused on its own size clears the input too");
+		assert.equal(findButton(view, "Remove icon").attributes.hidden, "", "the removal control that would clear it is still hidden, since no icon is stored");
+
+		input.files = [iconFile(ICON_SVG)];
+		input.dispatch("change");
+		await drain();
+		assert.ok(findAll(view, (node) => hasClass(node, "icon-preview"))[0], "and a later pick of a good file is stored");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a refused replacement icon leaves the icon the form already carries", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
+		const preview = () => findAll(view, (node) => hasClass(node, "icon-preview"))[0];
+
+		input.files = [iconFile(ICON_SVG)];
+		input.dispatch("change");
+		await drain();
+		assert.equal(preview().attributes.src, svgDataUrl(ICON_SVG), "a good pick is stored and previewed");
+
+		// A replacement the gate refuses must not clear the icon the form already carries.
+		input.files = [iconFile("not an svg at all")];
+		input.dispatch("change");
+		await drain();
+		assert.equal(message().attributes.hidden, undefined, "the bad replacement is refused in place");
+		assert.ok(preview(), "and the previously chosen icon stays previewed");
+		assert.equal(preview().attributes.src, svgDataUrl(ICON_SVG), "still the leaf's own data URL of the good icon");
+
+		// The invoice the form builds carries the good icon rather than the refused replacement.
+		setControl(view, "payeeName", "Studio Example");
+		setControl(view, "payeeAddress", PAYEE);
+		setControl(view, "item-0-description", "Design work");
+		setControl(view, "item-0-quantity", "2");
+		setControl(view, "item-0-unitPrice", "150");
+		view.children[2].dispatch("submit");
+		const backdrop = document.body.children.find((child) => child.attributes?.class?.includes("dialog-backdrop"));
+		assert.ok(backdrop, "the form still builds and shares its invoice");
+		const url = findAll(backdrop, (node) => node.attributes?.class === "share-value")[0].attributes.value;
+		const shared = decodeShare(url.slice(url.indexOf("#")));
+		assert.equal(shared.icon, ICON_SVG, "the invoice carries the previously chosen icon, not the refused replacement");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the last icon pick wins when an earlier file read settles after a later one", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const preview = () => findAll(view, (node) => hasClass(node, "icon-preview"))[0];
+		const secondSvg = "<svg width=\"16\" height=\"16\"><rect width=\"16\" height=\"16\" fill=\"#654321\"/></svg>";
+		let releaseFirst;
+		const slow = { size: ICON_SVG.length, text: () => new Promise((resolve) => { releaseFirst = resolve; }) };
+
+		input.files = [slow];
+		input.dispatch("change");
+		await drain();
+		assert.equal(preview(), undefined, "the slow first read has not settled, so nothing is previewed yet");
+
+		input.files = [iconFile(secondSvg)];
+		input.dispatch("change");
+		await drain();
+		assert.equal(preview().attributes.src, svgDataUrl(secondSvg), "the later pick is the one applied");
+
+		releaseFirst(ICON_SVG);
+		await drain();
+		assert.equal(preview().attributes.src, svgDataUrl(secondSvg), "the earlier read, settling last, does not overwrite the later pick");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a superseded pick's read failure does not paint a stale error under the icon field", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
+		const preview = () => findAll(view, (node) => hasClass(node, "icon-preview"))[0];
+		const secondSvg = "<svg width=\"16\" height=\"16\"><rect width=\"16\" height=\"16\" fill=\"#654321\"/></svg>";
+		let failFirst;
+		const slow = { size: ICON_SVG.length, text: () => new Promise((_resolve, reject) => { failFirst = reject; }) };
+
+		input.files = [slow];
+		input.dispatch("change");
+		await drain();
+
+		input.files = [iconFile(secondSvg)];
+		input.dispatch("change");
+		await drain();
+		assert.equal(preview().attributes.src, svgDataUrl(secondSvg), "the later pick is the one applied");
+
+		failFirst(new Error("the device vanished"));
+		await drain();
+		assert.equal(message().attributes.hidden, "", "the superseded read's failure is not shown after a newer pick");
+		assert.equal(preview().attributes.src, svgDataUrl(secondSvg), "and the later pick still stands");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a pick that settles after Remove icon does not re-apply the removed icon", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const remove = findButton(view, "Remove icon");
+		const preview = () => findAll(view, (node) => hasClass(node, "icon-preview"))[0];
+		let release;
+		const slow = { size: ICON_SVG.length, text: () => new Promise((resolve) => { release = resolve; }) };
+
+		input.files = [slow];
+		input.dispatch("change");
+		await drain();
+		assert.equal(preview(), undefined, "the read has not settled, so nothing is previewed yet");
+
+		remove.dispatch("click");
+		release(ICON_SVG);
+		await drain();
+		assert.equal(preview(), undefined, "the removed icon is not re-applied by the read that settles after the removal");
+		assert.equal(findAll(view, (node) => node.attributes?.id === "icon-error")[0].attributes.hidden, "", "and the removal leaves no error behind");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the icon cap is measured on the NFC form the invoice stores, not the bytes on disk", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
+		// Each NFD "é" (`e\u0301`) is three UTF-8 bytes and composes to the two-byte NFC "é", so this document is over the cap as typed yet inside it once composed.
+		const overhead = Buffer.byteLength('<svg width="32" height="32"></svg>', "utf8");
+		const nfd = `<svg width="32" height="32">${"e\u0301".repeat(Math.floor((MAX_ICON_SVG_BYTES - overhead) / 2))}</svg>`;
+		const nfc = nfd.normalize("NFC");
+		assert.ok(Buffer.byteLength(nfd, "utf8") > MAX_ICON_SVG_BYTES, "the NFD spelling exceeds the cap on disk");
+		assert.ok(Buffer.byteLength(nfc, "utf8") <= MAX_ICON_SVG_BYTES, "and sits within it once composed");
+
+		input.files = [iconFile(nfd)];
+		input.dispatch("change");
+		await drain();
+
+		assert.equal(message().attributes.hidden, "", "the composed icon is accepted rather than refused as over the limit");
+		const preview = findAll(view, (node) => hasClass(node, "icon-preview"))[0];
+		assert.ok(preview, "and previewed");
+		assert.equal(preview.attributes.src, svgDataUrl(nfc), "carrying the leaf's own data URL of the composed text");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("checkIconText decides the icon field's accept or refuse from the file's text alone", () => {
+	assert.deepEqual(checkIconText(ICON_SVG), { ok: true, svg: ICON_SVG }, "a good document yields the gate's own canonical text");
+
+	const overCap = `<svg width="32" height="32">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
+	assert.deepEqual(
+		checkIconText(overCap),
+		{ ok: false, message: `The icon is ${Buffer.byteLength(overCap, "utf8")} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.` },
+		"an over-cap document is refused with the form's own byte-cap message",
+	);
+
+	const malformed = checkIconText("not an svg at all");
+	assert.equal(malformed.ok, false, "a document the gate refuses is refused");
+	assert.match(malformed.message, /must contain a single <svg> root element/, "with the gate's own reason, which carries no namespace of its own");
+
+	// The measure is the NFC-composed value, not the raw spelling: an NFD text over the cap on disk is accepted and stored composed.
+	const overhead = Buffer.byteLength('<svg width="32" height="32"></svg>', "utf8");
+	const nfd = `<svg width="32" height="32">${"e\u0301".repeat(Math.floor((MAX_ICON_SVG_BYTES - overhead) / 2))}</svg>`;
+	assert.ok(Buffer.byteLength(nfd, "utf8") > MAX_ICON_SVG_BYTES, "the NFD spelling exceeds the cap on disk");
+	assert.deepEqual(checkIconText(nfd), { ok: true, svg: nfd.normalize("NFC") }, "the composed form is accepted");
+
+	// The gate's raw code-unit bound is applied before the value is composed, so a direct caller cannot make the helper normalize an unbounded string.
+	const overRaw = "x".repeat(MAX_ICON_RAW_CODE_UNITS + 1);
+	assert.deepEqual(
+		checkIconText(overRaw),
+		{ ok: false, message: `The icon is ${overRaw.length} characters before normalization, over the ${MAX_ICON_RAW_CODE_UNITS}-character limit.` },
+		"a value over the gate's raw bound is refused before it is measured or composed",
+	);
+	// The gate refuses that same value with that same wording, so one bound has one user-facing statement rather than two that can drift apart.
+	assert.equal(
+		checkIconText(overRaw).message,
+		refusalMessage(() => validateIcon(overRaw)),
+		"the form's refusal and the gate's refusal for the raw bound are one wording",
+	);
+	// A zero-byte document is its own fault rather than a cap it exceeded, on this path as on the payload one.
+	assert.deepEqual(checkIconText(""), { ok: false, message: "must not be empty" }, "an empty document is refused as its own fault");
+});
+
+test("checkIconText refuses a read that yields something other than text rather than throwing", () => {
+	assert.deepEqual(
+		checkIconText(42),
+		{ ok: false, message: refusalMessage(() => validateIcon(42)) },
+		"a value that is not text is refused with the gate's own wording rather than escaping the helper",
+	);
+	assert.equal(checkIconText(undefined).ok, false, "and a read that yields nothing at all is refused too");
+});
+
+test("the icon field refuses an over-large file before it reads it", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
+		let reads = 0;
+		input.files = [
+			{
+				size: MAX_ICON_FILE_BYTES + 1,
+				text: async () => {
+					reads += 1;
+					return ICON_SVG;
+				},
+			},
+		];
+		input.dispatch("change");
+		await drain();
+		assert.equal(reads, 0, "the file is refused before it is read");
+		assert.match(textOf(message()), new RegExp(`over the ${MAX_ICON_FILE_BYTES}-byte read limit`), "the refusal names the raw read ceiling");
+		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "and nothing is previewed");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a file whose read yields something other than text is refused under the icon field", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
+
+		// An engine's `File.text()` is contracted to answer a string, so a read that answers anything else must be refused under the field: the change handler fires the read without awaiting it, and a throw there would leave the pick unanswered.
+		input.files = [{ size: 8, text: async () => 42 }];
+		input.dispatch("change");
+		await drain();
+
+		assert.equal(message().attributes.hidden, undefined, "the field carries the refusal");
+		assert.equal(textOf(message()), refusalMessage(() => validateIcon(42)), "with the gate's own wording for a value that is not text");
+		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "and no icon is stored or previewed");
 	} finally {
 		fake.restore();
 	}

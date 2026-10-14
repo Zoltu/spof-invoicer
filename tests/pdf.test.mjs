@@ -12,7 +12,7 @@ import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
 import { PDFDocument, decodePDFRawStream } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
 import { MAX_ICON_DIMENSION } from "../app/js/invoice/icon.js";
 import { rasterizeSvgIcon } from "../app/js/pdf/rasterize.js";
-import { svgDataUrl } from "../app/js/util/data-url.js";
+import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
 import {
@@ -37,6 +37,7 @@ import { blockNetwork } from "./helpers/network-block.mjs";
 import { imageXObjects } from "./helpers/pdf-images.mjs";
 import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TRANSPARENT_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCells, moduleFills } from "./helpers/qr-symbol.mjs";
+import { readEmittedModule, staticImportReach, staticImportSpecifiers } from "./helpers/static-imports.mjs";
 import { findButton, textOf } from "./helpers/tree.mjs";
 import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 import { waitFor } from "./helpers/wait.mjs";
@@ -347,6 +348,28 @@ test("a large invoice renders to multiple real PDF pages", async () => {
 	assert.ok((await PDFDocument.load(large)).getPageCount() > 1, "a 120-line invoice spills past one page");
 });
 
+/**
+ * Assert every op of every page stays inside the page's own box: a text run within the extent it is actually drawn at, a rule between its two points, and a filled or image box within its own rectangle.
+ */
+function assertOpsWithinPage(pages, metrics) {
+	for (const page of pages) {
+		for (const op of page.ops) {
+			if (op.kind === "text") {
+				// A value too wide for the line it was given is drawn compressed onto that width, so the extent it occupies is its natural width times its xScale; measuring it at its natural width would report a legal document as leaving the page.
+				const width = metrics.widthOfText(op.text, op.size, op.font) * op.xScale;
+				assert.ok(op.x >= 0 && op.x + width <= PAGE.width + 0.01, `text escapes horizontally: ${op.text}`);
+				assert.ok(op.y >= 0 && op.y <= PAGE.height, `text escapes vertically: ${op.text}`);
+			} else if (op.kind === "rule") {
+				assert.ok(Math.min(op.x1, op.x2) >= 0 && Math.max(op.x1, op.x2) <= PAGE.width);
+				assert.ok(Math.min(op.y1, op.y2) >= 0 && Math.max(op.y1, op.y2) <= PAGE.height);
+			} else {
+				assert.ok(op.x >= 0 && op.x + op.width <= PAGE.width, "a drawn box escapes horizontally");
+				assert.ok(op.y >= 0 && op.y + op.height <= PAGE.height, "a drawn box escapes vertically");
+			}
+		}
+	}
+}
+
 test("no draw op leaves the page, even with 200 items and long notes", () => {
 	const view = buildInvoiceViewModel(
 		invoiceFor({
@@ -360,21 +383,30 @@ test("no draw op leaves the page, even with 200 items and long notes", () => {
 	const pages = buildInvoicePages(view, METRICS);
 	assert.ok(pages.length > 1);
 
-	for (const page of pages) {
-		for (const op of page.ops) {
-			if (op.kind === "text") {
-				const width = METRICS.widthOfText(op.text, op.size, op.font);
-				assert.ok(op.x >= 0 && op.x + width <= PAGE.width + 0.01, `text escapes horizontally: ${op.text}`);
-				assert.ok(op.y >= 0 && op.y <= PAGE.height, `text escapes vertically: ${op.text}`);
-			} else if (op.kind === "rule") {
-				assert.ok(Math.min(op.x1, op.x2) >= 0 && Math.max(op.x1, op.x2) <= PAGE.width);
-				assert.ok(Math.min(op.y1, op.y2) >= 0 && Math.max(op.y1, op.y2) <= PAGE.height);
-			} else {
-				assert.ok(op.x >= 0 && op.x + op.width <= PAGE.width, "fill escapes horizontally");
-				assert.ok(op.y >= 0 && op.y + op.height <= PAGE.height, "fill escapes vertically");
-			}
-		}
-	}
+	assertOpsWithinPage(pages, METRICS);
+});
+
+test("the page bound measures a text run at the scale it is drawn at", () => {
+	// The widest values a legal Zcash invoice carries are drawn compressed onto the payment section's own content width, so a bound that measured a run at its natural width would report a document that never leaves the page.
+	const widest = zecInvoice({
+		payee: { name: "Studio Example", address: unifiedOfBytes(189) },
+		items: [line({ quantity: "1", unitPrice: fromBaseUnits(UINT256_MAX, 8) })],
+	});
+	const view = buildInvoiceViewModel(widest, "2026-10-03");
+	const pages = buildInvoicePages(view, METRICS);
+	const link = pages.flatMap((page) => page.ops).find((op) => op.kind === "text" && op.text === view.paymentLink);
+	assert.ok(link !== undefined, "the widest link this app can build is drawn");
+	assert.ok(link.xScale < 1, "and drawn compressed, since the section cannot hold it at the floor");
+	assert.ok(
+		link.x + METRICS.widthOfText(link.text, link.size, link.font) > PAGE.width,
+		"the run measures past the page at its natural width, which is the reading this bound must not apply",
+	);
+
+	assertOpsWithinPage(pages, METRICS);
+
+	// The bound still reports a run drawn past the edge, so what it measures is the drawn extent rather than nothing at all.
+	const escaping = { kind: "text", x: PAGE.width - 1, y: 100, text: "overflow", size: 6, font: "mono", xScale: 1 };
+	assert.throws(() => assertOpsWithinPage([{ ops: [escaping] }], METRICS), /text escapes horizontally/);
 });
 
 /** True for the running footer's own draws — its hairline and the two runs under it — which sit deliberately in the strip below the content floor. */
@@ -668,17 +700,124 @@ test("the shell's real Save as PDF handler runs network-free end to end, deferri
 	assert.deepEqual(calls, [], `the real export handler attempted network I/O: ${calls.join(", ")}`);
 });
 
+/**
+ * The renderer's browser-only module: reached through a dynamic `import()` so a DOM never enters the export's static module graph.
+ */
+const RENDERER_LAZY_MODULE = "./rasterize.js";
+
+/**
+ * The modules the emitted renderer may statically import, each DOM-free: `pdf-lib` writes PDF bytes without a DOM, and the view-model builder reads only the invoice.
+ * This is an allow-list rather than a list of the rasterizer's spellings, so any new static import fails whatever its path or spelling — a relative spelling of the rasterizer (`../pdf/rasterize.js` from `app/ts/pdf/renderer.ts` resolves to the same module as `./rasterize.js`), a barrel that re-exports it, or any other module — while the browser-only rasterizer stays out of the renderer's static graph.
+ */
+const RENDERER_DOM_FREE_STATIC_IMPORTS = [
+	"../../js/vendor/pdf-lib/pdf-lib.esm.js",
+	"../ui/presentation.js",
+];
+
+/** The static import specifiers of `source` that are not on {@link RENDERER_DOM_FREE_STATIC_IMPORTS}: any one of them may reach the browser-only rasterizer. */
+function offendingStaticImports(source) {
+	const allowed = new Set(RENDERER_DOM_FREE_STATIC_IMPORTS);
+	return staticImportSpecifiers(source).filter((specifier) => !allowed.has(specifier));
+}
+
+/** The browser-only rasterizer, workspace-relative: the module no static path from the emitted renderer may reach. */
+const RASTERIZER_MODULE = "app/js/pdf/rasterize.js";
+
 test("the renderer references no external resource and no network API", () => {
 	const source = readFileSync(join(root, "app/ts/pdf/renderer.ts"), "utf8");
+	const emitted = readFileSync(join(root, "app/js/pdf/renderer.js"), "utf8");
 	assert.ok(
 		!/\b(fetch|XMLHttpRequest|WebSocket|EventSource|importScripts|sendBeacon)\b/.test(source),
 		"the renderer must not reach the network",
 	);
 	assert.ok(!/https?:\/\//.test(source), "the renderer must not name an absolute URL");
 	assert.ok(!/<svg/i.test(source), "the letterhead is drawn, not loaded as SVG");
-	const valueImports = source.replace(/^import\s+type\b[^;]*;/gm, "");
-	assert.ok(!/from\s+"\.\/rasterize\.js"/.test(valueImports), "the browser-only rasterizer is not a static value import of the renderer, so the DOM module stays out of its emitted graph");
-	assert.match(source, /await import\("\.\/rasterize\.js"\)/, "it is reached through a dynamic import, so it loads only for an export that carries an icon");
+	// The emitted module is the authority on the renderer's static graph: the compiler erases every type-only import, so a static value import is exactly what the emitted file would still carry, and the fresh-build comparison is what holds the committed emitted file to the source it came from.
+	assert.deepEqual(
+		offendingStaticImports(emitted),
+		[],
+		"the emitted renderer statically imports only DOM-free modules, so no static import — the rasterizer's or any barrel that reaches it — can pull a DOM module into its graph",
+	);
+	assert.match(emitted, /await import\("\.\/rasterize\.js"\)/, "it is reached through a dynamic import, so it loads only for an export that carries an icon");
+	assert.equal(
+		staticImportReach("app/js/pdf/renderer.js").has(RASTERIZER_MODULE),
+		false,
+		"no static path reaches the browser-only rasterizer, directly or through any emitted module the renderer imports, so the dynamic import is its only route",
+	);
+});
+
+test("the renderer's static-import guard reports any module outside its DOM-free allow-list, whatever the spelling", () => {
+	for (const [source, specifier] of [
+		[`import { rasterizeSvgIcon } from "${RENDERER_LAZY_MODULE}";`, RENDERER_LAZY_MODULE],
+		[`import { rasterizeSvgIcon } from '${RENDERER_LAZY_MODULE}';`, RENDERER_LAZY_MODULE],
+		[`import "${RENDERER_LAZY_MODULE}";`, RENDERER_LAZY_MODULE],
+		[`export { rasterizeSvgIcon } from "${RENDERER_LAZY_MODULE}";`, RENDERER_LAZY_MODULE],
+		[`require("${RENDERER_LAZY_MODULE}")`, RENDERER_LAZY_MODULE],
+		// The same module by another path: from `app/ts/pdf/renderer.ts`, `../pdf/rasterize.js` resolves to the same file as `./rasterize.js`, so a guard keyed on one specifier misses it.
+		[`import { rasterizeSvgIcon } from "../pdf/rasterize.js";`, "../pdf/rasterize.js"],
+		// A barrel that re-exports the rasterizer: the renderer imports only the barrel, so a guard keyed on the rasterizer's own specifier never sees it.
+		[`import { rasterizeSvgIcon } from "./icon-raster-barrel.js";`, "./icon-raster-barrel.js"],
+	]) {
+		assert.deepEqual(offendingStaticImports(source), [specifier], `a static import outside the allow-list is reported: ${source}`);
+	}
+	assert.deepEqual(
+		offendingStaticImports(`import { PDFDocument } from "${RENDERER_DOM_FREE_STATIC_IMPORTS[0]}";`),
+		[],
+		"an allow-listed module is not reported",
+	);
+	assert.deepEqual(offendingStaticImports(`await import("${RENDERER_LAZY_MODULE}")`), [], "a dynamic import is not a static one");
+	assert.deepEqual(offendingStaticImports(`const load = () => import('${RENDERER_LAZY_MODULE}')`), [], "nor a dynamic import spelled with a single-quoted specifier");
+});
+
+test("the renderer's static-import guard reaches a rasterizer hidden behind an allow-listed module", () => {
+	// A synthetic emitted graph: the renderer imports only the allow-listed view-model builder, which imports the browser-only rasterizer, so the direct-specifier allow-list stays green while the transitive walk reaches it.
+	const graph = new Map([
+		["app/js/pdf/renderer.js", "import { buildInvoiceViewModel } from \"../ui/presentation.js\";"],
+		["app/js/ui/presentation.js", "import { rasterizeSvgIcon } from \"../pdf/rasterize.js\";"],
+		["app/js/pdf/rasterize.js", "export const rasterizeSvgIcon = 1;"],
+	]);
+	const read = (file) => graph.get(file) ?? null;
+	assert.deepEqual(
+		offendingStaticImports(graph.get("app/js/pdf/renderer.js")),
+		[],
+		"the direct-specifier allow-list stays green, which is the gap the closure walk closes",
+	);
+	assert.ok(
+		staticImportReach("app/js/pdf/renderer.js", read).has(RASTERIZER_MODULE),
+		"a rasterizer reached through an allow-listed module is still reachable, so the guard fails on it",
+	);
+
+	// The same module by a relative spelling resolves to one path, so the walk is not fooled by how the edge is written.
+	const spelled = new Map([
+		["app/js/pdf/renderer.js", "import { rasterizeSvgIcon } from \"../pdf/rasterize.js\";"],
+		["app/js/pdf/rasterize.js", "export const rasterizeSvgIcon = 1;"],
+	]);
+	assert.ok(
+		staticImportReach("app/js/pdf/renderer.js", (file) => spelled.get(file) ?? null).has(RASTERIZER_MODULE),
+		"and a relative spelling of the rasterizer resolves to the same module",
+	);
+});
+
+test("the static-import walk fails closed rather than passing vacuously on a target it cannot read", () => {
+	// A missing entry module would otherwise leave the closure empty and let the rasterizer-unreachability assertion hold for the wrong reason.
+	assert.throws(
+		() => staticImportReach("app/js/pdf/renderer.js", () => null),
+		/not a readable file/,
+		"an entry the walk cannot read fails the test rather than yielding an empty closure",
+	);
+
+	// An extensionless specifier resolves to a path that is not the `.js` module, so the walk must report it rather than treat it as a leaf.
+	const extensionless = new Map([
+		["app/js/pdf/renderer.js", 'import { rasterizeSvgIcon } from "./rasterize";'],
+	]);
+	assert.throws(
+		() => staticImportReach("app/js/pdf/renderer.js", (file) => extensionless.get(file) ?? null),
+		/not a readable file/,
+		"an extensionless specifier is resolved and its unreadable target fails the walk instead of reading as a leaf",
+	);
+
+	// The real reader refuses a directory target with `null` rather than throwing `EISDIR` incidentally, which the walk then turns into the failure above.
+	assert.equal(readEmittedModule("app/js/pdf"), null, "a directory target is refused rather than read");
 });
 
 test("a privacy-chain invoice draws its payment link and the symbol of that same URI", () => {
@@ -1097,7 +1236,7 @@ test("the rasterizer decodes the icon before drawing it, at the icon's own intri
 	const fixture = installRasterDocument({ naturalWidth: 64, naturalHeight: 32 });
 	try {
 		const raster = await rasterizeSvgIcon(svgDataUrl(ICON_SVG));
-		assert.equal(fixture.image.attributes.src, svgDataUrl(ICON_SVG), "the image loads the leaf's own data URL, so the canvas is same-origin and never tainted");
+		assert.equal(fixture.image.attributes.src, svgDataUrl(ICON_SVG), "the image loads the leaf's own data URL, whose bytes the page already carries, so no cross-origin response is drawn and the canvas is never tainted");
 		assert.deepEqual(fixture.created, ["img", "canvas"], "the rasterizer builds an image and a canvas, and nothing else");
 		assert.deepEqual([fixture.canvas.width, fixture.canvas.height], [64, 32], "the canvas takes the icon's own width and height");
 		assert.deepEqual(
@@ -1158,6 +1297,16 @@ test("a decode the browser refuses is a rejection, never a blank raster", async 
 	}
 });
 
+test("the rasterizer refuses a value that is not the icon leaf data URL before it builds anything", async () => {
+	const fixture = installRasterDocument();
+	try {
+		await assert.rejects(() => rasterizeSvgIcon("data:text/html,<script>alert(1)</script>"), /rasterize:/);
+		assert.deepEqual(fixture.created, [], "no image is built for a value the guard refuses");
+	} finally {
+		fixture.handle.restore();
+	}
+});
+
 test("an icon invoice embeds one image XObject at the letterhead, and an icon-less export never rasterizes", async () => {
 	const raster = { bytes: ICON_PNG, width: 1, height: 1 };
 	const asked = [];
@@ -1202,6 +1351,53 @@ test("an icon invoice embeds one image XObject at the letterhead, and an icon-le
 	assert.deepEqual(await renderInvoicePdf(invoiceFor(), "2026-10-03", unused), plain, "an icon-less export never reaches the rasterizer, and it is the case whose bytes are stable, so they are the ones it always produced");
 });
 
+test("the embedded-image count covers every page, not the first one", async () => {
+	// What the count answers is a statement about the whole artifact — whether the icon is embedded exactly once — so an image on a later page has to be found: an artifact whose only image sits on page 2 reads as an icon-less one to a reader that stops at page 0.
+	const doc = await PDFDocument.create({ updateMetadata: false });
+	doc.addPage([PAGE.width, PAGE.height]);
+	const second = doc.addPage([PAGE.width, PAGE.height]);
+	second.drawImage(await doc.embedPng(ICON_PNG), { x: 10, y: 10, width: 1, height: 1 });
+
+	const reopened = await PDFDocument.load(await doc.save(), { updateMetadata: false });
+	assert.equal(reopened.getPageCount(), 2, "the fixture really carries two pages");
+	assert.equal(imageXObjects(reopened).length, 1, "the image on page 2 is counted rather than passed over as absent");
+});
+
+test("an XObject two pages share is one embedded image, not two", async () => {
+	// The reader keys its entries by the reference each page's resource dict names, so one embedding referenced from two pages is one image; a reader that counted per page would report this artifact as carrying the image twice.
+	const doc = await PDFDocument.create({ updateMetadata: false });
+	const png = await doc.embedPng(ICON_PNG);
+	const first = doc.addPage([PAGE.width, PAGE.height]);
+	const second = doc.addPage([PAGE.width, PAGE.height]);
+	first.drawImage(png, { x: 10, y: 10, width: 1, height: 1 });
+	second.drawImage(png, { x: 10, y: 10, width: 1, height: 1 });
+
+	const reopened = await PDFDocument.load(await doc.save(), { updateMetadata: false });
+	assert.equal(reopened.getPageCount(), 2, "the fixture really carries two pages");
+	const images = imageXObjects(reopened);
+	assert.equal(images.length, 1, "the one image both pages draw is one embedding");
+	assert.deepEqual([images[0].width, images[0].height], [1, 1], "and it is the PNG both pages reference");
+});
+
+test("the icon the letterhead draws stays inside the page, as every other op does", async () => {
+	// The stub stands in for the browser-only rasterizer, which bun has no canvas for, so the icon draw path is exercised without one.
+	const raster = { bytes: ICON_PNG, width: 64, height: 32 };
+	const rasterizer = {
+		async rasterize() {
+			return raster;
+		},
+	};
+	const invoice = invoiceFor({ icon: ICON_SVG });
+	const bytes = await renderInvoicePdf(invoice, "2026-10-03", rasterizer);
+	assert.equal(imageXObjects(await PDFDocument.load(bytes, { updateMetadata: false })).length, 1, "the seam's raster is the image the export embeds");
+
+	const view = buildInvoiceViewModel(invoice, "2026-10-03");
+	const pages = buildInvoicePages(view, METRICS, raster);
+	const icons = pages.flatMap((page) => page.ops).filter((op) => op.kind === "image");
+	assert.equal(icons.length, 1, "the letterhead draws exactly one icon");
+	assertOpsWithinPage(pages, METRICS);
+});
+
 test("a rasterizer that fails is a rejection with no PDF bytes behind it", async () => {
 	const failing = {
 		async rasterize() {
@@ -1209,4 +1405,32 @@ test("a rasterizer that fails is a rejection with no PDF bytes behind it", async
 		},
 	};
 	await assert.rejects(() => renderInvoicePdf(invoiceFor({ icon: ICON_SVG }), "2026-10-03", failing), /no canvas/);
+});
+
+test("a raster with a non-positive or non-finite axis is refused at the layout entry point, for the export and for a direct caller", async () => {
+	for (const [width, height] of [
+		[0, 32],
+		[64, 0],
+		[Number.NaN, 32],
+		[64, Number.POSITIVE_INFINITY],
+	]) {
+		const raster = { bytes: ICON_PNG, width, height };
+		const rasterizer = {
+			async rasterize() {
+				return raster;
+			},
+		};
+		await assert.rejects(
+			() => renderInvoicePdf(invoiceFor({ icon: ICON_SVG }), "2026-10-03", rasterizer),
+			/pixels, which is not a positive finite size/,
+			`the export refuses a ${width}x${height} raster rather than dividing the icon box to undefined geometry`,
+		);
+		// The exported pure layout takes the raster directly, so it must enforce the same invariant without the export's seam.
+		const view = buildInvoiceViewModel(invoiceFor({ icon: ICON_SVG }), "2026-10-03");
+		assert.throws(
+			() => buildInvoicePages(view, METRICS, raster),
+			/pixels, which is not a positive finite size/,
+			`the direct layout refuses a ${width}x${height} raster rather than dividing the icon box to undefined geometry`,
+		);
+	}
 });

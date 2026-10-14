@@ -27,9 +27,17 @@ export function codeOnly(text, { language = "js", htmlComments = false } = {}) {
 	const kinds = scan(text, { language, htmlComments });
 	let masked = "";
 	for (let index = 0; index < chars.length; index += 1) {
-		masked += kinds[index] === "code" || chars[index] === "\n" ? chars[index] : " ";
+		masked += kinds[index] === "code" || kinds[index] === "string" || chars[index] === "\n" ? chars[index] : " ";
 	}
 	return masked;
+}
+
+/**
+ * Classify each character of `text` as `"code"`, `"string"`, or the comment kind it belongs to (`"line"`, `"block"`, `"html"`), so a caller can tell a string literal from code and skip a comment.
+ * It exposes the scan {@link codeOnly} masks with, so a consumer that needs the string spans — the static-import scan — reads one state machine rather than a second one that could drift from it.
+ */
+export function scanKinds(text, { language = "js", htmlComments = false } = {}) {
+	return scan(text, { language, htmlComments });
 }
 
 /**
@@ -51,8 +59,8 @@ export function commentContinuationLines(text, { language = "js", htmlComments =
 }
 
 /**
- * Classify each character as `"code"` or the comment kind it belongs to (`"line"`, `"block"`, `"html"`), which is all a comment mask or a comment-continuation check needs.
- * The default `"js"` model is the state machine below; `"html"` adds HTML-comment spans; `"css"` is block-only.
+ * Classify each character as `"code"`, `"string"`, or the comment kind it belongs to (`"line"`, `"block"`, `"html"`), which is all a comment mask or a comment-continuation check needs.
+ * The `"js"` model is the state machine below and marks every string literal `"string"`, which {@link codeOnly} keeps and {@link scanKinds} exposes; `"html"` adds HTML-comment spans, and `"css"` is block-only, so it yields `"code"` and `"block"` alone.
  */
 function scan(text, { language, htmlComments }) {
 	if (language === "css") return scanCss(text);
@@ -91,6 +99,7 @@ function scanJs(text, { htmlComments }) {
 				continue;
 			}
 			if (char === "\"" || char === "'" || char === "`") state = char;
+			if (state === char) kinds[index] = "string";
 			continue;
 		}
 		if (state === "//") {
@@ -139,7 +148,9 @@ function scanJs(text, { htmlComments }) {
 			if (char === "\n") state = null;
 			continue;
 		}
+		kinds[index] = "string";
 		if (char === "\\") {
+			if (index + 1 < chars.length) kinds[index + 1] = "string";
 			index += 1;
 			continue;
 		}

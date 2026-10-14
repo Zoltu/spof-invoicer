@@ -3,7 +3,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { InvalidIconError, MAX_ICON_DIMENSION, MAX_ICON_PIXELS, MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
-import { MAX_SVG_DATA_URL_PAYLOAD, isSvgDataUrl, svgDataUrl } from "../app/js/util/data-url.js";
+import { MAX_SVG_DATA_URL_PAYLOAD, isSvgDataUrl } from "../app/js/util/data-url.js";
+import { svgDataUrl } from "../app/js/util/svg-data-url.js";
+import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS, iconRawCodeUnitRefusal } from "../app/js/util/icon-capacity.js";
 import { refusalError, refusalMessage } from "./helpers/refusals.mjs";
 
 const PREFIX = "data:image/svg+xml;base64,";
@@ -110,12 +112,19 @@ test("validateIcon measures the byte cap on the NFC form it stores, not the NFD 
 test("validateIcon accepts a document exactly at the byte cap and refuses one byte over", () => {
 	assert.equal(Buffer.byteLength(SVG_AT_BYTE_CAP, "utf8"), MAX_ICON_SVG_BYTES, "the fixture sits exactly at the cap");
 	assert.equal(validateIcon(SVG_AT_BYTE_CAP), SVG_AT_BYTE_CAP);
-	assert.throws(() => validateIcon(`<svg width="64" height="64">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`), InvalidIconError);
+	const overCap = `${SVG_AT_BYTE_CAP}x`;
+	const error = refusalError(() => validateIcon(overCap));
+	assert.ok(error instanceof InvalidIconError, "one byte past the cap is refused");
+	assert.equal(
+		error.message,
+		`The icon is ${Buffer.byteLength(overCap, "utf8")} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.`,
+		"the refusal is the shared byte-cap wording, which the create form shows under the icon field as well",
+	);
 });
 
 test("validateIcon throws a TypeError for a non-string and refuses an empty or over-cap SVG", () => {
 	assert.throws(() => validateIcon(42), TypeError);
-	assert.throws(() => validateIcon(""), InvalidIconError);
+	assert.equal(refusalMessage(() => validateIcon("")), "must not be empty", "an empty document is refused as its own fault rather than as a cap it exceeded");
 	const huge = `<svg width="64" height="64">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
 	assert.throws(() => validateIcon(huge), InvalidIconError);
 });
@@ -222,6 +231,30 @@ test("validateIcon refuses a root whose effective dimension it cannot determine"
 	assert.throws(() => validateIcon("<svg width=\"64\" viewBox=\"0 0 64 64\"></svg>"), InvalidIconError);
 	// The first start tag is the root: a non-`svg` element before a well-formed `<svg>` is not a root this gate accepts.
 	assert.throws(() => validateIcon("<cover></cover><svg width=\"64\" height=\"64\"></svg>"), InvalidIconError);
+	// The root is read by its element name's local name, as every other element refusal in the module is, so a prefixed root is the root rather than an element the gate does not know.
+	const prefixed = '<svg:svg width="64" height="64"></svg:svg>';
+	assert.equal(validateIcon(prefixed), prefixed);
+});
+
+test("validateIcon requires a single root element and admits a prolog, a nested <svg>, and a trailing comment", () => {
+	const root = '<svg width="64" height="64"></svg>';
+	// A second element at the document level leaves the value with more than one root, which a browser refuses to decode as an image.
+	assert.throws(() => validateIcon(`${root}${root}`), InvalidIconError, "a second root element is refused");
+	assert.match(refusalMessage(() => validateIcon(`${root}${root}`)), /single <svg> root element/, "the refusal names the single-root requirement");
+	// The walk tracks nesting: the inner `<svg>` here is an ordinary element inside the root, and the element after the closed root is a second one.
+	const nestedThenSecond = '<svg width="64" height="64"><svg width="32" height="32"/></svg><svg width="1" height="1"/>';
+	assert.throws(() => validateIcon(nestedThenSecond), InvalidIconError, "an element after a closed root is a second root");
+	// A nested `<svg>` is inside the root, so it is not a second root and the document is admitted.
+	const nested = '<svg width="64" height="64"><svg width="32" height="32"/></svg>';
+	assert.equal(validateIcon(nested), nested, "a nested <svg> element is inside the root, not a second root");
+	// Neither a prolog nor a trailing comment is an element at the document level, so a single-root document that carries one is admitted.
+	const prolog = `<?xml version="1.0" encoding="UTF-8"?>${root}`;
+	assert.equal(validateIcon(prolog), prolog, "an XML prolog before the root is admitted");
+	const trailing = `${root}<!-- trailing note -->`;
+	assert.equal(validateIcon(trailing), trailing, "a trailing comment after the root is admitted");
+	// Whitespace between the elements is text rather than an element, so it neither closes the root nor opens a second one.
+	const spaced = '<svg width="64" height="64">\n  <rect width="64" height="64"/>\n</svg>';
+	assert.equal(validateIcon(spaced), spaced, "whitespace around the elements is admitted");
 });
 
 test("validateIcon refuses a root start tag whose attributes it cannot read", () => {
@@ -341,7 +374,25 @@ test("validateIcon accepts a filter-free document alongside the refusals", () =>
 });
 
 test("validateIcon refuses a raw spelling past the pre-composition bound without normalizing it", () => {
-	assert.throws(() => validateIcon("x".repeat(MAX_ICON_SVG_BYTES * 8 + 1)), InvalidIconError);
+	const raw = "x".repeat(MAX_ICON_RAW_CODE_UNITS + 1);
+	const error = refusalError(() => validateIcon(raw));
+	assert.ok(error instanceof InvalidIconError, "the raw spelling is refused");
+	// The byte-cap check raises the same error class from the same shared contract, so pin the message that distinguishes the pre-composition guard from it: the guard states that bound's one wording, in the unit it counts, and the clause naming the check that ran "before normalization" is what tells the two refusals apart.
+	assert.equal(
+		error.message,
+		`The icon is ${raw.length} characters before normalization, over the ${MAX_ICON_RAW_CODE_UNITS}-character limit.`,
+		"the refusal is the shared raw-bound wording, in the code units that bound counts",
+	);
+});
+
+test("the form's raw read ceiling and the gate's pre-composition bound are one shared number", () => {
+	assert.equal(MAX_ICON_RAW_CODE_UNITS, MAX_ICON_SVG_BYTES * 8, "the raw bound states the multiplier once, in the shared contract");
+	assert.equal(MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS, "the form's file read and the gate's raw bound are the same statement, so they cannot drift apart");
+	assert.equal(
+		iconRawCodeUnitRefusal(MAX_ICON_RAW_CODE_UNITS + 1),
+		`The icon is ${MAX_ICON_RAW_CODE_UNITS + 1} characters before normalization, over the ${MAX_ICON_RAW_CODE_UNITS}-character limit.`,
+		"and the refusal both readers state for it is one wording, stated here beside the number",
+	);
 });
 
 test("svgDataUrl refuses an empty, over-cap, or non-string value rather than encoding unbounded input", () => {

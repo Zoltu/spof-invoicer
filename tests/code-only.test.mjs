@@ -1,13 +1,13 @@
 /**
  * Focused tests for the comment/regex state machine in `tests/helpers/code-only.mjs`.
  *
- * The machine gates a security sweep: `tests/acceptance.test.mjs` masks comments before it looks for network APIs and markup sinks, and the style guard uses the same scan to exempt comment-continuation lines from the indent rule, so a mis-read here hides real code or hides a violation.
- * Each case pins the behavior those two consumers depend on: strings and regex bodies stay code, comments are masked, the mask preserves length and line count, and only continuation lines are exempt.
+ * The machine gates three consumers: `tests/acceptance.test.mjs` masks comments before it looks for network APIs and markup sinks, the style guard exempts comment-continuation lines from the indent rule with the same scan, and `tests/helpers/static-imports.mjs` reads the scan's per-character kinds to find the string spans a module's imports sit in, so a mis-read here hides real code, hides a violation, or reads an import out of a doc comment.
+ * Each case pins the behavior those consumers depend on: comments are masked, the mask preserves length and line count, only continuation lines are exempt, and `scanKinds` reports the same scan character by character — a string literal's characters are the `"string"` kind, which `codeOnly` keeps in its mask rather than blanking, while every other character is `"code"` or the comment kind it belongs to.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { codeOnly, commentContinuationLines, languageFor } from "./helpers/code-only.mjs";
+import { codeOnly, commentContinuationLines, languageFor, scanKinds } from "./helpers/code-only.mjs";
 
 /** Mask `text` the way the comment masker must: replace each fragment with spaces of the same length. */
 function blanked(text, ...fragments) {
@@ -96,6 +96,56 @@ test("the acceptance sweep's htmlComments option masks HTML comment prose", () =
 	assert.equal(codeOnly(source), source);
 	assert.ok(!codeOnly(source, { htmlComments: true }).includes("fetch"));
 	assert.ok(codeOnly(source, { htmlComments: true }).includes("<div>code</div>"));
+});
+
+test("scanKinds reports a string literal's characters as the string kind, one kind per character", () => {
+	const source = "const url = \"fetch(/x/)\"; // tail\n";
+	const chars = [...source];
+	const kinds = scanKinds(source);
+	assert.equal(kinds.length, chars.length, "the scan is index-aligned with the code points it read");
+	const first = chars.indexOf("\"");
+	const last = chars.lastIndexOf("\"");
+	for (let index = first; index <= last; index += 1) {
+		assert.equal(kinds[index], "string", `character ${index} of the literal is string text`);
+	}
+	assert.equal(kinds[0], "code", "the declaration around it is code");
+	assert.equal(kinds[source.indexOf("//")], "line", "and the trailing comment is a comment, not a string");
+	assert.equal(kinds.join("").includes("string"), true, "the string kind is what the static-import scan reads");
+});
+
+test("scanKinds keeps the scan in step through an escaped quote and a template literal", () => {
+	const escaped = "const s = \"a \\\" b\"; // tail\n";
+	const escapedChars = [...escaped];
+	const escapedKinds = scanKinds(escaped);
+	const first = escapedChars.indexOf("\"");
+	const last = escapedChars.lastIndexOf("\"");
+	for (let index = first; index <= last; index += 1) {
+		assert.equal(escapedKinds[index], "string", `escaped literal, character ${index}`);
+	}
+	assert.equal(escapedKinds[escaped.indexOf("//")], "line", "the escaped quote does not desync the scanner");
+
+	const template = "const t = `a // b`; // tail\n";
+	const templateKinds = scanKinds(template);
+	assert.equal(templateKinds[template.indexOf("//")], "string", "the `//` inside the template is string text");
+	assert.equal(templateKinds[template.lastIndexOf("//")], "line", "and the `//` after the template is the comment");
+});
+
+test("scanKinds reports a quote inside a comment as the comment it is, never as a string", () => {
+	const source = "// it's a comment\n";
+	const kinds = scanKinds(source);
+	assert.deepEqual([...new Set(kinds.slice(0, source.indexOf("\n")))], ["line"]);
+	assert.equal(kinds.join("").includes("string"), false, "no character of the comment is string text");
+});
+
+test("scanKinds reads the same options codeOnly masks with", () => {
+	const html = "<!-- fetch -->\n<div>code</div>\n";
+	const htmlKinds = scanKinds(html, { htmlComments: true });
+	assert.equal(htmlKinds[html.indexOf("fetch")], "html", "an HTML comment span is its own kind, not code");
+	assert.equal(htmlKinds[html.indexOf("<div>")], "code", "and the markup outside it is code");
+
+	// The CSS model recognizes block comments alone, so a `/*` inside a quoted value is not a comment and no character of the value is a string either.
+	const css = "a {\n\tcontent: \"/*\";\n}\n";
+	assert.deepEqual([...new Set(scanKinds(css, { language: "css" }))], ["code"]);
 });
 
 test("commentContinuationLines marks continuation lines only, never the opening line", () => {

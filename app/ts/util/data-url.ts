@@ -1,25 +1,24 @@
 /**
- * The `data:` URL leaf for an SVG icon, and the one place in the runtime tree a `data:` literal is spelled.
+ * The icon data-URL leaf: the `data:image/svg+xml;base64,…` prefix an SVG icon is armed under, the branded {@link SvgDataUrl} type an image sink's `src` accepts, and the bounded shape check beside it.
  *
- * This module is the single boundary that turns validated SVG text into the `data:image/svg+xml;base64,…` URL that an `HTMLImageElement` `src` loads or a `<canvas>` draws.
- * Neither {@link svgDataUrl} nor {@link isSvgDataUrl} makes any sink accept such a value: a caller that gates a `src` on {@link isSvgDataUrl} enforces that rule in its own code, and this leaf neither writes an attribute nor permits one, so sink-side enforcement is outside this module.
- * What this module does state is the value's type: {@link svgDataUrl} returns the branded {@link SvgDataUrl}, which is the only type an image sink's `src` accepts, so a bare string cannot reach one by accident — and {@link isSvgDataUrl} is the matching runtime check for a value TypeScript could not narrow.
- * {@link svgDataUrl} enforces the byte cap the icon validator applies, refusing an empty or over-long value before it encodes, so the leaf does no work proportional to an unbounded input.
- * {@link isSvgDataUrl} is a bounded shape check that recognizes the URL {@link svgDataUrl} builds; it is a shape test rather than a content check, and what makes the result safe to load is the browser's image-context rendering, not this leaf.
+ * This module is the one place in the runtime tree a `data:` literal is spelled, and what its split from the encoder protects is being free of the encoding and vendor stack: `util/dom.ts` imports {@link SvgDataUrl} and {@link isSvgDataUrl} for the one `src` sink `h()` builds, and `h()` is imported by nearly every page module, so the base64 encoder and the vendored bundle it reads must not be reachable from here.
+ * The step that turns an SVG document into this leaf's URL — `svgDataUrl`, in the module `util/svg-data-url.ts` that exports it — lives in its own module, so the vendored base64 encoder it reads stays off `h()`'s graph and off the graph of every module that merely reads the leaf's bounds.
+ *
+ * {@link SvgDataUrl} is the only type an image sink's `src` accepts, so a bare string cannot reach one by accident, and {@link isSvgDataUrl} is the matching runtime check for a value TypeScript could not narrow.
+ * Neither makes any sink accept such a value: a caller that gates a `src` on {@link isSvgDataUrl} enforces that rule in its own code, and this leaf neither writes an attribute nor permits one, so sink-side enforcement is outside this module.
+ * {@link isSvgDataUrl} is a bounded shape check that recognizes the URL that encoder builds; it is a shape test rather than a content check, and what makes the result safe to load is the browser's image-context rendering, not this leaf.
  */
 
-import { base64, utf8ToBytes } from "./encoding.js";
-import { preview } from "./errors.js";
 import { MAX_ICON_SVG_BYTES } from "./icon-capacity.js";
 
-/** The prefix of every SVG data URL this module builds. */
-const SVG_DATA_URL_PREFIX = "data:image/svg+xml;base64,";
+/** The prefix of every SVG data URL the icon encoder builds, and the one `data:` literal in the runtime tree. */
+export const SVG_DATA_URL_PREFIX = "data:image/svg+xml;base64,";
 
 /**
- * An SVG data URL built by {@link svgDataUrl}, branded so an ordinary string cannot stand in for one.
+ * An SVG data URL built by the icon encoder, branded so an ordinary string cannot stand in for one.
  *
  * The brand is what keeps an arbitrary value out of an image sink: `util/dom.ts` types its `src` attribute as this type, so `"logo.svg"` and a `data:text/html,…` string are compile errors at every `h()` call site, and the runtime check beside it ({@link isSvgDataUrl}) is what holds when a caller reaches the attribute through a value TypeScript could not narrow.
- * The brand is a phantom: no value carries the property at runtime, and every value of this type came from {@link svgDataUrl} or from a cast the compiler accepted.
+ * The brand is a phantom: no value carries the property at runtime, and every value of this type came from the encoder or from a cast the compiler accepted.
  */
 export type SvgDataUrl = string & { readonly __svgDataUrlBrand: unique symbol };
 
@@ -46,28 +45,6 @@ const BASE64_PAYLOAD = /^[A-Za-z0-9+/]+={0,2}(?![\s\S])/;
 function decodedByteLength(payload: string): number {
 	const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
 	return (payload.length / 4) * 3 - padding;
-}
-
-/**
- * Encode an SVG document as a `data:image/svg+xml;base64,…` URL.
- *
- * The caller must have validated the value with the icon gate (`invoice/icon.ts`) first; that precondition is the caller's, and this function does not check it, so a value that was never validated is armored into a `data:` URL all the same.
- * What this function does enforce is the value's shape and byte size: a value that is not a string throws a `TypeError`, and an empty value or one over the {@link MAX_ICON_SVG_BYTES} byte cap — measured in code units first, so an over-long input is refused before it is encoded — throws a `RangeError`, so the leaf never works on unbounded input and the URL it returns is always one the shape check below admits.
- * It transports the exact text it is given, UTF-8 encoded and base64-armored, so no character of the document needs escaping inside an attribute.
- * The result is an image-sink value, meant for an `HTMLImageElement` `src` or a `<canvas>` draw and never for a navigation target, an inline markup sink, or a fetch.
- */
-export function svgDataUrl(svg: string): SvgDataUrl {
-	if (typeof svg !== "string") {
-		throw new TypeError(`data-url: expected an SVG string, got ${preview(svg)}`);
-	}
-	if (svg.length > MAX_ICON_SVG_BYTES) {
-		throw new RangeError(`data-url: refusing ${svg.length} code units, over the ${MAX_ICON_SVG_BYTES}-byte icon cap`);
-	}
-	const bytes = utf8ToBytes(svg);
-	if (bytes.length === 0 || bytes.length > MAX_ICON_SVG_BYTES) {
-		throw new RangeError(`data-url: refusing ${bytes.length} UTF-8 bytes, outside 1..${MAX_ICON_SVG_BYTES}`);
-	}
-	return `${SVG_DATA_URL_PREFIX}${base64.encode(bytes)}` as SvgDataUrl;
 }
 
 /**

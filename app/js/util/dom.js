@@ -1,14 +1,15 @@
 /**
  * The dynamic-DOM layer: the `h()` builder the whole app builds its markup with, and the attribute allow-list behind it.
  *
- * It is the app's one markup sink by construction: string and number children become text nodes, and an attribute outside {@link ALLOWED_ATTRIBUTES} — or a value the attribute's own gate refuses — throws rather than mutating the element, so no invoice field can become script or an event handler.
+ * It is the app's one markup sink by construction: string and number children become text nodes, and an attribute outside {@link ALLOWED_ATTRIBUTES} — or outside the one element {@link SRC_ELEMENTS} admits it for — or a value the attribute's own gate refuses, throws rather than mutating the element, so no invoice field can become script or an event handler.
  * {@link append} shares the same child handling, and nothing here reaches the network.
  */
 import { isSvgDataUrl } from "./data-url.js";
 import { describe, preview } from "./errors.js";
 /**
- * The attribute names {@link h} will set, and the single source of truth for both the type and the runtime allow-list.
+ * The attribute names {@link h} will set on any element, and the single source of truth for both the type and the runtime allow-list.
  * An explicit set — rather than an index signature — keeps a call site that spreads parsed invoice data from introducing event handlers (`onclick`), script-bearing URLs (`srcdoc`, an arbitrary `src`), inline CSS (`style`), or a `javascript:` `href`.
+ * `src` is deliberately absent because it is an image sink rather than an ordinary attribute: it is admitted for the one element that renders it in the browser's image context, which is why it is pinned in {@link SRC_ELEMENTS} instead of here.
  * The names whose values carry meaning beyond text are gated: `href` through {@link safeUrl}, which admits only a same-origin reference or a `#` target, and `src` through {@link isSvgDataUrl}, which admits only the data URL the icon leaf builds.
  * `accept` and `alt` are free text — a file-picker filter and an image's alternative text — and neither is a sink.
  */
@@ -39,13 +40,17 @@ const ALLOWED_ATTRIBUTES = [
     "scope",
     "headers",
     "href",
-    "src",
     "aria-label",
     "aria-modal",
     "aria-hidden",
     "aria-describedby",
     "aria-expanded",
 ];
+/**
+ * The one element {@link h} admits `src` for: an `<img>`, whose source a browser renders in its image context — secure static image mode — where the icon's scripts do not run and its external references are not fetched.
+ * The same data URL on a document-context element (`iframe`, `object`, `embed`) is a nested document rather than an image, where that boundary does not hold, so the element is pinned here and `h` refuses an `src` on any other tag rather than leaving the image-context boundary to the page's CSP alone.
+ */
+const SRC_ELEMENTS = new Set(["img"]);
 /** URL-bearing attributes; {@link h} runs each value through {@link safeUrl} before setting it. */
 const URL_ATTRIBUTES = new Set(["href"]);
 const ALLOWED = new Set(ALLOWED_ATTRIBUTES);
@@ -80,19 +85,22 @@ export function safeUrl(value) {
  */
 const FORBIDDEN_TAGS = new Set(["script"]);
 /**
- * Validate an attribute name, and a gated value, returning the value to write.
+ * Validate an attribute name for `tag`, and a gated value, returning the value to write.
  * A URL attribute resolves to {@link safeUrl}'s normalized result, so `h` sets the attribute to exactly the string that passed the check.
- * `src` is the one image sink `h` can build, and it accepts nothing but the icon leaf's own data URL — not a relative path, not a remote reference, and not any other `data:` type — so the attribute carries only what the icon leaf's `svgDataUrl` produced.
+ * `src` is the one image sink `h` can build: it is admitted for the tags in {@link SRC_ELEMENTS} alone, and it accepts nothing but the icon leaf's own data URL — not a relative path, not a remote reference, and not any other `data:` type — so the attribute carries only what the icon encoder's `svgDataUrl` produced.
  */
-function checkedAttributeValue(name, value) {
-    if (!ALLOWED.has(name)) {
-        throw new TypeError(`dom: refusing the attribute ${describe(name)} — it is not on the h() allow-list`);
-    }
+function checkedAttributeValue(tag, name, value) {
     if (name === "src") {
+        if (!SRC_ELEMENTS.has(tag)) {
+            throw new TypeError(`dom: refusing an src on a <${tag}> element — only an <img> renders a source in the browser's image context`);
+        }
         if (!isSvgDataUrl(value)) {
             throw new TypeError(`dom: refusing the src ${preview(value)} — only the icon leaf's own data URL may reach an image sink`);
         }
         return value;
+    }
+    if (!ALLOWED.has(name)) {
+        throw new TypeError(`dom: refusing the attribute ${describe(name)} — it is not on the h() allow-list`);
     }
     if (URL_ATTRIBUTES.has(name)) {
         return safeUrl(value);
@@ -104,7 +112,7 @@ function checkedAttributeValue(name, value) {
  *
  * String and number children become text nodes (never markup), so invoice free text cannot become script; `null`, `undefined` and `false` children are skipped.
  * A `true` attribute value becomes a valueless attribute (e.g. `disabled`), and `null`/`undefined`/`false` attributes are left off.
- * An attribute name outside {@link ALLOWED_ATTRIBUTES}, an unsafe value for a URL-bearing attribute, or a `src` that is not the icon leaf's own data URL throws instead of mutating the element; a URL-bearing attribute is set to {@link safeUrl}'s normalized result, not the raw value.
+ * An attribute name outside {@link ALLOWED_ATTRIBUTES}, an `src` on a tag outside {@link SRC_ELEMENTS}, an unsafe value for a URL-bearing attribute, or a `src` that is not the icon leaf's own data URL throws instead of mutating the element; a URL-bearing attribute is set to {@link safeUrl}'s normalized result, not the raw value.
  * A tag that can carry executable script ({@link FORBIDDEN_TAGS}) throws rather than building one.
  */
 export function h(tag, attributes = {}, ...children) {
@@ -116,7 +124,7 @@ export function h(tag, attributes = {}, ...children) {
         if (value === null || value === undefined || value === false) {
             continue;
         }
-        const checked = checkedAttributeValue(name, value);
+        const checked = checkedAttributeValue(tag, name, value);
         element.setAttribute(name, checked === true ? "" : String(checked));
     }
     append(element, children);

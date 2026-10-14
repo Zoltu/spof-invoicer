@@ -2,15 +2,30 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { fromBaseUnits, toBaseUnits, UINT256_MAX } from "../app/js/util/decimal.js";
 import { append, h, safeUrl } from "../app/js/util/dom.js";
-import { svgDataUrl } from "../app/js/util/data-url.js";
+import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { base58, base58check, base58xmr, bech32, bech32m, hexToBytes, sha256, toHex, utf8ToBytes } from "../app/js/util/encoding.js";
 import { describe, preview } from "../app/js/util/errors.js";
 import { boundRaw } from "../app/js/util/text.js";
+import { findTsc } from "../build.mjs";
 import { installFakeDocument } from "./helpers/dom.mjs";
+import { readEmittedModule, repoRelativeTarget, staticImportReach } from "./helpers/static-imports.mjs";
 
 const EIGHTEEN = 10n ** 18n;
+
+/** The deepest directory that contains every one of `paths`, which is the `rootDir` a probe tsconfig must set to span both the throwaway probe directory and the sources it imports. */
+function commonAncestor(...paths) {
+	const parts = paths.map((value) => resolve(value).split(sep));
+	let end = 0;
+	while (end < parts[0].length && parts.every((entry) => entry[end] === parts[0][end])) end += 1;
+	return parts[0].slice(0, end).join(sep) || sep;
+}
 
 test("toBaseUnits scales a decimal string by the asset's decimals", () => {
 	assert.equal(toBaseUnits("1.5", 6), 1500000n);
@@ -299,6 +314,11 @@ test("h refuses a src that is not the icon leaf's own data URL", () => {
 		const url = svgDataUrl('<svg width="16" height="16"></svg>');
 		assert.equal(h("img", { src: url }).attributes.src, url, "the leaf's own data URL reaches the attribute");
 		assert.equal(h("img", { alt: "", src: url }).attributes.alt, "", "and the alt text beside it is free text");
+		assert.throws(
+			() => h("iframe", { src: url }),
+			/only an <img> renders a source in the browser's image context/,
+			"and the same data URL on a document-context element is refused, so the image-context boundary is h()'s and not only the CSP's",
+		);
 		for (const value of [
 			"logo.svg",
 			"#/create",
@@ -312,6 +332,11 @@ test("h refuses a src that is not the icon leaf's own data URL", () => {
 				`h must refuse the src ${JSON.stringify(value)}`,
 			);
 		}
+		assert.throws(
+			() => h("img", { ...{ src: "logo.svg" } }),
+			/only the icon leaf's own data URL may reach an image sink/,
+			"a spread that smuggles a plain string into src is refused by the runtime check even where the type brand could be bypassed",
+		);
 		assert.throws(() => h("img", { src: 42 }), /only the icon leaf's own data URL/, "a non-string src is refused too");
 		assert.throws(
 			() => h("a", { href: "data:text/html,x" }),
@@ -402,4 +427,49 @@ test("preview reads a value's toStringTag under a guard", () => {
 	assert.equal(preview(new Date(0)), "[object Date]");
 	assert.equal(preview(new Map()), "[object Map]");
 	assert.equal(preview(Object.create(null)), "[object Object]", "an object with no prototype still renders through the engine");
+});
+
+test("DomAttributes refuses an src on a widened or union-typed tag at compile time, and admits it on an img", () => {
+	// The probe carries a `@ts-expect-error` on the union-typed tag and on a spread that smuggles a plain string into `src`, so a `tsc` run exits zero only while both lines are compile errors and the `<img>` call site still compiles.
+	// The probe source is generated from this committed string into a throwaway directory at run time, so no untracked path is required for a clean checkout to run the suite; its own `package.json` makes it an ES module and its tsconfig extends the root one, so the probe is checked under the project's own configuration — `verbatimModuleSyntax`, `isolatedModules`, `moduleDetection`, `noImplicitOverride`, `noFallthroughCasesInSwitch` and the rest — rather than a hand-copied flag list that can drift.
+	const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+	const tsc = findTsc();
+	assert.notEqual(tsc, null, "typescript is installed");
+	const dir = mkdtempSync(join(tmpdir(), "invoice-type-probe-"));
+	try {
+		const specifier = (target) => relative(dir, join(root, target)).split(sep).join("/");
+		const probe = `/** The compile-time probe for the DomAttributes src sink, compiled by tests/util.test.mjs under the project's own tsconfig. */
+import { h } from "${specifier("app/ts/util/dom.js")}";
+import { svgDataUrl } from "${specifier("app/ts/util/svg-data-url.js")}";
+
+const url = svgDataUrl('<svg width="64" height="64"></svg>');
+
+declare const widenedTag: keyof HTMLElementTagNameMap;
+// @ts-expect-error an src on a union-typed tag is a compile error, not only a runtime refusal
+h(widenedTag, { src: url });
+
+h("img", { src: url, alt: "" });
+
+// @ts-expect-error a spread that smuggles a plain string into src is a compile error, so the brand holds at the spread too
+h("img", { ...{ src: "logo.svg" } });
+`;
+		writeFileSync(join(dir, "dom-src.ts"), probe);
+		writeFileSync(join(dir, "package.json"), '{ "type": "module" }\n');
+		writeFileSync(
+			join(dir, "tsconfig.json"),
+			`${JSON.stringify({ extends: join(root, "tsconfig.json"), compilerOptions: { rootDir: commonAncestor(dir, root), noEmit: true }, include: ["dom-src.ts"] }, null, "\t")}\n`,
+		);
+		const result = spawnSync(process.execPath, [tsc, "-p", join(dir, "tsconfig.json"), "--noEmit"], { cwd: root, encoding: "utf8" });
+		assert.equal(result.error, undefined, `tsc could not run: ${result.error}`);
+		assert.equal(result.status, 0, `the type probe must compile cleanly under the project's own configuration, so an src is a compile error on a union-typed tag and on a spread, and still admitted on an img:\n${result.stdout}${result.stderr}`);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the emitted markup builder's static graph reaches no encoding or vendored module", () => {
+	// `h()` is imported by nearly every page module, so the leaf it reads the src contract from stays dependency-free: a static import of the encoding or vendored bundle here would ride into every page load.
+	const reached = staticImportReach("app/js/util/dom.js", readEmittedModule, repoRelativeTarget);
+	const offenders = [...reached].filter((file) => /(?:^|\/)util\/encoding\.js$/.test(file) || file.startsWith("app/js/vendor/"));
+	assert.deepEqual(offenders, [], `the builder's static graph reaches ${offenders.join(", ")}`);
 });

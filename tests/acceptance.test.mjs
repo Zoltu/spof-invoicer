@@ -54,7 +54,7 @@ import { QR_SYMBOL, buildInvoicePages, downloadPdf, invoiceFileName, renderInvoi
 import { renderCreateView } from "../app/js/ui/create.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
-import { svgDataUrl } from "../app/js/util/data-url.js";
+import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { base32nopad, bech32m, utf8 } from "../app/js/util/encoding.js";
 import { encodeQr } from "../app/js/util/qr.js";
 import { PDFDocument } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
@@ -95,12 +95,12 @@ const MARKUP_SINKS = /\b(innerHTML|outerHTML|insertAdjacentHTML|document\.write|
 /** The one flag set every vector pattern is built with, so the composed sweep and the two patterns it is built from cannot disagree on case. */
 const VECTOR_FLAGS = "i";
 /** A direct `src` assignment, one of the two vectors the script-URL sweep below names. */
-const SRC_ASSIGNMENT = new RegExp("\\.\\s*src\\s*=", VECTOR_FLAGS);
+const SRC_ASSIGNMENT = new RegExp("\\.\\s*src\\s*=|\\[\\s*[\"'`]src[\"'`]\\s*\\]\\s*=", VECTOR_FLAGS);
 /**
  * A script-bearing URL scheme in a string literal: `javascript:`, `data:`, `vbscript:`, `blob:`, or `file:` right after a quote or backtick.
  *
  * The list is the single source of truth for every scheme the script-URL sweep refuses, so a scheme added here reaches the script-URL sweep.
- * The `data:` exemption below does not consult this pattern: it admits a line only when the whole comment-stripped line equals {@link SANCTIONED_DATA_URL_STATEMENT}, the leaf's declaration of its prefix constant, so renaming that constant drops the exemption rather than moving with it.
+ * The `data:` exemption below does not consult this pattern: it admits a line only when the whole comment-stripped line equals one of {@link SANCTIONED_DATA_URL_STATEMENTS}, the leaf's declaration of its own prefix constant in either spelling it is written in, so renaming that constant drops the exemption rather than moving with it.
  */
 const URL_SCHEME_LITERAL = new RegExp("[\"'`](?:javascript|data|vbscript|blob|file):", VECTOR_FLAGS);
 // A direct `src` assignment and a script-bearing URL scheme in a string literal, composed from the two patterns above. Swept over the app's own runtime only: the vendored pdf-lib bundle legitimately sets `this.src` and builds `data:` URIs, so neither is a vendored-code sink.
@@ -314,17 +314,17 @@ function isOurModule(file) {
  * The whole allow-list for the DOM-creation sweep, each site named with the justification that exempts it.
  *
  * `util/dom.ts`'s `h()` builder has one sanctioned call, `document.createElement(tag)`, safe because the tag it hands over is the parameter `h()` has already checked against its own forbidden tags.
- * The exemption names that call site, so a tag literal in that file (`script`, `iframe`, …) or any other `createElement` call in it is still reported.
+ * The exemption is file-scoped and one line at a time: the sweep tests each reported line on its own, so a tag literal in that file (`script`, `iframe`, …) or a `createElement` call the pattern does not match is still reported, while a second line that spells `document.createElement(tag)` in the same file would be admitted too.
  * The PDF export's download anchor in `pdf/renderer.ts` is the exception `README.md` documents: it is built on the fly to take an app-generated `blob:` URL that `h()` itself would refuse, and its tag is the literal `"a"`.
  * `pdf/rasterize.ts` builds the browser-only rasterizer's own two elements — the `<img>` that loads the icon leaf's data URL and the `<canvas>` its pixels are drawn into — which is the image context the icon is rendered in and neither of which can carry script.
- * Any other call, in any other file — and any other call in these files — is not exempt.
+ * The pattern is anchored to the call's own identifier — the `tag` parameter, or the literal tag the anchor names — rather than to the whole statement, so what it enforces is a file, a value identifier, and one line at a time; it does not prove the line is the one call site named here.
  */
 const ELEMENT_BUILDERS = new Set(["app/ts/util/dom.ts", "app/js/util/dom.js"]);
 const DOWNLOAD_ANCHORS = new Set(["app/ts/pdf/renderer.ts", "app/js/pdf/renderer.js"]);
 /** The rasterizer's file, in both trees. */
 const RASTERIZER_SITES = new Set(["app/ts/pdf/rasterize.ts", "app/js/pdf/rasterize.js"]);
-/** The builder's one sanctioned call site: `h()` passing the tag parameter it has already refused a forbidden value for. */
-const SANCTIONED_BUILDER_CALL = /\bdocument\s*\.\s*createElement\s*\(\s*tag\s*\)/;
+/** The builder's one sanctioned call site: `h()` passing the tag parameter it has already refused a forbidden value for, its identifier word-anchored so a longer name that merely ends in `tag` is not exempt. */
+const SANCTIONED_BUILDER_CALL = /\bdocument\s*\.\s*createElement\s*\(\s*\btag\b\s*\)/;
 /** The rasterizer's two sanctioned calls, pinned to the two tags it may build: an image element and the canvas it is drawn into. */
 const SANCTIONED_RASTERIZER_CALLS = /\bdocument\s*\.\s*createElement\s*\(\s*["'`](?:img|canvas)["'`]\s*\)/;
 function isSanctionedElementBuilder(hit) {
@@ -336,29 +336,42 @@ function isSanctionedElementBuilder(hit) {
 /**
  * The whole allow-list for the script-URL sweep: the one runtime file that arms an icon, and the one statement it may spell there.
  *
- * `util/data-url.ts` turns a validated SVG into the `data:image/svg+xml;base64,…` URL an image sink loads, so it is the one place the runtime spells a `data:` scheme, and `app/js/util/data-url.js` is the compiled copy of that same statement.
+ * `util/data-url.ts` declares the `data:image/svg+xml;base64,…` prefix an image sink loads and `util/svg-data-url.ts` composes it into that URL, so the leaf is the one place the runtime spells a `data:` scheme, and `app/js/util/data-url.js` is the compiled copy of that same statement.
  * The exemption is content-specific rather than file-wide: it admits exactly the statement that declares the leaf's prefix constant, as {@link isSanctionedElementBuilder} admits exactly the builder's one sanctioned call, so the same literal on any other line of the leaf — a `javascript:`/`vbscript:`/`blob:`/`file:` literal, a second `data:` literal, or a `.src =` assignment — is still reported.
+ * The declaration is admitted in both the spellings a module can write it in, with and without the `export` keyword, because the leaf exports the constant and either line is that same statement over that same literal; the match stays whole-line and exact, so neither spelling admits a different literal, a different file, or a differently shaped statement.
  */
 const DATA_URL_LEAVES = new Set(["app/ts/util/data-url.ts", "app/js/util/data-url.js"]);
 /** The exact prefix literal the leaf may spell, and the only `data:` spelling any exemption covers. */
 const SANCTIONED_DATA_URL_LITERAL = "data:image/svg+xml;base64,";
-/** The one statement the exemption admits: the leaf's declaration of its own prefix constant, composed from the literal above so the two cannot disagree. */
+/** The leaf's declaration of its own prefix constant in the spelling without `export`, composed from the literal above so the two cannot disagree; it is one of the two lines the exemption admits. */
 const SANCTIONED_DATA_URL_STATEMENT = `const SVG_DATA_URL_PREFIX = "${SANCTIONED_DATA_URL_LITERAL}";`;
+/** The same declaration as the leaf writes it, with the `export` keyword: the two spellings are the whole allow-list, and each is the whole line the exemption tests. */
+const SANCTIONED_DATA_URL_EXPORT_STATEMENT = `export ${SANCTIONED_DATA_URL_STATEMENT}`;
+/** The two exact statements the exemption admits, held as one allow-list so no third spelling can be admitted by accident. */
+const SANCTIONED_DATA_URL_STATEMENTS = new Set([SANCTIONED_DATA_URL_STATEMENT, SANCTIONED_DATA_URL_EXPORT_STATEMENT]);
 function isSanctionedDataUrlStatement(hit) {
-	return DATA_URL_LEAVES.has(hit.file) && hit.text === SANCTIONED_DATA_URL_STATEMENT;
+	return DATA_URL_LEAVES.has(hit.file) && SANCTIONED_DATA_URL_STATEMENTS.has(hit.text);
 }
 
 /**
- * The whole allow-list for the raw `src`-setter sweep, each site named with the justification that exempts it.
+ * The whole allow-list for the raw `src`-setter sweep: the one runtime file that owns an image sink, and the value it may hand the attribute.
  *
- * `h()` is the app's only builder, so a literal `setAttribute("src", …)` is a second route to an image sink that bypasses its allow-list entirely; the sweep reports one anywhere in the runtime, and the exemption admits it only in the two files that own an image sink and only when the value handed over is the icon leaf's own.
- * `util/dom.ts` sets attributes from its checked bag rather than from a literal name, and `pdf/rasterize.ts` is the browser-only rasterizer's own `<img>`, whose `dataUrl` parameter is the branded `SvgDataUrl` the view model armed once; a literal setter in either that hands over anything else is still reported, and so is one in any other file.
+ * `h()` is the app's only builder, so a literal setter is a second route to an image sink that bypasses its allow-list entirely, and this sweep reports the spellings it names: a plain `setAttribute("src", …)`, a `setAttributeNS(…, "src", …)`, and — through the sibling script-URL sweep — a direct `.src =`, `.SRC =`, `["src"] =`, or `['src'] =` assignment.
+ * Those spellings are enumerated rather than derived, and an enumeration cannot be exhaustive: it does not match `el["setAttribute"]("src", …)`, `el.attributes.src.value = …`, or `Object.assign(el, { src })`, and it is not meant to, so a gap here is not a reason to add a pattern.
+ * What contains a bypass through any spelling is the branded `SvgDataUrl` type a `src` must be, the runtime `isSvgDataUrl` check in `h()`'s attribute builder, the `img-src 'self' data:` CSP, and the single-`data:`-literal sweep that keeps the leaf's own prefix the only `data:` URL in the served tree; this sweep is a second net beside them, never the boundary.
+ * The exemption admits the setter only in the browser-only rasterizer, the one file that spells a literal `src` setter at all, and only when the value handed over is the rasterizer's own branded parameter.
+ * `util/dom.ts` sets attributes from its checked bag rather than from a literal name, so it spells no literal setter and is not a sanctioned site; a literal setter there, or in any other file, is reported.
+ * The rasterizer's value is its `dataUrl` parameter, which its signature declares as the branded `SvgDataUrl` the view model armed once; that declaration is pinned beside these pins, so the identifier the exemption names is a branded value rather than a name the sweep trusts on sight, and a setter handing over any other identifier or a string literal is reported.
+ * The leaf's own builder `svgDataUrl(…)` is deliberately not an exempt spelling: no file in the tree writes it, and `svgDataUrl` performs no icon-gate validation of its own, so admitting it would let a sink that arms an unvalidated value pass both this sweep and the branded-type check.
+ * Each sanctioned value's identifier is word-anchored, so a longer name that merely ends in one — `mytag`, `mydataUrl` — is not exempt either.
+ * The exemption is file-scoped, value-identifier-named, and one line at a time, exactly as the element-builder exemption is: any line in the rasterizer that spells `setAttribute("src", dataUrl)` is admitted, a second such line included, and the pattern matches a value's identifier rather than the whole statement.
+ * Because both the sink pattern and the exemption are per-line, a line that carries the sanctioned setter beside an unsanctioned one — a second `setAttribute("src", …)`, or a `setAttributeNS` — is admitted too; the branded `SvgDataUrl` parameter type below, checked at compile time, is what pins the real site rather than this pattern.
  */
-const SRC_SETTER_SITES = new Set(["app/ts/util/dom.ts", "app/js/util/dom.js", "app/ts/pdf/rasterize.ts", "app/js/pdf/rasterize.js"]);
-/** A raw `setAttribute("src", …)` call, in any casing. */
-const RAW_SRC_SETTER = /\bsetAttribute\s*\(\s*["'`]src["'`]/i;
-/** The values a sanctioned setter may hand the attribute: the icon leaf's own builder, or the rasterizer's branded `SvgDataUrl` parameter. */
-const SANCTIONED_SRC_SETTER_VALUE = /\bsetAttribute\s*\(\s*["'`]src["'`]\s*,\s*(?:svgDataUrl\s*\(|dataUrl\s*\))/;
+const SRC_SETTER_SITES = new Set(["app/ts/pdf/rasterize.ts", "app/js/pdf/rasterize.js"]);
+/** A raw `setAttribute`/`setAttributeNS` `src` setter, in any casing. */
+const RAW_SRC_SETTER = /\bsetAttribute\s*\(\s*["'`]src["'`]|\bsetAttributeNS\s*\(\s*[^,)]*,\s*["'`]src["'`]/i;
+/** The one value a sanctioned setter may hand the attribute: the rasterizer's branded `SvgDataUrl` parameter, the only spelling the sanctioned site uses. */
+const SANCTIONED_SRC_SETTER_VALUE = /\bsetAttribute\s*\(\s*["'`]src["'`]\s*,\s*\bdataUrl\s*\)/;
 function isSanctionedSrcSetter(hit) {
 	return SRC_SETTER_SITES.has(hit.file) && SANCTIONED_SRC_SETTER_VALUE.test(hit.text);
 }
@@ -380,12 +393,12 @@ const SVG_MEDIA_TYPE = /image\/svg\+xml/i;
 const ICON_ACCEPT_LEAVES = new Set(["app/ts/ui/create.ts", "app/js/ui/create.js"]);
 /** The page's own favicon declaration, the one place `index.html` names the type. */
 const FAVICON_TYPE_STATEMENT = '<link rel="icon" type="image/svg+xml" href="images/favicon.svg">';
-/** The create form's file-picker filter, the one place the type is named to a file input: the attribute and its exact value, which the emitted line may carry either on its own or as part of the whole `h()` call. */
-const ICON_ACCEPT_STATEMENT = /accept:\s*"image\/svg\+xml,\.svg"/;
+/** The create form's file-picker filter, the one place the type is named to a file input: the exact statement that builds the input, which the emitted copy spells identically, so a second `accept` line in the form is reported rather than admitted by a substring. */
+const ICON_ACCEPT_STATEMENT = 'const iconInput = h("input", { type: "file", name: "icon", accept: "image/svg+xml,.svg" });';
 function isSanctionedSvgMediaType(hit) {
-	if (DATA_URL_LEAVES.has(hit.file) && hit.text === SANCTIONED_DATA_URL_STATEMENT) return true;
+	if (isSanctionedDataUrlStatement(hit)) return true;
 	if (hit.file === "app/index.html" && hit.text === FAVICON_TYPE_STATEMENT) return true;
-	return ICON_ACCEPT_LEAVES.has(hit.file) && ICON_ACCEPT_STATEMENT.test(hit.text);
+	return ICON_ACCEPT_LEAVES.has(hit.file) && hit.text === ICON_ACCEPT_STATEMENT;
 }
 
 test("a created invoice survives the share link and its blob container unchanged", () => {
@@ -807,18 +820,36 @@ test("no served runtime module can build markup, evaluate code, or reach the net
 	assert.deepEqual(occurrences(runtime, /\.style\b/, { htmlComments: true }), [], "a runtime file styles an element from script");
 });
 
-test("the markup sweep catches the DOM, import, navigation, src, and URL vectors it names", () => {
+/**
+ * The runtime sweeps' own pins, in two halves: every vector each pattern names is reported, and every exemption allow-list admits exactly the sites it names and no other line of the tree.
+ * Each pattern's alternatives are pinned one vector at a time — every alternative of {@link MARKUP_SINKS}, both `src`-assignment spellings and all five URL schemes of the script-URL sweep, both raw-setter alternatives, and all three containment constructs — so an alternative narrowed or widened in a pattern fails here.
+ * The allow-lists exercised here are the DOM-creation sweep's ({@link isSanctionedElementBuilder}), the script-URL sweep's (the leaf's prefix declaration, in both the spellings it accepts), the raw `src`-setter sweep's ({@link isSanctionedSrcSetter}), and the SVG media-type sweep's ({@link isSanctionedSvgMediaType}); the containment pattern is exercised without one, since it exempts nothing.
+ */
+test("the runtime sweeps catch the vectors they name and each allow-list exempts exactly the sites it names", () => {
+	// One vector per alternative MARKUP_SINKS names, so the pattern's whole set is pinned rather than a sample of it: the literal sinks and the script-building spellings, the DOM-creation route, and the import and navigation routes.
 	const vectors = [
+		"el.innerHTML = markup;",
+		"el.outerHTML = markup;",
+		"el.insertAdjacentHTML(\"beforeend\", markup);",
+		"document.write(markup);",
+		"eval(code);",
+		"new Function(code);",
+		"range.createContextualFragment(markup);",
+		"const script = document.createElement(\"script\");",
+		"const script = h(\"script\");",
+		"script.textContent = code;",
 		"const el = document.createElement(name);",
 		"const mod = await import(specifier);",
 		"window.open(target, \"_blank\");",
 		"location.assign(target);",
+		"location.replace(target);",
 		"location.href = target;",
 	];
 	for (const vector of vectors) {
 		assert.ok(MARKUP_SINKS.test(vector), `the sweep misses ${vector}`);
 	}
 	assert.ok(SCRIPT_URL_VECTORS.test("el.src = url;"), "the script-URL sweep catches a direct src assignment");
+	assert.ok(SCRIPT_URL_VECTORS.test('el["src"] = url;'), "the script-URL sweep catches a computed-member src assignment too");
 	for (const literal of ["\"javascript:alert(1)\"", "'data:text/html,x'", "\"vbscript:msgbox(1)\"", "\"blob:https://example/x\"", "'file:///etc/passwd'"]) {
 		assert.ok(SCRIPT_URL_VECTORS.test(literal), `the script-URL sweep misses ${literal}`);
 	}
@@ -839,6 +870,10 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 	assert.ok(
 		!isSanctionedElementBuilder({ file: "app/ts/util/dom.ts", text: "const element = document.createElement(tagName);" }),
 		"and no other createElement call in the builder's file is exempt",
+	);
+	assert.ok(
+		!isSanctionedElementBuilder({ file: "app/ts/util/dom.ts", text: "const element = document.createElement(mytag);" }),
+		"and the sanctioned identifier is word-anchored, so a longer name that merely ends in `tag` is not exempt",
 	);
 	assert.ok(
 		isSanctionedElementBuilder({ file: "app/ts/pdf/renderer.ts", text: 'const link = document.createElement("a");' }),
@@ -885,8 +920,25 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 		"the statement declaring the leaf's prefix constant is exempt",
 	);
 	assert.ok(
+		isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: SANCTIONED_DATA_URL_EXPORT_STATEMENT }),
+		"the `export const` spelling of that same declaration is admitted as well, which is the spelling the leaf itself writes",
+	);
+	// Each leaf file is pinned with the spelling it actually contains — the source writes `export const`, and so does the line the compiler emits beside it — and with the other spelling too, since the allow-list pairs no file with one spelling: the four assertions around this comment are the whole cross-product of the two files and the two spellings.
+	assert.ok(
+		isSanctionedDataUrlStatement({ file: "app/js/util/data-url.js", text: SANCTIONED_DATA_URL_EXPORT_STATEMENT }),
+		"the compiled copy writes the `export const` spelling as well, and that line is the one it carries",
+	);
+	assert.ok(
 		isSanctionedDataUrlStatement({ file: "app/js/util/data-url.js", text: SANCTIONED_DATA_URL_STATEMENT }),
-		"and the compiled copy of that line is too",
+		"and the spelling without `export` is admitted in the compiled copy too, so the exemption is not a per-file pairing",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: `export  ${SANCTIONED_DATA_URL_STATEMENT}` }),
+		"and a stray extra space in it is a different line, so it is reported rather than admitted",
+	);
+	assert.ok(
+		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: `export const SVG_DATA_URL_PREFIX = "data:text/html,x";` }),
+		"and neither spelling admits a different literal behind that constant name",
 	);
 	assert.ok(
 		!isSanctionedDataUrlStatement({ file: "app/ts/util/data-url.ts", text: 'const url = "javascript:alert(1)";' }),
@@ -933,12 +985,20 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 	assert.ok(RAW_SRC_SETTER.test('img.setAttribute("src", url);'), "the raw-src sweep catches a literal setter");
 	assert.ok(RAW_SRC_SETTER.test("img.setAttribute('SRC', url);"), "in any casing of the attribute name");
 	assert.ok(
-		isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", svgDataUrl(svg));' }),
-		"the rasterizer's own sink is exempt when it hands the leaf's builder to the attribute",
+		RAW_SRC_SETTER.test('img.setAttributeNS(null, "src", url);'),
+		"and a namespaced setter, whose `src` is the second argument rather than the first",
+	);
+	assert.ok(
+		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", svgDataUrl(svg));' }),
+		"the leaf's builder is not an exempt spelling: no file in the tree writes it, and svgDataUrl performs no gate validation, so a sink arming an unvalidated value would otherwise pass",
 	);
 	assert.ok(
 		isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", dataUrl);' }),
-		"and when it hands over the branded data URL the view model armed, which is the value the seam carries",
+		"the rasterizer's own sink is exempt when it hands over the branded data URL the view model armed, which is the value the seam carries",
+	);
+	assert.ok(
+		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttributeNS(null, "src", dataUrl);' }),
+		"and a namespaced setter is reported even when it hands over the branded value, since only the plain setter is the sanctioned site",
 	);
 	assert.ok(
 		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", url);' }),
@@ -947,6 +1007,28 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 	assert.ok(
 		!isSanctionedSrcSetter({ file: "app/ts/ui/view.ts", text: 'img.setAttribute("src", svgDataUrl(svg));' }),
 		"the leaf's builder in a third file exempts nothing",
+	);
+	assert.ok(
+		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", value);' }),
+		"a plain identifier value is refused",
+	);
+	assert.ok(
+		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", mydataUrl);' }),
+		"and a longer identifier that merely ends in the sanctioned name is refused too, since the value is word-anchored",
+	);
+	assert.ok(
+		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", "logo.svg");' }),
+		"and a plain string value is refused",
+	);
+	assert.ok(
+		!isSanctionedSrcSetter({ file: "app/ts/util/dom.ts", text: 'element.setAttribute("src", dataUrl);' }),
+		"and a literal setter in the builder's file, which spells none of its own, is reported like one in any other file",
+	);
+	// The exemption names the rasterizer's own `dataUrl` parameter, so its declaration is what makes that identifier the icon leaf's branded value rather than a name the sweep trusts on sight.
+	assert.match(
+		readFileSync(join(appDir, "ts", "pdf", "rasterize.ts"), "utf8"),
+		/rasterizeSvgIcon\(dataUrl:\s*SvgDataUrl\)/,
+		"the rasterizer declares its sanctioned value as the icon leaf's own `SvgDataUrl`",
 	);
 	for (const vector of ['document.createElementNS(ns, "svg");', "const parser = new DOMParser();", 'h("svg", {});']) {
 		assert.ok(CONTAINMENT_SINKS.test(vector), `the containment sweep misses ${vector}`);
@@ -966,16 +1048,20 @@ test("the markup sweep catches the DOM, import, navigation, src, and URL vectors
 		"and another line naming the type in the page is not",
 	);
 	assert.ok(
-		isSanctionedSvgMediaType({ file: "app/ts/ui/create.ts", text: '\t\t\taccept: "image/svg+xml,.svg",' }),
+		isSanctionedSvgMediaType({ file: "app/ts/ui/create.ts", text: ICON_ACCEPT_STATEMENT }),
 		"the create form's file-picker filter is exempt",
+	);
+	assert.ok(
+		!isSanctionedSvgMediaType({ file: "app/ts/ui/create.ts", text: 'accept: "image/svg+xml,.svg",' }),
+		"but a second `accept` line in the create form is not",
 	);
 	assert.ok(
 		!isSanctionedSvgMediaType({ file: "app/ts/ui/create.ts", text: 'type: "image/svg+xml",' }),
 		"nor another spelling of the type in the create form",
 	);
 	assert.ok(
-		isSanctionedSvgMediaType({ file: "app/js/ui/create.js", text: '    const iconInput = h("input", { type: "file", name: "icon", accept: "image/svg+xml,.svg" });' }),
-		"and the emitted copy of that same call is exempt too",
+		isSanctionedSvgMediaType({ file: "app/js/ui/create.js", text: ICON_ACCEPT_STATEMENT }),
+		"and the emitted copy of that same statement is exempt too",
 	);
 });
 
