@@ -22,7 +22,7 @@ const ACTION_ERROR_MAX = 300;
 /** Render the official invoice document. The invoice is validated; the DOM is built once, never from markup. */
 export function renderInvoiceView(invoice, options) {
     const view = buildInvoiceViewModel(invoice, options.today);
-    // The payee's own mark, when the invoice carries one: it is the leaf's data URL in an image context, never the document's markup, and it is left out entirely rather than rendered empty.
+    // The payee's own icon, when the invoice carries one: it is the leaf's data URL in an image context, never the document's markup, and it is left out entirely rather than rendered empty.
     const letterheadIcon = view.iconDataUrl === null ? null : h("img", { class: "letterhead-icon", src: view.iconDataUrl, alt: "" });
     const letterhead = h("header", { class: "invoice-letterhead" }, h("div", { class: "letterhead-brand" }, letterheadIcon, h("span", { class: "invoice-logo", role: "img", "aria-label": "Invoicing brand mark" }), h("div", { class: "letterhead-name" }, h("span", { class: "letterhead-title" }, view.labels.brand), h("span", { class: "letterhead-tagline" }, view.labels.tagline))), h("div", { class: "letterhead-meta" }, h("h1", { class: "document-kind" }, view.labels.kind), h("span", { class: "document-number" }, view.documentNumber), h("span", { class: `status-badge status-${view.status.tone}` }, view.status.label)));
     const parties = h("section", { class: "invoice-parties" }, partyBlock(view.from, "party-payee"), view.billTo === null ? null : partyBlock(view.billTo, "party-payer"), h("div", { class: "party party-dates" }, h("span", { class: "party-role" }, view.labels.dates), ...view.dates.map((date) => metaField(date.label, date.value))));

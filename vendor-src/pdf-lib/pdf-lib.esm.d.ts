@@ -1,4 +1,4 @@
-// Hand-written shim for the vendored pdf-lib ESM bundle — declares only the surface this app uses.
+// Hand-written shim for the vendored pdf-lib ESM bundle — declares the vendored exports the app's modules import or re-export.
 export interface RGB {
 	type: "RGB";
 	red: number;

@@ -18,10 +18,10 @@
 import { SUPPORTED_CHAIN_IDS } from "../assets/registry.js";
 import { MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ID_CHARS, MAX_INVOICE_NOTES_CHARS, MAX_NAME_CHARS, MAX_TAX_LABEL_CHARS, computeTotals, } from "../invoice/model.js";
 import { MAX_PAYMENT_LINK_BYTES, PaymentLinkError, buildPaymentLink } from "../payment/links.js";
-import { svgDataUrl } from "../util/svg-data-url.js";
 import { utf8ToBytes } from "../util/encoding.js";
 import { boundMessage } from "../util/errors.js";
 import { encodeQr } from "../util/qr.js";
+import { svgDataUrl } from "../util/svg-data-url.js";
 import { stripDisplayCharacters } from "../util/text.js";
 import { MAX_PAYOUT_ADDRESS_LENGTH } from "../wallet/payout-address.js";
 import { networkLabel } from "./network-labels.js";

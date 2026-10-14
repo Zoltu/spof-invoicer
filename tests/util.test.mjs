@@ -2,16 +2,16 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fromBaseUnits, toBaseUnits, UINT256_MAX } from "../app/js/util/decimal.js";
 import { append, h, safeUrl } from "../app/js/util/dom.js";
-import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { base58, base58check, base58xmr, bech32, bech32m, hexToBytes, sha256, toHex, utf8ToBytes } from "../app/js/util/encoding.js";
 import { describe, preview } from "../app/js/util/errors.js";
+import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { boundRaw } from "../app/js/util/text.js";
 import { findTsc } from "../build.mjs";
 import { installFakeDocument } from "./helpers/dom.mjs";
@@ -311,7 +311,7 @@ test("h refuses attributes outside the allow-list", () => {
 test("h refuses a src that is not the icon leaf's own data URL", () => {
 	const fake = installFakeDocument();
 	try {
-		const url = svgDataUrl('<svg width="16" height="16"></svg>');
+		const url = svgDataUrl("<svg width=\"16\" height=\"16\"></svg>");
 		assert.equal(h("img", { src: url }).attributes.src, url, "the leaf's own data URL reaches the attribute");
 		assert.equal(h("img", { alt: "", src: url }).attributes.alt, "", "and the alt text beside it is free text");
 		assert.throws(
@@ -442,7 +442,7 @@ test("DomAttributes refuses an src on a widened or union-typed tag at compile ti
 import { h } from "${specifier("app/ts/util/dom.js")}";
 import { svgDataUrl } from "${specifier("app/ts/util/svg-data-url.js")}";
 
-const url = svgDataUrl('<svg width="64" height="64"></svg>');
+const url = svgDataUrl("<svg width=\\"64\\" height=\\"64\\"></svg>");
 
 declare const widenedTag: keyof HTMLElementTagNameMap;
 // @ts-expect-error an src on a union-typed tag is a compile error, not only a runtime refusal

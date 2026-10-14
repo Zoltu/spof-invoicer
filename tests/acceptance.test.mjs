@@ -25,7 +25,7 @@ import { servedTreeProblems } from "./helpers/served-drift.mjs";
 import { USDC_LOWER } from "./helpers/tokens.mjs";
 import { findAll, findButton, hasClass, inputValues, textOf } from "./helpers/tree.mjs";
 import { SERVED_BUNDLES } from "./helpers/vendor-bundles.mjs";
-import { waitFor } from "./helpers/wait.mjs";
+import { nextTask, waitFor } from "./helpers/wait.mjs";
 import { ACCOUNT, TX_HASH, installWindow, mockProvider } from "./helpers/wallet-mock.mjs";
 import { listFiles } from "../scripts/vendor-manifest.mjs";
 import { parseHash } from "../app/js/app/router.js";
@@ -54,9 +54,9 @@ import { QR_SYMBOL, buildInvoicePages, downloadPdf, invoiceFileName, renderInvoi
 import { renderCreateView } from "../app/js/ui/create.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
-import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { base32nopad, bech32m, utf8 } from "../app/js/util/encoding.js";
 import { encodeQr } from "../app/js/util/qr.js";
+import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { PDFDocument } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
 import { WalletClient, toHexQuantity } from "../app/js/wallet/eip1193.js";
 import { TestnetUnifiedAddressError } from "../app/js/wallet/zcash-address.js";
@@ -83,7 +83,7 @@ const ETH_TOTAL = 1500000000000000000n;
 const HOSTILE = "<img src=x onerror=\"alert(1)\"><script>alert(2)</script>";
 
 /** A minimal icon document the gate accepts, and the 1 by 1 PNG a substituted rasterizer hands the export. */
-const ICON_SVG = '<svg width="32" height="32"><rect width="32" height="32" fill="#123456"/></svg>';
+const ICON_SVG = "<svg width=\"32\" height=\"32\"><rect width=\"32\" height=\"32\" fill=\"#123456\"/></svg>";
 const ICON_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64");
 
 // The word channels, plus two that need a shape: `Image(` only when it is a bare call (the vendored pdf-lib carries `'Image'` as a PDF subtype string), and prefetch/dns-prefetch as HTML rel tokens.
@@ -248,11 +248,6 @@ function setControl(rootNode, name, value) {
 	control.dispatch("input");
 }
 
-/** Let the file read behind the icon input's change handler settle. */
-function drain() {
-	return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 /** The file shape the icon input reads: the byte size it claims and the text it yields. */
 function iconFile(text, size = text.length) {
 	return { size, text: async () => text };
@@ -315,7 +310,7 @@ function isOurModule(file) {
  *
  * `util/dom.ts`'s `h()` builder has one sanctioned call, `document.createElement(tag)`, safe because the tag it hands over is the parameter `h()` has already checked against its own forbidden tags.
  * The exemption is file-scoped and one line at a time: the sweep tests each reported line on its own, so a tag literal in that file (`script`, `iframe`, …) or a `createElement` call the pattern does not match is still reported, while a second line that spells `document.createElement(tag)` in the same file would be admitted too.
- * The PDF export's download anchor in `pdf/renderer.ts` is the exception `README.md` documents: it is built on the fly to take an app-generated `blob:` URL that `h()` itself would refuse, and its tag is the literal `"a"`.
+ * The PDF export's download anchor in `pdf/renderer.ts` is one of the exceptions `README.md` documents: it is built on the fly to take an app-generated `blob:` URL that `h()` itself would refuse, and its tag is the literal `"a"`.
  * `pdf/rasterize.ts` builds the browser-only rasterizer's own two elements — the `<img>` that loads the icon leaf's data URL and the `<canvas>` its pixels are drawn into — which is the image context the icon is rendered in and neither of which can carry script.
  * The pattern is anchored to the call's own identifier — the `tag` parameter, or the literal tag the anchor names — rather than to the whole statement, so what it enforces is a file, a value identifier, and one line at a time; it does not prove the line is the one call site named here.
  */
@@ -1304,7 +1299,7 @@ test("an icon chosen in the create form reaches the shared page's letterhead and
 		const iconInput = controlNamed(create, "icon");
 		iconInput.files = [iconFile(ICON_SVG)];
 		iconInput.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(findAll(create, (node) => hasClass(node, "icon-preview"))[0].attributes.src, svgDataUrl(ICON_SVG), "the form previews the chosen icon through the leaf's own data URL");
 		setControl(create, "payeeName", "Studio Example Ltd");
 		setControl(create, "payeeAddress", PAYEE);

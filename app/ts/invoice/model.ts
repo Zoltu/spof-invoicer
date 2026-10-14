@@ -108,7 +108,6 @@ export interface Invoice {
 	readonly items: readonly LineItem[];
 	readonly tax?: TaxLine;
 	readonly notes?: string;
-	/** An optional SVG icon, stored as the text `invoice/icon.ts` returned for it; it travels verbatim in the share payload and is meant to be rendered only in an image context. */
 	readonly icon?: string;
 }
 

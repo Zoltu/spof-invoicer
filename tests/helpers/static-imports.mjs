@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { scanKinds } from "./code-only.mjs";
 
 /** The workspace root: the directory holding `app/`, `tests/`, and the rest, one level above this helper's own directory. */
-export const WORKSPACE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+export const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /**
  * The static import specifiers of a module, in any spelling that would put another module in its graph: a side-effect `import "…"`, a `from "…"` clause on an `import` or `export`, or a `require("…")` call, in either quote.
@@ -68,7 +68,7 @@ function identifierEndingAt(chars, end) {
  */
 export function repoRelativeTarget(importer, specifier) {
 	if (!specifier.startsWith(".")) return null;
-	const target = relative(WORKSPACE_ROOT, resolve(dirname(join(WORKSPACE_ROOT, importer)), specifier)).split(sep).join("/");
+	const target = relative(root, resolve(dirname(join(root, importer)), specifier)).split(sep).join("/");
 	return target.startsWith("..") ? null : target;
 }
 
@@ -83,7 +83,7 @@ export function emittedStaticTarget(importer, specifier) {
 
 /** The source of an emitted module, or `null` when the path is not a readable regular file: an absent path, a directory, or any other non-file a resolved specifier might name. */
 export function readEmittedModule(file) {
-	const path = join(WORKSPACE_ROOT, file);
+	const path = join(root, file);
 	return existsSync(path) && statSync(path).isFile() ? readFileSync(path, "utf8") : null;
 }
 

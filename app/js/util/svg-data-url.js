@@ -1,7 +1,7 @@
 /**
  * The SVG-to-`data:`-URL encoder: it turns a validated SVG document into the `data:image/svg+xml;base64,…` URL an image sink loads.
  *
- * The branded {@link SvgDataUrl} it returns, the prefix it composes, and the shape check that recognizes the result all live in `util/data-url.ts`, the leaf `util/dom.ts` imports; this module carries the encoding step separately so the vendored base64 encoder stays off the leaf's static graph and off the graph of every page module that imports `h()`.
+ * The branded {@link SvgDataUrl} it returns, the prefix it composes, and the shape check that recognizes the result all live in `util/data-url.ts`, the leaf `util/dom.ts` imports; the base64 encoder this module reads stays on this module's graph alone.
  * The caller must have validated the value with the icon gate (`invoice/icon.ts`) first; that precondition is the caller's, and this function does not check it, so a value that was never validated is armored into a `data:` URL all the same.
  * What this function does enforce is the value's shape and byte size: a value that is not a string throws a `TypeError`, and an empty value or one over the {@link MAX_ICON_SVG_BYTES} byte cap — measured in code units first, so an over-long input is refused before it is encoded — throws a `RangeError`, so it never works on unbounded input and the URL it returns is always one the leaf's shape check admits.
  * It transports the exact text it is given, UTF-8 encoded and base64-armored, so no character of the document needs escaping inside an attribute.

@@ -9,7 +9,7 @@
 
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset, type Asset, type AssetFamily, type AssetId } from "../assets/registry.js";
 import { MAX_JSON_BYTES, encodedJsonBytes } from "../invoice/codec.js";
-import { MAX_ICON_DIMENSION, MAX_ICON_SVG_BYTES, validateIcon } from "../invoice/icon.js";
+import { validateIcon } from "../invoice/icon.js";
 import {
 	InvalidInvoiceError,
 	MAX_ITEMS,
@@ -21,12 +21,12 @@ import {
 	type LineItem,
 } from "../invoice/model.js";
 import { PaymentLinkBudgetError, requireLinkBudget } from "../payment/links.js";
-import { svgDataUrl } from "../util/svg-data-url.js";
 import { toBaseUnits } from "../util/decimal.js";
 import { h } from "../util/dom.js";
 import { boundMessage, messageOf } from "../util/errors.js";
 import { iconByteLength } from "../util/icon-byte-length.js";
-import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS, iconByteCapRefusal, iconRawCodeUnitRefusal } from "../util/icon-capacity.js";
+import { MAX_ICON_DIMENSION, MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS, MAX_ICON_SVG_BYTES, iconByteCapRefusal, iconFileSizeRefusal, iconRawCodeUnitRefusal } from "../util/icon-capacity.js";
+import { svgDataUrl } from "../util/svg-data-url.js";
 import { checksumStatus } from "../wallet/address.js";
 import { EVM_ADDRESS_FORMS } from "../wallet/address.js";
 import { MONERO_ADDRESS_FORMS } from "../wallet/monero-address.js";
@@ -731,7 +731,7 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	async function applyIconFile(file: File): Promise<void> {
 		const selection = (iconSelection += 1);
 		if (file.size > MAX_ICON_FILE_BYTES) {
-			refuseIconPick(`The icon file is ${file.size} bytes, over the ${MAX_ICON_FILE_BYTES}-byte read limit.`);
+			refuseIconPick(iconFileSizeRefusal(file.size));
 			return;
 		}
 		let text: string;

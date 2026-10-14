@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { InvalidIconError, MAX_ICON_DIMENSION, MAX_ICON_PIXELS, MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { MAX_SVG_DATA_URL_PAYLOAD, isSvgDataUrl } from "../app/js/util/data-url.js";
+import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS, iconFileSizeRefusal, iconRawCodeUnitRefusal } from "../app/js/util/icon-capacity.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
-import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS, iconRawCodeUnitRefusal } from "../app/js/util/icon-capacity.js";
 import { refusalError, refusalMessage } from "./helpers/refusals.mjs";
 
 const PREFIX = "data:image/svg+xml;base64,";
@@ -232,20 +232,20 @@ test("validateIcon refuses a root whose effective dimension it cannot determine"
 	// The first start tag is the root: a non-`svg` element before a well-formed `<svg>` is not a root this gate accepts.
 	assert.throws(() => validateIcon("<cover></cover><svg width=\"64\" height=\"64\"></svg>"), InvalidIconError);
 	// The root is read by its element name's local name, as every other element refusal in the module is, so a prefixed root is the root rather than an element the gate does not know.
-	const prefixed = '<svg:svg width="64" height="64"></svg:svg>';
+	const prefixed = "<svg:svg width=\"64\" height=\"64\"></svg:svg>";
 	assert.equal(validateIcon(prefixed), prefixed);
 });
 
 test("validateIcon requires a single root element and admits a prolog, a nested <svg>, and a trailing comment", () => {
-	const root = '<svg width="64" height="64"></svg>';
+	const root = "<svg width=\"64\" height=\"64\"></svg>";
 	// A second element at the document level leaves the value with more than one root, which a browser refuses to decode as an image.
 	assert.throws(() => validateIcon(`${root}${root}`), InvalidIconError, "a second root element is refused");
 	assert.match(refusalMessage(() => validateIcon(`${root}${root}`)), /single <svg> root element/, "the refusal names the single-root requirement");
 	// The walk tracks nesting: the inner `<svg>` here is an ordinary element inside the root, and the element after the closed root is a second one.
-	const nestedThenSecond = '<svg width="64" height="64"><svg width="32" height="32"/></svg><svg width="1" height="1"/>';
+	const nestedThenSecond = "<svg width=\"64\" height=\"64\"><svg width=\"32\" height=\"32\"/></svg><svg width=\"1\" height=\"1\"/>";
 	assert.throws(() => validateIcon(nestedThenSecond), InvalidIconError, "an element after a closed root is a second root");
 	// A nested `<svg>` is inside the root, so it is not a second root and the document is admitted.
-	const nested = '<svg width="64" height="64"><svg width="32" height="32"/></svg>';
+	const nested = "<svg width=\"64\" height=\"64\"><svg width=\"32\" height=\"32\"/></svg>";
 	assert.equal(validateIcon(nested), nested, "a nested <svg> element is inside the root, not a second root");
 	// Neither a prolog nor a trailing comment is an element at the document level, so a single-root document that carries one is admitted.
 	const prolog = `<?xml version="1.0" encoding="UTF-8"?>${root}`;
@@ -253,7 +253,7 @@ test("validateIcon requires a single root element and admits a prolog, a nested 
 	const trailing = `${root}<!-- trailing note -->`;
 	assert.equal(validateIcon(trailing), trailing, "a trailing comment after the root is admitted");
 	// Whitespace between the elements is text rather than an element, so it neither closes the root nor opens a second one.
-	const spaced = '<svg width="64" height="64">\n  <rect width="64" height="64"/>\n</svg>';
+	const spaced = "<svg width=\"64\" height=\"64\">\n  <rect width=\"64\" height=\"64\"/>\n</svg>";
 	assert.equal(validateIcon(spaced), spaced, "whitespace around the elements is admitted");
 });
 
@@ -392,6 +392,11 @@ test("the form's raw read ceiling and the gate's pre-composition bound are one s
 		iconRawCodeUnitRefusal(MAX_ICON_RAW_CODE_UNITS + 1),
 		`The icon is ${MAX_ICON_RAW_CODE_UNITS + 1} characters before normalization, over the ${MAX_ICON_RAW_CODE_UNITS}-character limit.`,
 		"and the refusal both readers state for it is one wording, stated here beside the number",
+	);
+	assert.equal(
+		iconFileSizeRefusal(MAX_ICON_FILE_BYTES + 1),
+		`The icon file is ${MAX_ICON_FILE_BYTES + 1} bytes, over the ${MAX_ICON_FILE_BYTES}-byte read limit.`,
+		"and the file-size refusal the form shows for that same ceiling is one wording too, stated here beside the number",
 	);
 });
 

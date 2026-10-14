@@ -1,10 +1,10 @@
 /**
- * The shared icon contract the icon validator, the `data:` URL leaf, the SVG-to-`data:`-URL encoder, the create form and the browser-only rasterizer read: the most UTF-8 bytes one optional SVG icon may carry, the largest intrinsic size its root `<svg>` element may declare per axis, the one raw ceiling the create form reads a chosen file under and the icon gate applies before it composes, the same number named as the bytes the form reads, and the one wording of each refusal a bound's two readers state.
+ * The shared icon contract the icon validator, the `data:` URL leaf, the SVG-to-`data:`-URL encoder, the create form and the browser-only rasterizer read: the most UTF-8 bytes one optional SVG icon may carry, the largest intrinsic size its root `<svg>` element may declare per axis, the one raw ceiling the create form reads a chosen file under and the icon gate applies before it composes, the same number named as the bytes the form reads, and the one wording of each refusal a bound produces.
  *
  * It is a module of its own rather than a figure in each reader so that the gate that bounds an icon, the leaf that declares its `data:` URL, the encoder that arms such a URL, the create form that reads a chosen file and the rasterizer that caps its canvas read one statement each rather than figures kept in step by hand.
- * The bounds here are plain numbers with no imports, so a module that reads one does not acquire an encoding dependency through it: the measurement of a value against {@link MAX_ICON_SVG_BYTES} lives in `util/icon-byte-length.ts`, and the encoding step that arms a value lives in `util/svg-data-url.ts`, both kept off this module's graph.
+ * The bounds here are plain numbers with no imports, and that is the whole reason the modules around them are split apart: {@link MAX_ICON_SVG_BYTES} is read by `util/data-url.ts`, the `data:` URL leaf `util/dom.ts`'s `h()` imports, and `h()` is imported by nearly every page module, so neither the measurement of a value against the cap (`util/icon-byte-length.ts`) nor the encoding step that arms a value (`util/svg-data-url.ts`) belongs here, where either would put the vendored encoding stack on the graph of every module that reads nothing but a bound.
  * `invoice/icon.ts` re-exports both bounds as its own, `util/data-url.ts` sizes its payload ceiling from {@link MAX_ICON_SVG_BYTES}, and `pdf/rasterize.ts` caps each raster axis at {@link MAX_ICON_DIMENSION} without importing the validator, so the cap a value is validated against and the bounds its readers apply cannot drift apart.
- * {@link MAX_ICON_RAW_CODE_UNITS} is the one raw bound the form's file read and the gate's pre-composition check both derive from, and {@link MAX_ICON_FILE_BYTES} names that same number as the bytes the form reads, so changing one cannot silently make the form and the gate bound different inputs; the wording both of those readers refuse a spelling past the bound with is {@link iconRawCodeUnitRefusal}, stated here beside {@link iconByteCapRefusal} for the same reason.
+ * {@link MAX_ICON_RAW_CODE_UNITS} is the one raw bound the form's file read and the gate's pre-composition check both derive from, and {@link MAX_ICON_FILE_BYTES} names that same number as the bytes the form reads, so changing one cannot silently make the form and the gate bound different inputs; the wording the form's check and the gate refuse a spelling past that raw bound with is {@link iconRawCodeUnitRefusal}, and the form's file read refuses a chosen file past it with {@link iconFileSizeRefusal}, each stated here beside {@link iconByteCapRefusal} for the same reason.
  */
 
 /** The icon cap in bytes: the bound one optional SVG icon is held to, which is the 8192 bytes a caller can actually store. */
@@ -35,10 +35,18 @@ export const MAX_ICON_RAW_CODE_UNITS = MAX_ICON_SVG_BYTES * 8;
 export const MAX_ICON_FILE_BYTES = MAX_ICON_RAW_CODE_UNITS;
 
 /**
+ * The file-size refusal, worded once for the one reader of {@link MAX_ICON_FILE_BYTES}: the message the create form shows under the icon field for a chosen file past the raw read ceiling.
+ *
+ * It stands beside {@link iconByteCapRefusal} and {@link iconRawCodeUnitRefusal} for the reason stated there, and it names the file's own declared size rather than the text's length, so a file refused before it is read says so rather than reading as the raw code-unit refusal.
+ */
+export function iconFileSizeRefusal(bytes: number): string {
+	return `The icon file is ${bytes} bytes, over the ${MAX_ICON_FILE_BYTES}-byte read limit.`;
+}
+
+/**
  * The raw pre-composition refusal, worded once for both of its readers: the message the create form shows under the icon field for the text a chosen file yields, and the reason the icon gate raises for a spelling past {@link MAX_ICON_RAW_CODE_UNITS}.
  *
- * The form's own check and the gate's first check decide the same thing about the same value — the length of the raw spelling, before either reader measures or composes it — so one reader wording the refusal and the other wording it again is a pair that has to be kept in step by hand, exactly as for {@link iconByteCapRefusal}.
- * The figure and the unit are {@link MAX_ICON_RAW_CODE_UNITS}'s and the clause naming the check that ran before normalization is what tells this refusal apart from the composed-byte one, so stating it here is what lets the surfaces that refuse an over-long icon say the same thing.
+ * It stands beside {@link iconByteCapRefusal} for the reason stated there, and the clause naming the check that ran before normalization is what tells this refusal apart from the composed-byte one rather than leaving the two to read as the same failure.
  */
 export function iconRawCodeUnitRefusal(codeUnits: number): string {
 	return `The icon is ${codeUnits} characters before normalization, over the ${MAX_ICON_RAW_CODE_UNITS}-character limit.`;

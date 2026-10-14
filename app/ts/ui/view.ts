@@ -45,7 +45,7 @@ export interface ViewOptions {
 export function renderInvoiceView(invoice: Invoice, options: ViewOptions): HTMLElement {
 	const view = buildInvoiceViewModel(invoice, options.today);
 
-	// The payee's own mark, when the invoice carries one: it is the leaf's data URL in an image context, never the document's markup, and it is left out entirely rather than rendered empty.
+	// The payee's own icon, when the invoice carries one: it is the leaf's data URL in an image context, never the document's markup, and it is left out entirely rather than rendered empty.
 	const letterheadIcon = view.iconDataUrl === null ? null : h("img", { class: "letterhead-icon", src: view.iconDataUrl, alt: "" });
 	const letterhead = h(
 		"header",

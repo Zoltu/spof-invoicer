@@ -1,8 +1,8 @@
 /**
  * The icon data-URL leaf: the `data:image/svg+xml;base64,…` prefix an SVG icon is armed under, the branded {@link SvgDataUrl} type an image sink's `src` accepts, and the bounded shape check beside it.
  *
- * This module is the one place in the runtime tree a `data:` literal is spelled, and what its split from the encoder protects is being free of the encoding and vendor stack: `util/dom.ts` imports {@link SvgDataUrl} and {@link isSvgDataUrl} for the one `src` sink `h()` builds, and `h()` is imported by nearly every page module, so the base64 encoder and the vendored bundle it reads must not be reachable from here.
- * The step that turns an SVG document into this leaf's URL — `svgDataUrl`, in the module `util/svg-data-url.ts` that exports it — lives in its own module, so the vendored base64 encoder it reads stays off `h()`'s graph and off the graph of every module that merely reads the leaf's bounds.
+ * This module is the one place in the runtime tree a `data:` literal is spelled, and it imports no encoder: the step that turns an SVG document into a URL this leaf admits is `svgDataUrl`, in `util/svg-data-url.ts`.
+ * `util/dom.ts` imports {@link SvgDataUrl} and {@link isSvgDataUrl} for the one `src` sink `h()` builds, so what reaches this module reaches nearly every page module.
  *
  * {@link SvgDataUrl} is the only type an image sink's `src` accepts, so a bare string cannot reach one by accident, and {@link isSvgDataUrl} is the matching runtime check for a value TypeScript could not narrow.
  * Neither makes any sink accept such a value: a caller that gates a `src` on {@link isSvgDataUrl} enforces that rule in its own code, and this leaf neither writes an attribute nor permits one, so sink-side enforcement is outside this module.

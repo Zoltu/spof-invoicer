@@ -16,7 +16,7 @@ b09da8c07fe8187c07649494cdb7cd0bcf13df90b506a9473d19e4d5f8c2e102  noble-hashes/_
 c8a8c1a2e2045439eb2ce31409a156f51371d80141517a2da4a1edda01e0c8dc  noble-hashes/utils.d.ts
 037ad49adb78168b6b699598fd33f85f7877456b1d28b4d032e2a1a16807947c  noble-hashes/utils.js
 f2c9fc00fdb66eb99ac156ba52d734af66d8d309f65753ae809ad34ee2883bcb  pdf-lib/LICENSE.md
-db8c585cf34a5a9ce37bfde5fae633d075e2cbe9b4acb84dd47e7bf89ff827f1  pdf-lib/pdf-lib.esm.d.ts
+b85f6035ab3936138d40320d52227ad78533c9be19185e21c8f614b972643bd8  pdf-lib/pdf-lib.esm.d.ts
 4bd8dd3155d7b1062a161567bf68168c55283bd5fad6a638b16ae028846b52c5  pdf-lib/pdf-lib.esm.js
 de2d5d61509c9421fa728fd7a3c473a061a091acf255a87385fcb15ddd2c08f8  pdf-lib/pdf-lib.esm.js.map
 3239e134eb6e6d64538ca76498c7fcb08a395249dd9d4af9927bf6d0169ee429  scure-base/LICENSE

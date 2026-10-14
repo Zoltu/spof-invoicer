@@ -11,10 +11,11 @@ import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
 import { readSymbol } from "./helpers/qr-reader.mjs";
 import { refusalMessage } from "./helpers/refusals.mjs";
 import { findAll, findButton, hasClass, inputValues, textOf } from "./helpers/tree.mjs";
+import { nextTask } from "./helpers/wait.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
 import { MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
-import { MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { MAX_JSON_BYTES, encodeInvoice } from "../app/js/invoice/codec.js";
+import { MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { decodeShare } from "../app/js/invoice/share.js";
 import { parseHash } from "../app/js/app/router.js";
 import { createDispatcher, dispatchRoute, mountShell, renderRoute } from "../app/js/app/shell.js";
@@ -41,9 +42,9 @@ import {
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { buildShareBundle, copyText } from "../app/js/ui/share.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
-import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { base32nopad, utf8 } from "../app/js/util/encoding.js";
 import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS } from "../app/js/util/icon-capacity.js";
+import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
@@ -104,13 +105,8 @@ function b32(text) {
 	return base32nopad.encode(utf8.decode(text));
 }
 
-/** Let the file read behind the icon input's change handler settle. */
-function drain() {
-	return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 /** A minimal icon document the gate accepts, and the file shape the icon input reads. */
-const ICON_SVG = '<svg width="32" height="32"><rect width="32" height="32" fill="#123456"/></svg>';
+const ICON_SVG = "<svg width=\"32\" height=\"32\"><rect width=\"32\" height=\"32\" fill=\"#123456\"/></svg>";
 
 function iconFile(text, size = text.length) {
 	return { size, text: async () => text };
@@ -917,7 +913,7 @@ test("a good icon file sets the form's icon and previews the leaf's own data URL
 
 		input.files = [iconFile(ICON_SVG)];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 
 		const preview = findAll(view, (node) => hasClass(node, "icon-preview"))[0];
 		assert.ok(preview, "the chosen icon is previewed in place");
@@ -957,26 +953,26 @@ test("an over-cap or wrong-format icon is refused in place and leaves the invoic
 		const oversized = `<svg width="32" height="32">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
 		input.files = [iconFile(oversized)];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(message().attributes.hidden, undefined, "an over-cap file is refused in place");
-		assert.match(textOf(message()), /over the 8192-byte limit/);
+		assert.match(textOf(message()), new RegExp(`over the ${MAX_ICON_SVG_BYTES}-byte limit`));
 		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "and nothing is previewed");
 
 		// The cap is measured on the text the file yields rather than the size it claims, so a file that understates its own size is still caught.
 		input.files = [iconFile(oversized, 8)];
 		input.dispatch("change");
-		await drain();
-		assert.match(textOf(message()), /bytes, over the 8192-byte limit/);
+		await nextTask();
+		assert.match(textOf(message()), new RegExp(`bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit`));
 
 		input.files = [iconFile("not an svg at all")];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.match(textOf(message()), /must contain a single <svg> root element/, "a wrong-format file is refused with the gate's own reason");
 		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "and still nothing is previewed");
 
 		input.files = [iconFile("")];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(textOf(message()), "must not be empty", "a zero-byte file is refused as its own fault rather than as a cap it exceeded");
 
 		setControl(view, "payeeName", "Studio Example");
@@ -1006,20 +1002,20 @@ test("a refused pick clears the input, so the same file can be chosen again", as
 		input.value = "C:/fakepath/not-an-svg.txt";
 		input.files = [iconFile("not an svg at all")];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(message().attributes.hidden, undefined, "the file is refused under the field");
 		assert.equal(input.value, "", "and the input's own value is cleared, so the same file can be picked again");
 
 		input.value = "C:/fakepath/oversized.svg";
 		input.files = [iconFile("x", MAX_ICON_FILE_BYTES + 1)];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(input.value, "", "a file refused on its own size clears the input too");
 		assert.equal(findButton(view, "Remove icon").attributes.hidden, "", "the removal control that would clear it is still hidden, since no icon is stored");
 
 		input.files = [iconFile(ICON_SVG)];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.ok(findAll(view, (node) => hasClass(node, "icon-preview"))[0], "and a later pick of a good file is stored");
 	} finally {
 		fake.restore();
@@ -1036,13 +1032,13 @@ test("a refused replacement icon leaves the icon the form already carries", asyn
 
 		input.files = [iconFile(ICON_SVG)];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(preview().attributes.src, svgDataUrl(ICON_SVG), "a good pick is stored and previewed");
 
 		// A replacement the gate refuses must not clear the icon the form already carries.
 		input.files = [iconFile("not an svg at all")];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(message().attributes.hidden, undefined, "the bad replacement is refused in place");
 		assert.ok(preview(), "and the previously chosen icon stays previewed");
 		assert.equal(preview().attributes.src, svgDataUrl(ICON_SVG), "still the leaf's own data URL of the good icon");
@@ -1076,16 +1072,16 @@ test("the last icon pick wins when an earlier file read settles after a later on
 
 		input.files = [slow];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(preview(), undefined, "the slow first read has not settled, so nothing is previewed yet");
 
 		input.files = [iconFile(secondSvg)];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(preview().attributes.src, svgDataUrl(secondSvg), "the later pick is the one applied");
 
 		releaseFirst(ICON_SVG);
-		await drain();
+		await nextTask();
 		assert.equal(preview().attributes.src, svgDataUrl(secondSvg), "the earlier read, settling last, does not overwrite the later pick");
 	} finally {
 		fake.restore();
@@ -1105,15 +1101,15 @@ test("a superseded pick's read failure does not paint a stale error under the ic
 
 		input.files = [slow];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 
 		input.files = [iconFile(secondSvg)];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(preview().attributes.src, svgDataUrl(secondSvg), "the later pick is the one applied");
 
 		failFirst(new Error("the device vanished"));
-		await drain();
+		await nextTask();
 		assert.equal(message().attributes.hidden, "", "the superseded read's failure is not shown after a newer pick");
 		assert.equal(preview().attributes.src, svgDataUrl(secondSvg), "and the later pick still stands");
 	} finally {
@@ -1133,12 +1129,12 @@ test("a pick that settles after Remove icon does not re-apply the removed icon",
 
 		input.files = [slow];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(preview(), undefined, "the read has not settled, so nothing is previewed yet");
 
 		remove.dispatch("click");
 		release(ICON_SVG);
-		await drain();
+		await nextTask();
 		assert.equal(preview(), undefined, "the removed icon is not re-applied by the read that settles after the removal");
 		assert.equal(findAll(view, (node) => node.attributes?.id === "icon-error")[0].attributes.hidden, "", "and the removal leaves no error behind");
 	} finally {
@@ -1153,7 +1149,7 @@ test("the icon cap is measured on the NFC form the invoice stores, not the bytes
 		const input = controlNamed(view, "icon");
 		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
 		// Each NFD "é" (`e\u0301`) is three UTF-8 bytes and composes to the two-byte NFC "é", so this document is over the cap as typed yet inside it once composed.
-		const overhead = Buffer.byteLength('<svg width="32" height="32"></svg>', "utf8");
+		const overhead = Buffer.byteLength("<svg width=\"32\" height=\"32\"></svg>", "utf8");
 		const nfd = `<svg width="32" height="32">${"e\u0301".repeat(Math.floor((MAX_ICON_SVG_BYTES - overhead) / 2))}</svg>`;
 		const nfc = nfd.normalize("NFC");
 		assert.ok(Buffer.byteLength(nfd, "utf8") > MAX_ICON_SVG_BYTES, "the NFD spelling exceeds the cap on disk");
@@ -1161,7 +1157,7 @@ test("the icon cap is measured on the NFC form the invoice stores, not the bytes
 
 		input.files = [iconFile(nfd)];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 
 		assert.equal(message().attributes.hidden, "", "the composed icon is accepted rather than refused as over the limit");
 		const preview = findAll(view, (node) => hasClass(node, "icon-preview"))[0];
@@ -1187,7 +1183,7 @@ test("checkIconText decides the icon field's accept or refuse from the file's te
 	assert.match(malformed.message, /must contain a single <svg> root element/, "with the gate's own reason, which carries no namespace of its own");
 
 	// The measure is the NFC-composed value, not the raw spelling: an NFD text over the cap on disk is accepted and stored composed.
-	const overhead = Buffer.byteLength('<svg width="32" height="32"></svg>', "utf8");
+	const overhead = Buffer.byteLength("<svg width=\"32\" height=\"32\"></svg>", "utf8");
 	const nfd = `<svg width="32" height="32">${"e\u0301".repeat(Math.floor((MAX_ICON_SVG_BYTES - overhead) / 2))}</svg>`;
 	assert.ok(Buffer.byteLength(nfd, "utf8") > MAX_ICON_SVG_BYTES, "the NFD spelling exceeds the cap on disk");
 	assert.deepEqual(checkIconText(nfd), { ok: true, svg: nfd.normalize("NFC") }, "the composed form is accepted");
@@ -1235,7 +1231,7 @@ test("the icon field refuses an over-large file before it reads it", async () =>
 			},
 		];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 		assert.equal(reads, 0, "the file is refused before it is read");
 		assert.match(textOf(message()), new RegExp(`over the ${MAX_ICON_FILE_BYTES}-byte read limit`), "the refusal names the raw read ceiling");
 		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "and nothing is previewed");
@@ -1254,7 +1250,7 @@ test("a file whose read yields something other than text is refused under the ic
 		// An engine's `File.text()` is contracted to answer a string, so a read that answers anything else must be refused under the field: the change handler fires the read without awaiting it, and a throw there would leave the pick unanswered.
 		input.files = [{ size: 8, text: async () => 42 }];
 		input.dispatch("change");
-		await drain();
+		await nextTask();
 
 		assert.equal(message().attributes.hidden, undefined, "the field carries the refusal");
 		assert.equal(textOf(message()), refusalMessage(() => validateIcon(42)), "with the gate's own wording for a value that is not text");

@@ -23,9 +23,9 @@ import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES } from "../app/js/ui/messag
 import { CHAIN_NAMES, chainName, requireNamedNetworks } from "../app/js/ui/network-labels.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
-import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
 import { encodeQr } from "../app/js/util/qr.js";
+import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -609,8 +609,13 @@ test("the invoice letterhead uses the local logo image", () => {
 	assert.match(invoiceCss, /url\("\.\.\/images\/logo\.svg"\)/, "the letterhead uses the local logo");
 	assert.match(
 		invoiceCss,
-		/\.letterhead-icon \{\n\tdisplay: inline-block;\n\twidth: 3rem;\n\theight: 3rem;\n\tflex: 0 0 auto;\n\tobject-fit: contain;\n\}/,
-		"and the payee's own mark is sized by the shared-document stylesheet",
+		/\.letterhead-icon \{\n\tdisplay: inline-block;\n\twidth: var\(--letterhead-mark\);\n\theight: var\(--letterhead-mark\);\n\tflex: 0 0 auto;\n\tobject-fit: contain;\n\}/,
+		"and the payee's own icon is sized by the shared-document stylesheet",
+	);
+	assert.match(
+		invoiceCss,
+		/\.invoice-letterhead \{\n\t--letterhead-mark: 3rem;/,
+		"at the one size the brand mark beside it draws at too",
 	);
 });
 
@@ -1193,7 +1198,7 @@ test("the hand-off sentence is owned by the neutral messages module, not the wal
 test("the letterhead draws the invoice's own icon, and draws none when it carries none", () => {
 	const fake = installInteractiveDocument();
 	try {
-		const icon = '<svg width="48" height="48"><rect width="48" height="48" fill="#0a7"/></svg>';
+		const icon = "<svg width=\"48\" height=\"48\"><rect width=\"48\" height=\"48\" fill=\"#0a7\"/></svg>";
 		const invoice = invoiceFor({ icon });
 		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
 

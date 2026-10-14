@@ -6,15 +6,15 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { encodeInvoice } from "../app/js/invoice/codec.js";
+import { MAX_ICON_DIMENSION } from "../app/js/invoice/icon.js";
 import { InvalidInvoiceError, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ID_CHARS, MAX_NAME_CHARS, createInvoice } from "../app/js/invoice/model.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
-import { PDFDocument, decodePDFRawStream } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
-import { MAX_ICON_DIMENSION } from "../app/js/invoice/icon.js";
-import { rasterizeSvgIcon } from "../app/js/pdf/rasterize.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
+import { PDFDocument, decodePDFRawStream } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
+import { rasterizeSvgIcon } from "../app/js/pdf/rasterize.js";
 import {
 	BASELINE_ASCENT,
 	CONTENT_RIGHT,
@@ -1173,7 +1173,7 @@ test("the model's own caps bound an item row inside a fresh page's capacity", as
 });
 
 /** The icon every icon case in this file uses: a 64 by 32 SVG, so its own aspect ratio is not the letterhead box's. */
-const ICON_SVG = '<svg width="64" height="32" viewBox="0 0 64 32"><rect width="64" height="32" fill="#123456"/></svg>';
+const ICON_SVG = "<svg width=\"64\" height=\"32\" viewBox=\"0 0 64 32\"><rect width=\"64\" height=\"32\" fill=\"#123456\"/></svg>";
 
 /** A real 1 by 1 PNG, so the embed path parses actual image bytes rather than a stand-in. */
 const ICON_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64");

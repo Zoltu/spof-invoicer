@@ -20,3 +20,8 @@ export function waitFor(predicate, attempts = 200) {
 		poll();
 	});
 }
+
+/** Yield one macrotask turn, so a deferred callback — the file read behind a change handler — has run before the following assertion. */
+export function nextTask() {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}

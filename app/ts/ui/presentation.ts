@@ -30,10 +30,10 @@ import {
 } from "../invoice/model.js";
 import { MAX_PAYMENT_LINK_BYTES, PaymentLinkError, buildPaymentLink, type PaymentLink } from "../payment/links.js";
 import type { SvgDataUrl } from "../util/data-url.js";
-import { svgDataUrl } from "../util/svg-data-url.js";
 import { utf8ToBytes } from "../util/encoding.js";
 import { boundMessage } from "../util/errors.js";
 import { encodeQr, type QrMatrix } from "../util/qr.js";
+import { svgDataUrl } from "../util/svg-data-url.js";
 import { stripDisplayCharacters } from "../util/text.js";
 import { MAX_PAYOUT_ADDRESS_LENGTH, type PayoutAddress } from "../wallet/payout-address.js";
 import { networkLabel } from "./network-labels.js";

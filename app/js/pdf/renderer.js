@@ -100,7 +100,7 @@ const GAP = Object.freeze({
     /** Between the payment terms' column and the symbol drawn beside it. */
     termsToSymbol: 18,
 });
-/** The gap between the letterhead icon's box and the brand mark the icon stands beside, so the payee's mark reads as its own element rather than as part of the wordmark. */
+/** The gap between the letterhead icon's box and the brand mark the icon stands beside, so the payee's icon reads as its own element rather than as part of the wordmark. */
 const LETTERHEAD_ICON_GAP = 12;
 /** The type scale, in points; every run of text names one of these. */
 const SIZE = Object.freeze({
@@ -481,7 +481,7 @@ class Flow {
             ...(border === undefined ? {} : { border }),
         });
     }
-    /** Draw an embedded image in the box `width` by `height` at `top`; a box that does not clear the floor is dropped rather than clamped, so the mark is never squeezed out of its own proportions. */
+    /** Draw an embedded image in the box `width` by `height` at `top`; a box that does not clear the floor is dropped rather than clamped, so the image is never squeezed out of its own proportions. */
     image(x, top, width, height, png) {
         if (!this.clearsFloor(top, height))
             return;
@@ -489,9 +489,9 @@ class Flow {
     }
 }
 /**
- * The letterhead: the payee's own mark when the invoice carries one, the brand mark, the wordmark and tagline, the document kind and number, and the status badge, closed by the heavy rule.
+ * The letterhead: the payee's own icon when the invoice carries one, the brand mark, the wordmark and tagline, the document kind and number, and the status badge, closed by the heavy rule.
  *
- * The icon takes the letterhead's left edge and everything the brand draws shifts right past it, mirroring the on-screen letterhead's own order; its box is the wordmark block's height, so the mark stands as tall as the name beside it and the block grows no taller.
+ * The icon takes the letterhead's left edge and everything the brand draws shifts right past it, mirroring the on-screen letterhead's own order; its box is the wordmark block's height, so the icon stands as tall as the name beside it and the block grows no taller.
  * An invoice with no icon draws exactly what it drew before: no box is reserved, and the brand starts at the content edge.
  */
 function drawLetterhead(flow, view, icon) {
@@ -525,7 +525,7 @@ function drawLetterhead(flow, view, icon) {
 }
 /**
  * The box the letterhead icon is drawn in: the raster's own aspect ratio fitted inside a `side`-point square.
- * The raster carries the icon's own pixels, so this box is the only size the document imposes on it, and fitting rather than stretching keeps a non-square mark's proportions — what the on-screen `object-fit: contain` does for the same image.
+ * The raster carries the icon's own pixels, so this box is the only size the document imposes on it, and fitting rather than stretching keeps a non-square icon's proportions — what the on-screen `object-fit: contain` does for the same image.
  */
 function fitIconBox(icon, side) {
     const scale = Math.min(side / icon.width, side / icon.height);
