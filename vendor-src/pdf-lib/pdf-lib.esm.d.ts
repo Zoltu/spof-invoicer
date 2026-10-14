@@ -119,7 +119,8 @@ export interface PDFDocument {
 	getPages(): PDFPage[];
 	getPageCount(): number;
 	embedFont(font: string | Uint8Array | ArrayBuffer): Promise<PDFFont>;
-	embedPng(png: Uint8Array | ArrayBuffer | string): Promise<PDFImage>;
+	// Narrower than the vendored signature: the only caller hands over the rasterizer's PNG bytes, so the shim offers neither pdf-lib's base64 string nor its ArrayBuffer spelling, both of which its parser reads as text.
+	embedPng(png: Uint8Array): Promise<PDFImage>;
 	embedStandardFont(font: string): PDFFont;
 	setTitle(title: string): void;
 	setAuthor(author: string): void;

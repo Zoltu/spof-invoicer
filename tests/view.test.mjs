@@ -1198,7 +1198,7 @@ test("the hand-off sentence is owned by the neutral messages module, not the wal
 test("the letterhead draws the invoice's own icon, and draws none when it carries none", () => {
 	const fake = installInteractiveDocument();
 	try {
-		const icon = "<svg width=\"48\" height=\"48\"><rect width=\"48\" height=\"48\" fill=\"#0a7\"/></svg>";
+		const icon = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"48\" height=\"48\"><rect width=\"48\" height=\"48\" fill=\"#0a7\"/></svg>";
 		const invoice = invoiceFor({ icon });
 		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
 

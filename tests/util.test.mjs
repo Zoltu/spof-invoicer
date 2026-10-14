@@ -311,7 +311,7 @@ test("h refuses attributes outside the allow-list", () => {
 test("h refuses a src that is not the icon leaf's own data URL", () => {
 	const fake = installFakeDocument();
 	try {
-		const url = svgDataUrl("<svg width=\"16\" height=\"16\"></svg>");
+		const url = svgDataUrl("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\"></svg>");
 		assert.equal(h("img", { src: url }).attributes.src, url, "the leaf's own data URL reaches the attribute");
 		assert.equal(h("img", { alt: "", src: url }).attributes.alt, "", "and the alt text beside it is free text");
 		assert.throws(
@@ -442,7 +442,7 @@ test("DomAttributes refuses an src on a widened or union-typed tag at compile ti
 import { h } from "${specifier("app/ts/util/dom.js")}";
 import { svgDataUrl } from "${specifier("app/ts/util/svg-data-url.js")}";
 
-const url = svgDataUrl("<svg width=\\"64\\" height=\\"64\\"></svg>");
+const url = svgDataUrl(\`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"></svg>\`);
 
 declare const widenedTag: keyof HTMLElementTagNameMap;
 // @ts-expect-error an src on a union-typed tag is a compile error, not only a runtime refusal

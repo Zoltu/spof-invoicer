@@ -106,7 +106,7 @@ function b32(text) {
 }
 
 /** A minimal icon document the gate accepts, and the file shape the icon input reads. */
-const ICON_SVG = "<svg width=\"32\" height=\"32\"><rect width=\"32\" height=\"32\" fill=\"#123456\"/></svg>";
+const ICON_SVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><rect width=\"32\" height=\"32\" fill=\"#123456\"/></svg>";
 
 function iconFile(text, size = text.length) {
 	return { size, text: async () => text };
@@ -950,7 +950,7 @@ test("an over-cap or wrong-format icon is refused in place and leaves the invoic
 		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
 		assert.equal(message().attributes.hidden, "", "nothing is shown before a file is chosen");
 
-		const oversized = `<svg width="32" height="32">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
+		const oversized = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
 		input.files = [iconFile(oversized)];
 		input.dispatch("change");
 		await nextTask();
@@ -1066,7 +1066,7 @@ test("the last icon pick wins when an earlier file read settles after a later on
 		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
 		const input = controlNamed(view, "icon");
 		const preview = () => findAll(view, (node) => hasClass(node, "icon-preview"))[0];
-		const secondSvg = "<svg width=\"16\" height=\"16\"><rect width=\"16\" height=\"16\" fill=\"#654321\"/></svg>";
+		const secondSvg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\"><rect width=\"16\" height=\"16\" fill=\"#654321\"/></svg>";
 		let releaseFirst;
 		const slow = { size: ICON_SVG.length, text: () => new Promise((resolve) => { releaseFirst = resolve; }) };
 
@@ -1095,7 +1095,7 @@ test("a superseded pick's read failure does not paint a stale error under the ic
 		const input = controlNamed(view, "icon");
 		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
 		const preview = () => findAll(view, (node) => hasClass(node, "icon-preview"))[0];
-		const secondSvg = "<svg width=\"16\" height=\"16\"><rect width=\"16\" height=\"16\" fill=\"#654321\"/></svg>";
+		const secondSvg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\"><rect width=\"16\" height=\"16\" fill=\"#654321\"/></svg>";
 		let failFirst;
 		const slow = { size: ICON_SVG.length, text: () => new Promise((_resolve, reject) => { failFirst = reject; }) };
 
@@ -1149,8 +1149,8 @@ test("the icon cap is measured on the NFC form the invoice stores, not the bytes
 		const input = controlNamed(view, "icon");
 		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
 		// Each NFD "é" (`e\u0301`) is three UTF-8 bytes and composes to the two-byte NFC "é", so this document is over the cap as typed yet inside it once composed.
-		const overhead = Buffer.byteLength("<svg width=\"32\" height=\"32\"></svg>", "utf8");
-		const nfd = `<svg width="32" height="32">${"e\u0301".repeat(Math.floor((MAX_ICON_SVG_BYTES - overhead) / 2))}</svg>`;
+		const overhead = Buffer.byteLength("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"></svg>", "utf8");
+		const nfd = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">${"e\u0301".repeat(Math.floor((MAX_ICON_SVG_BYTES - overhead) / 2))}</svg>`;
 		const nfc = nfd.normalize("NFC");
 		assert.ok(Buffer.byteLength(nfd, "utf8") > MAX_ICON_SVG_BYTES, "the NFD spelling exceeds the cap on disk");
 		assert.ok(Buffer.byteLength(nfc, "utf8") <= MAX_ICON_SVG_BYTES, "and sits within it once composed");
@@ -1171,7 +1171,7 @@ test("the icon cap is measured on the NFC form the invoice stores, not the bytes
 test("checkIconText decides the icon field's accept or refuse from the file's text alone", () => {
 	assert.deepEqual(checkIconText(ICON_SVG), { ok: true, svg: ICON_SVG }, "a good document yields the gate's own canonical text");
 
-	const overCap = `<svg width="32" height="32">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
+	const overCap = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
 	assert.deepEqual(
 		checkIconText(overCap),
 		{ ok: false, message: `The icon is ${Buffer.byteLength(overCap, "utf8")} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.` },
@@ -1183,8 +1183,8 @@ test("checkIconText decides the icon field's accept or refuse from the file's te
 	assert.match(malformed.message, /must contain a single <svg> root element/, "with the gate's own reason, which carries no namespace of its own");
 
 	// The measure is the NFC-composed value, not the raw spelling: an NFD text over the cap on disk is accepted and stored composed.
-	const overhead = Buffer.byteLength("<svg width=\"32\" height=\"32\"></svg>", "utf8");
-	const nfd = `<svg width="32" height="32">${"e\u0301".repeat(Math.floor((MAX_ICON_SVG_BYTES - overhead) / 2))}</svg>`;
+	const overhead = Buffer.byteLength("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"></svg>", "utf8");
+	const nfd = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">${"e\u0301".repeat(Math.floor((MAX_ICON_SVG_BYTES - overhead) / 2))}</svg>`;
 	assert.ok(Buffer.byteLength(nfd, "utf8") > MAX_ICON_SVG_BYTES, "the NFD spelling exceeds the cap on disk");
 	assert.deepEqual(checkIconText(nfd), { ok: true, svg: nfd.normalize("NFC") }, "the composed form is accepted");
 

@@ -2,7 +2,7 @@
  * The browser-only rasterizer: the invoice's icon as PNG bytes a PDF can embed.
  *
  * This module is the PDF export's second image-context sink, and the only one that needs a browser: it loads the icon leaf's `data:image/svg+xml;base64,…` URL into an `HTMLImageElement`, draws that image into a `<canvas>`, and reads the canvas back as a PNG.
- * The browser renders the SVG through both of those in secure static image mode, so scripts do not run and no external resource is fetched, exactly as for the on-screen `<img>`.
+ * The browser renders the SVG through both of those in secure animated image mode, so no script runs and no external resource is fetched, exactly as for the on-screen `<img>`, while the animation the icon gate refuses is permitted there.
  * Nothing here reaches the network: the image's source is the leaf's own `data:` URL, whose bytes the page already carries, so no image request and no cross-origin response is involved and no `crossOrigin` request is made or needed.
  * What keeps the canvas untainted is that absence of a cross-origin response rather than a same-origin source: a `data:` URL's origin is opaque, and an opaque origin is not what taints a canvas — drawing image bytes that arrived from another origin is — and the behaviour is unaffected either way, because an engine that tainted this canvas would fail the read-back, `toBlob` throwing a `SecurityError` for a canvas that is not origin-clean, and that throw inside {@link canvasBlob}'s promise executor rejecting this module's promise rather than yielding a blank raster.
  *

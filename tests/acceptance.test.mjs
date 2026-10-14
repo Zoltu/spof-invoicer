@@ -83,7 +83,7 @@ const ETH_TOTAL = 1500000000000000000n;
 const HOSTILE = "<img src=x onerror=\"alert(1)\"><script>alert(2)</script>";
 
 /** A minimal icon document the gate accepts, and the 1 by 1 PNG a substituted rasterizer hands the export. */
-const ICON_SVG = "<svg width=\"32\" height=\"32\"><rect width=\"32\" height=\"32\" fill=\"#123456\"/></svg>";
+const ICON_SVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><rect width=\"32\" height=\"32\" fill=\"#123456\"/></svg>";
 const ICON_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64");
 
 // The word channels, plus two that need a shape: `Image(` only when it is a bare call (the vendored pdf-lib carries `'Image'` as a PDF subtype string), and prefetch/dns-prefetch as HTML rel tokens.
@@ -309,23 +309,27 @@ function isOurModule(file) {
  * The whole allow-list for the DOM-creation sweep, each site named with the justification that exempts it.
  *
  * `util/dom.ts`'s `h()` builder has one sanctioned call, `document.createElement(tag)`, safe because the tag it hands over is the parameter `h()` has already checked against its own forbidden tags.
- * The exemption is file-scoped and one line at a time: the sweep tests each reported line on its own, so a tag literal in that file (`script`, `iframe`, …) or a `createElement` call the pattern does not match is still reported, while a second line that spells `document.createElement(tag)` in the same file would be admitted too.
+ * Each exemption is file-scoped and site-exact: it admits one whole statement, so a `createElement` call a reported line spells beside the sanctioned one — a second tag on the same line, or another sink sharing it — is reported rather than admitted by a pattern the line merely contains.
  * The PDF export's download anchor in `pdf/renderer.ts` is one of the exceptions `README.md` documents: it is built on the fly to take an app-generated `blob:` URL that `h()` itself would refuse, and its tag is the literal `"a"`.
  * `pdf/rasterize.ts` builds the browser-only rasterizer's own two elements — the `<img>` that loads the icon leaf's data URL and the `<canvas>` its pixels are drawn into — which is the image context the icon is rendered in and neither of which can carry script.
- * The pattern is anchored to the call's own identifier — the `tag` parameter, or the literal tag the anchor names — rather than to the whole statement, so what it enforces is a file, a value identifier, and one line at a time; it does not prove the line is the one call site named here.
  */
 const ELEMENT_BUILDERS = new Set(["app/ts/util/dom.ts", "app/js/util/dom.js"]);
 const DOWNLOAD_ANCHORS = new Set(["app/ts/pdf/renderer.ts", "app/js/pdf/renderer.js"]);
 /** The rasterizer's file, in both trees. */
 const RASTERIZER_SITES = new Set(["app/ts/pdf/rasterize.ts", "app/js/pdf/rasterize.js"]);
-/** The builder's one sanctioned call site: `h()` passing the tag parameter it has already refused a forbidden value for, its identifier word-anchored so a longer name that merely ends in `tag` is not exempt. */
-const SANCTIONED_BUILDER_CALL = /\bdocument\s*\.\s*createElement\s*\(\s*\btag\b\s*\)/;
-/** The rasterizer's two sanctioned calls, pinned to the two tags it may build: an image element and the canvas it is drawn into. */
-const SANCTIONED_RASTERIZER_CALLS = /\bdocument\s*\.\s*createElement\s*\(\s*["'`](?:img|canvas)["'`]\s*\)/;
+/** The builder's one sanctioned statement: `h()`'s call, which passes the tag parameter it has already refused a forbidden value for. */
+const SANCTIONED_BUILDER_CALL = "const element = document.createElement(tag);";
+/** The download-anchor statement: the link element whose tag is the literal "a". */
+const SANCTIONED_DOWNLOAD_ANCHOR = "const link = document.createElement(\"a\");";
+/** The rasterizer's two sanctioned statements, pinned whole rather than by pattern: the image element that loads the icon and the canvas it is drawn into. */
+const SANCTIONED_RASTERIZER_STATEMENTS = new Set([
+	'const image = document.createElement("img");',
+	'const canvas = document.createElement("canvas");',
+]);
 function isSanctionedElementBuilder(hit) {
-	if (ELEMENT_BUILDERS.has(hit.file) && SANCTIONED_BUILDER_CALL.test(hit.text)) return true;
-	if (RASTERIZER_SITES.has(hit.file) && SANCTIONED_RASTERIZER_CALLS.test(hit.text)) return true;
-	return DOWNLOAD_ANCHORS.has(hit.file) && /\bdocument\s*\.\s*createElement\s*\(\s*["'`]a["'`]\s*\)/.test(hit.text);
+	if (ELEMENT_BUILDERS.has(hit.file) && hit.text === SANCTIONED_BUILDER_CALL) return true;
+	if (RASTERIZER_SITES.has(hit.file) && SANCTIONED_RASTERIZER_STATEMENTS.has(hit.text)) return true;
+	return DOWNLOAD_ANCHORS.has(hit.file) && hit.text === SANCTIONED_DOWNLOAD_ANCHOR;
 }
 
 /**
@@ -354,34 +358,34 @@ function isSanctionedDataUrlStatement(hit) {
  * `h()` is the app's only builder, so a literal setter is a second route to an image sink that bypasses its allow-list entirely, and this sweep reports the spellings it names: a plain `setAttribute("src", …)`, a `setAttributeNS(…, "src", …)`, and — through the sibling script-URL sweep — a direct `.src =`, `.SRC =`, `["src"] =`, or `['src'] =` assignment.
  * Those spellings are enumerated rather than derived, and an enumeration cannot be exhaustive: it does not match `el["setAttribute"]("src", …)`, `el.attributes.src.value = …`, or `Object.assign(el, { src })`, and it is not meant to, so a gap here is not a reason to add a pattern.
  * What contains a bypass through any spelling is the branded `SvgDataUrl` type a `src` must be, the runtime `isSvgDataUrl` check in `h()`'s attribute builder, the `img-src 'self' data:` CSP, and the single-`data:`-literal sweep that keeps the leaf's own prefix the only `data:` URL in the served tree; this sweep is a second net beside them, never the boundary.
- * The exemption admits the setter only in the browser-only rasterizer, the one file that spells a literal `src` setter at all, and only when the value handed over is the rasterizer's own branded parameter.
+ * The exemption admits the setter only in the browser-only rasterizer, the one file that spells a literal `src` setter at all, and only when the whole comment-stripped line is the one statement that hands the attribute the rasterizer's own branded parameter.
  * `util/dom.ts` sets attributes from its checked bag rather than from a literal name, so it spells no literal setter and is not a sanctioned site; a literal setter there, or in any other file, is reported.
- * The rasterizer's value is its `dataUrl` parameter, which its signature declares as the branded `SvgDataUrl` the view model armed once; that declaration is pinned beside these pins, so the identifier the exemption names is a branded value rather than a name the sweep trusts on sight, and a setter handing over any other identifier or a string literal is reported.
- * The leaf's own builder `svgDataUrl(…)` is deliberately not an exempt spelling: no file in the tree writes it, and `svgDataUrl` performs no icon-gate validation of its own, so admitting it would let a sink that arms an unvalidated value pass both this sweep and the branded-type check.
- * Each sanctioned value's identifier is word-anchored, so a longer name that merely ends in one — `mytag`, `mydataUrl` — is not exempt either.
- * The exemption is file-scoped, value-identifier-named, and one line at a time, exactly as the element-builder exemption is: any line in the rasterizer that spells `setAttribute("src", dataUrl)` is admitted, a second such line included, and the pattern matches a value's identifier rather than the whole statement.
- * Because both the sink pattern and the exemption are per-line, a line that carries the sanctioned setter beside an unsanctioned one — a second `setAttribute("src", …)`, or a `setAttributeNS` — is admitted too; the branded `SvgDataUrl` parameter type below, checked at compile time, is what pins the real site rather than this pattern.
+ * The rasterizer's value is its `dataUrl` parameter, which its signature declares as the branded `SvgDataUrl` the view model armed once; that declaration is pinned beside these pins, so the value the admitted statement carries is a branded one rather than a name the sweep trusts on sight.
+ * The leaf's own builder `svgDataUrl(…)` is deliberately not an exempt spelling either: no file in the tree writes it, and the value this sweep sanctions is the branded parameter the rasterizer declares rather than a URL built at the sink, so a sink arming the attribute from that builder would be a second route to it. The builder's own validation is not what this pin rests on — `util/svg-data-url.ts` runs the icon gate now, so a value it returns is a validated one — but the sanctioned site stays the once-armed value the seam carries.
+ * Every other spelling of that one call is reported, so a setter handing over another identifier — `url`, `value`, or a name that merely ends in `dataUrl` — or a string literal is refused by the whole-line match.
+ * The exemption is content-specific rather than file-wide, exactly as the `data:`-literal exemption is: it admits exactly the one statement that sets the rasterizer's `<img>` `src` from the branded parameter, so the same call on any other line of the rasterizer — a second `setAttribute("src", dataUrl)`, a setter sharing a line with another statement, a `setAttributeNS`, or a setter handing over another value — is reported rather than admitted by a pattern the line merely contains.
+ * What pins the real site beyond this line-exact allowance is the branded `SvgDataUrl` parameter type below, checked at compile time: the statement the exemption admits is the one the rasterizer's own sink writes.
  */
 const SRC_SETTER_SITES = new Set(["app/ts/pdf/rasterize.ts", "app/js/pdf/rasterize.js"]);
 /** A raw `setAttribute`/`setAttributeNS` `src` setter, in any casing. */
 const RAW_SRC_SETTER = /\bsetAttribute\s*\(\s*["'`]src["'`]|\bsetAttributeNS\s*\(\s*[^,)]*,\s*["'`]src["'`]/i;
-/** The one value a sanctioned setter may hand the attribute: the rasterizer's branded `SvgDataUrl` parameter, the only spelling the sanctioned site uses. */
-const SANCTIONED_SRC_SETTER_VALUE = /\bsetAttribute\s*\(\s*["'`]src["'`]\s*,\s*\bdataUrl\s*\)/;
+/** The one statement a sanctioned setter may be: the rasterizer's own `<img>` sink handed the branded `SvgDataUrl` parameter, which is the whole allow-list for this sweep. */
+const SANCTIONED_SRC_SETTER_STATEMENT = 'image.setAttribute("src", dataUrl);';
 function isSanctionedSrcSetter(hit) {
-	return SRC_SETTER_SITES.has(hit.file) && SANCTIONED_SRC_SETTER_VALUE.test(hit.text);
+	return SRC_SETTER_SITES.has(hit.file) && hit.text === SANCTIONED_SRC_SETTER_STATEMENT;
 }
 
 /**
  * The containment invariant for the icon's image context: the constructs that would put an SVG document into the live DOM rather than into an image sink.
  *
- * `createElementNS` and `DOMParser` both build or parse markup rather than load an image, and an inline `h("svg", …)` would put the document's own elements — and whatever script they carry — into the page instead of rendering them in secure static image mode.
+ * `createElementNS` and `DOMParser` both build or parse markup rather than load an image, and an inline `h("svg", …)` would put the document's own elements — and whatever script they carry — into the page instead of rendering them in the image context's secure animated mode, where script does not run.
  */
 const CONTAINMENT_SINKS = /\bcreateElementNS\b|\bDOMParser\b|\bh\s*\(\s*["'`]svg["'`]/i;
 
 /**
  * The SVG media type, and the whole allow-list for the sweep that confines it.
  *
- * The type names an image context: an SVG document loaded as an image is rendered in secure static image mode, while the same text inlined as markup is not, so every spelling of the type in the served tree is pinned here rather than left to a reader's reading of the runtime.
+ * The type names an image context: an SVG document loaded as an image is rendered in secure animated mode, where script does not run and external references are not fetched, while the same text inlined as markup is not, so every spelling of the type in the served tree is pinned here rather than left to a reader's reading of the runtime.
  * The leaf's prefix declaration is the one place the type is part of a URL, the page's own favicon declaration names the type of a static same-origin asset, and the create form's file-picker filter names it to the picker alone; a spelling anywhere else, or a different one on a sanctioned line, is reported.
  */
 const SVG_MEDIA_TYPE = /image\/svg\+xml/i;
@@ -780,6 +784,21 @@ test("a testnet unified payee is refused by name, so the link renders a notice a
 	}
 });
 
+/**
+ * The whole allow-list for the absolute-URL sweep: the one statement that declares the SVG namespace name the icon gate's root check reads.
+ *
+ * That name is an absolute URL in spelling alone: a parser matches it as an XML namespace name and never dereferences it, so the runtime resolves no reference through it, while an `href` or a `src` is exactly the kind of reference this sweep exists to keep out.
+ * The exemption is content-specific rather than file-wide, exactly as the `data:`-literal one is: it admits the one statement that declares the constant, so a second absolute URL in that file, in the compiled copy, or behind another spelling of the same name is still reported.
+ */
+const NAMESPACE_LEAVES = new Set(["app/ts/invoice/icon.ts", "app/js/invoice/icon.js"]);
+/** The namespace name the icon gate requires on a root `<svg>` element, composed into the statement below so the pin and the source cannot disagree. */
+const SANCTIONED_SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+/** The exact statement that declares it: the whole allow-list for this exemption. */
+const SANCTIONED_SVG_NAMESPACE_STATEMENT = `const SVG_NAMESPACE = "${SANCTIONED_SVG_NAMESPACE}";`;
+function isSanctionedSvgNamespace(hit) {
+	return NAMESPACE_LEAVES.has(hit.file) && hit.text === SANCTIONED_SVG_NAMESPACE_STATEMENT;
+}
+
 test("no served runtime module can build markup, evaluate code, or reach the network", async () => {
 	const runtime = [
 		...(await filesUnder(join(appDir, "ts"))),
@@ -811,7 +830,7 @@ test("no served runtime module can build markup, evaluate code, or reach the net
 		[],
 		"the SVG media type is spelled outside the sanctioned statements",
 	);
-	assert.deepEqual(occurrences(runtime, /https?:\/\//, { htmlComments: true }), [], "a runtime file names an absolute URL");
+	assert.deepEqual(occurrences(runtime, /https?:\/\//, { htmlComments: true, except: isSanctionedSvgNamespace }), [], "a runtime file names an absolute URL outside the one statement that declares the SVG namespace name");
 	assert.deepEqual(occurrences(runtime, /\.style\b/, { htmlComments: true }), [], "a runtime file styles an element from script");
 });
 
@@ -879,6 +898,14 @@ test("the runtime sweeps catch the vectors they name and each allow-list exempts
 		"another tag in the anchor's file is not",
 	);
 	assert.ok(
+		!isSanctionedElementBuilder({ file: "app/ts/util/dom.ts", text: "el.innerHTML = markup; const element = document.createElement(tag);" }),
+		"a sanctioned call sharing its line with an unsanctioned sink is reported, since the exemption matches the whole statement",
+	);
+	assert.ok(
+		!isSanctionedElementBuilder({ file: "app/ts/pdf/renderer.ts", text: 'const link = document.createElement("a"); const frame = document.createElement("iframe");' }),
+		"and so is the anchor's call beside a second createElement on its line",
+	);
+	assert.ok(
 		isSanctionedElementBuilder({ file: "app/ts/pdf/rasterize.ts", text: 'const image = document.createElement("img");' }),
 		"the rasterizer's image element is exempt",
 	);
@@ -889,6 +916,10 @@ test("the runtime sweeps catch the vectors they name and each allow-list exempts
 	assert.ok(
 		!isSanctionedElementBuilder({ file: "app/ts/pdf/rasterize.ts", text: 'const frame = document.createElement("iframe");' }),
 		"but no other tag literal in the rasterizer is",
+	);
+	assert.ok(
+		!isSanctionedElementBuilder({ file: "app/ts/pdf/rasterize.ts", text: 'const frame = document.createElement("img"); const other = document.createElement("canvas");' }),
+		"and a line that is not one of the two sanctioned statements is reported, since the rasterizer's exemption is site-exact",
 	);
 	assert.ok(
 		!isSanctionedElementBuilder({ file: "app/ts/ui/view.ts", text: 'document.createElement("a");' }),
@@ -985,11 +1016,15 @@ test("the runtime sweeps catch the vectors they name and each allow-list exempts
 	);
 	assert.ok(
 		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", svgDataUrl(svg));' }),
-		"the leaf's builder is not an exempt spelling: no file in the tree writes it, and svgDataUrl performs no gate validation, so a sink arming an unvalidated value would otherwise pass",
+		"the leaf's builder is not an exempt spelling: the sanctioned value is the rasterizer's own branded parameter, not a URL a sink builds for itself",
 	);
 	assert.ok(
-		isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", dataUrl);' }),
-		"the rasterizer's own sink is exempt when it hands over the branded data URL the view model armed, which is the value the seam carries",
+		isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'image.setAttribute("src", dataUrl);' }),
+		"the rasterizer's own sink is exempt when the whole line is the one statement handing the branded data URL the view model armed",
+	);
+	assert.ok(
+		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'image.setAttribute("src", dataUrl); other.setAttribute("src", url);' }),
+		"a line carrying the sanctioned call beside an unsanctioned setter is reported, since the exemption matches the whole statement",
 	);
 	assert.ok(
 		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttributeNS(null, "src", dataUrl);' }),
@@ -1001,7 +1036,7 @@ test("the runtime sweeps catch the vectors they name and each allow-list exempts
 	);
 	assert.ok(
 		!isSanctionedSrcSetter({ file: "app/ts/ui/view.ts", text: 'img.setAttribute("src", svgDataUrl(svg));' }),
-		"the leaf's builder in a third file exempts nothing",
+		"and the leaf's builder in a third file exempts nothing, since the allow-list names the rasterizer alone and the value it hands the attribute",
 	);
 	assert.ok(
 		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", value);' }),
@@ -1009,7 +1044,7 @@ test("the runtime sweeps catch the vectors they name and each allow-list exempts
 	);
 	assert.ok(
 		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", mydataUrl);' }),
-		"and a longer identifier that merely ends in the sanctioned name is refused too, since the value is word-anchored",
+		"and a longer identifier a caller might think matches is refused too, since the exemption matches the whole statement",
 	);
 	assert.ok(
 		!isSanctionedSrcSetter({ file: "app/ts/pdf/rasterize.ts", text: 'img.setAttribute("src", "logo.svg");' }),
@@ -1019,7 +1054,7 @@ test("the runtime sweeps catch the vectors they name and each allow-list exempts
 		!isSanctionedSrcSetter({ file: "app/ts/util/dom.ts", text: 'element.setAttribute("src", dataUrl);' }),
 		"and a literal setter in the builder's file, which spells none of its own, is reported like one in any other file",
 	);
-	// The exemption names the rasterizer's own `dataUrl` parameter, so its declaration is what makes that identifier the icon leaf's branded value rather than a name the sweep trusts on sight.
+	// The admitted statement carries the rasterizer's own `dataUrl` parameter, so its declaration is what makes that value the icon leaf's branded one rather than a name the sweep trusts on sight.
 	assert.match(
 		readFileSync(join(appDir, "ts", "pdf", "rasterize.ts"), "utf8"),
 		/rasterizeSvgIcon\(dataUrl:\s*SvgDataUrl\)/,
@@ -1029,6 +1064,11 @@ test("the runtime sweeps catch the vectors they name and each allow-list exempts
 		assert.ok(CONTAINMENT_SINKS.test(vector), `the containment sweep misses ${vector}`);
 	}
 	assert.ok(!CONTAINMENT_SINKS.test('h("img", { src: svgDataUrl(svg) });'), "the image sink is the sanctioned route, not a containment breach");
+	assert.ok(isSanctionedSvgNamespace({ file: "app/ts/invoice/icon.ts", text: SANCTIONED_SVG_NAMESPACE_STATEMENT }), "the one statement declaring the SVG namespace name is exempt from the absolute-URL sweep");
+	assert.ok(!isSanctionedSvgNamespace({ file: "app/ts/invoice/icon.ts", text: `const remote = "${SANCTIONED_SVG_NAMESPACE}/x";` }), "and no other line of that file is, a namespace literal beside the sanctioned one included");
+	assert.ok(!isSanctionedSvgNamespace({ file: "app/ts/util/dom.ts", text: SANCTIONED_SVG_NAMESPACE_STATEMENT }), "nor the same statement in another file");
+	assert.ok(!isSanctionedSvgNamespace({ file: "app/ts/invoice/icon.ts", text: `el.src = "${SANCTIONED_SVG_NAMESPACE}";` }), "nor a sink handed the namespace name");
+	assert.ok(!isSanctionedSvgNamespace({ file: "app/ts/invoice/icon.ts", text: SANCTIONED_SVG_NAMESPACE_STATEMENT.replace("const", "let") }), "nor an assignment to the same constant name in another spelling");
 	assert.deepEqual(
 		occurrences([join(appDir, "index.html")], SVG_MEDIA_TYPE, { htmlComments: true, except: isSanctionedSvgMediaType }),
 		[],
@@ -1325,6 +1365,8 @@ test("an icon chosen in the create form reaches the shared page's letterhead and
 		assert.equal(letterhead[0].tagName, "img", "as an image rather than inline markup");
 		assert.equal(letterhead[0].attributes.src, svgDataUrl(ICON_SVG), "carrying the leaf's own data URL of the icon the payload carried");
 		assert.equal(letterhead[0].attributes.alt, "", "decorative beside the payee's own name");
+		// The leaf's own encoder runs the icon gate, so a document the gate refuses cannot be armed into a URL at all, whatever a future sink is handed.
+		assert.throws(() => svgDataUrl('<svg width="32" height="32"></svg>'), /must declare xmlns/, "the leaf's encoder refuses a document the gate refuses");
 
 		findButton(shell.content, "Save as PDF").dispatch("click", { type: "click" });
 		await waitFor(() => saved.length > 0 || shell.notice.children.length > 0, 400);

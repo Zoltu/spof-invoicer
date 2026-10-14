@@ -1173,7 +1173,7 @@ test("the model's own caps bound an item row inside a fresh page's capacity", as
 });
 
 /** The icon every icon case in this file uses: a 64 by 32 SVG, so its own aspect ratio is not the letterhead box's. */
-const ICON_SVG = "<svg width=\"64\" height=\"32\" viewBox=\"0 0 64 32\"><rect width=\"64\" height=\"32\" fill=\"#123456\"/></svg>";
+const ICON_SVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"32\" viewBox=\"0 0 64 32\"><rect width=\"64\" height=\"32\" fill=\"#123456\"/></svg>";
 
 /** A real 1 by 1 PNG, so the embed path parses actual image bytes rather than a stand-in. */
 const ICON_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64");

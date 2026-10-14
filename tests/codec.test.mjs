@@ -112,10 +112,10 @@ const RICH = make({
 const GOLDEN_JSON = "{\"v\":1,\"t\":\"invoice\",\"id\":\"INV-0001\",\"issued\":\"2026-10-03\",\"payee\":{\"name\":\"Studio Example\",\"address\":\"0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\"},\"chainId\":\"0x1\",\"asset\":\"usdc\",\"items\":[{\"description\":\"Design work\",\"quantity\":\"2\",\"unitPrice\":\"150\"}]}";
 
 /** A valid icon for the share tests: a 32×32 document the icon gate accepts. */
-const ICON = "<svg width=\"32\" height=\"32\" viewBox=\"0 0 32 32\"><circle cx=\"16\" cy=\"16\" r=\"12\" fill=\"#c00\"/></svg>";
+const ICON = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" viewBox=\"0 0 32 32\"><circle cx=\"16\" cy=\"16\" r=\"12\" fill=\"#c00\"/></svg>";
 /** The same document with a precomposed label, and its NFD spelling, so a payload can carry a spelling validation has to compose. */
-const ICON_NFC = "<svg width=\"32\" height=\"32\" data-label=\"caf\u00e9\"><rect width=\"32\" height=\"32\"/></svg>";
-const ICON_NFD = "<svg width=\"32\" height=\"32\" data-label=\"cafe\u0301\"><rect width=\"32\" height=\"32\"/></svg>";
+const ICON_NFC = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" data-label=\"caf\u00e9\"><rect width=\"32\" height=\"32\"/></svg>";
+const ICON_NFD = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" data-label=\"cafe\u0301\"><rect width=\"32\" height=\"32\"/></svg>";
 
 test("createInvoice fills the version and kind and canonicalizes the payee address", () => {
 	assert.equal(MINIMAL.v, INVOICE_VERSION);
@@ -812,12 +812,12 @@ test("an icon-less invoice keeps the payload it had before the field existed", (
 });
 
 test("an icon is validated as it is read, under the icon path", () => {
-	const overCap = `<svg width="64" height="64">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
+	const overCap = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
 	// Every case pins the whole message the refusal carries, so the byte-cap refusal and the empty-icon clause are asserted as themselves rather than as "some error": the gate words the reason and the model states it under the icon path, with the `invoice:` namespace applied once.
 	const cases = [
 		["an over-cap icon", overCap, "InvalidIconError", `The icon is ${Buffer.byteLength(overCap, "utf8")} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.`],
 		["an empty icon", "", "InvalidIconError", "must not be empty"],
-		["a script-bearing icon", "<svg width=\"32\" height=\"32\"><script>alert(1)</script></svg>", "InvalidIconError", "must not contain a <script> element"],
+		["a script-bearing icon", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><script>alert(1)</script></svg>", "InvalidIconError", "must not contain a <script> element"],
 		["an icon with trailing whitespace", `${ICON} `, "InvalidIconError", "must not start or end with whitespace"],
 		["a null icon", null, "TypeError", "expected an SVG string, got null"],
 		["a numeric icon", 42, "TypeError", "expected an SVG string, got 42"],
@@ -832,7 +832,7 @@ test("an icon is validated as it is read, under the icon path", () => {
 
 test("the notice a payer sees for a shared link whose icon is refused carries the namespace once", () => {
 	// The route notice is the message the model raised, verbatim, so this pins the wording a payer reads end to end: one field path and one reason, never `invoice: icon: invoice: …`.
-	const overCap = `<svg width="64" height="64">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
+	const overCap = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">${"x".repeat(MAX_ICON_SVG_BYTES)}</svg>`;
 	const json = serializeInvoice(MINIMAL).replace('{"v":1', `{"icon":${JSON.stringify(overCap)},"v":1`);
 	const route = parseHash(`#/i/${b32(json)}`);
 	assert.equal(route.kind, "error", "the payload carrying the refused icon is refused rather than rendered");

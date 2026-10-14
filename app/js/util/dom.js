@@ -47,7 +47,7 @@ const ALLOWED_ATTRIBUTES = [
     "aria-expanded",
 ];
 /**
- * The one element {@link h} admits `src` for: an `<img>`, whose source a browser renders in its image context — secure static image mode — where the icon's scripts do not run and its external references are not fetched.
+ * The one element {@link h} admits `src` for: an `<img>`, whose source a browser renders in its image context — secure animated image mode — where the icon's script does not run and its external references are not fetched, though the animation the icon gate refuses is permitted there.
  * The same data URL on a document-context element (`iframe`, `object`, `embed`) is a nested document rather than an image, where that boundary does not hold, so the element is pinned here and `h` refuses an `src` on any other tag rather than leaving the image-context boundary to the page's CSP alone.
  */
 const SRC_ELEMENTS = new Set(["img"]);
