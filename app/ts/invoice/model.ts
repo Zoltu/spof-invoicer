@@ -12,6 +12,8 @@
  * Invisible and direction-formatting characters (zero-width spaces, bidi marks and overrides, the soft hyphen, the byte-order mark, and other default-ignorable formatting) are refused, a single-line field also refuses the Unicode line and paragraph separators, and the C1 control block is refused alongside the C0 controls, so a stored name or id cannot be made to render differently from how it reads.
  * A lone surrogate code unit is refused as malformed text: it is not a code point any renderer can show as the byte it is, and neither the NFC composition above nor the codec's canonical re-serialization rejects one, so this validator is the boundary that must.
  *
+ * A party's `email` field carries a second accepted shape: the wire key keeps its name and now carries free-text contact info — an email address, a phone number, a postal address — which a single-line legacy email spelling of up to {@link MAX_EMAIL_CHARS} characters satisfies unchanged, so a share link written before the field widened still validates.
+ *
  * Money is integer base units and BigInt throughout — never a float — with these rules:
  * - `quantity` and `unitPrice` are plain decimal strings with at most the asset's `decimals` fractional digits, both greater than zero, stored in the shortest exact spelling so `"2"` and `"2.00"` are one payload rather than two;
  * - a line amount is `quantity × unitPrice`, computed exactly in BigInt and rounded half-up (ties away from zero) to the asset's decimals; a line that rounds to zero is refused, because a zero-value line is a mistyped price rather than an invoice;
@@ -51,8 +53,17 @@ export const MAX_ID_CHARS = 64;
 /** The most characters a party name may carry. */
 export const MAX_NAME_CHARS = 200;
 
-/** The most characters an email address may carry. */
+/** The most characters a legacy email spelling may carry: a party contact value that matches that spelling is accepted at this cap rather than at the contact limits. */
 export const MAX_EMAIL_CHARS = 320;
+
+/** The most lines a party's contact info may carry. */
+export const MAX_CONTACT_LINES = 4;
+
+/** The most characters one line of a party's contact info may carry. */
+export const MAX_CONTACT_LINE_CHARS = 40;
+
+/** The most characters a party's contact info may carry in total: {@link MAX_CONTACT_LINES} lines of {@link MAX_CONTACT_LINE_CHARS} characters each. */
+export const MAX_CONTACT_CHARS = MAX_CONTACT_LINES * MAX_CONTACT_LINE_CHARS;
 
 /** The most characters one line item's description may carry. */
 export const MAX_DESCRIPTION_CHARS = 500;
@@ -86,6 +97,7 @@ export interface TaxLine {
 export interface Payee {
 	readonly name: string;
 	readonly address: PayoutAddress;
+	/** Optional free-text contact info — an email address, a phone number, a postal address, anything the payee wants shown; the JSON key stays `email` for wire compatibility. */
 	readonly email?: string;
 	readonly notes?: string;
 }
@@ -93,6 +105,7 @@ export interface Payee {
 /** The party being billed; payer details are display-only. */
 export interface Payer {
 	readonly name: string;
+	/** Optional free-text contact info — anything the payer wants shown on the invoice; the JSON key stays `email` for wire compatibility. */
 	readonly email?: string;
 }
 
@@ -205,7 +218,7 @@ const MAX_TAX_RATE_UNITS = 100n * 10n ** BigInt(TAX_RATE_DECIMALS);
 /**
  * The most of a wrapped validator message a user-facing refusal carries.
  *
- * {@link payoutAddress} and {@link moneyRefusal} wrap another module's message, {@link email} and {@link date} build one of their own, and {@link assertKnownFields} puts an unknown JSON key into the field path; each embeds the rejected value, which a share payload within the codec's cap can stretch without bound — the address validator imposes no length of its own, the email validator's 320-character cap still leaves room for a notice past 400 characters, a date string reaches its refusal with no cap at all, and an unknown key's length is limited only by the payload.
+ * {@link payoutAddress} and {@link moneyRefusal} wrap another module's message, {@link date} builds one of its own, and {@link assertKnownFields} puts an unknown JSON key into the field path; each embeds the rejected value, which a share payload within the codec's cap can stretch without bound — the address validator imposes no length of its own, a date string reaches its refusal with no cap at all, and an unknown key's length is limited only by the payload.
  * Left unbounded, that turns the route notice into ~100 KB and breaks the bounded-message invariant (`util/errors.ts`, `app/shell.ts`).
  * The bound leaves every message this module builds from a legitimate value intact — the longest is well under it — while keeping a hostile one far inside the notice's own limit.
  */
@@ -258,18 +271,35 @@ function text(value: unknown, path: string, { max, multiline = false }: TextRule
 	return normalized;
 }
 
-function email(value: unknown, path: string): string {
-	const address = text(value, path, { max: MAX_EMAIL_CHARS });
-	if (!EMAIL_PATTERN.test(address)) {
-		throw new InvalidInvoiceError(
-			path,
-			boundMessage(
-				`must be an email address like "billing@example.com", got ${describe(address)}`,
-				WRAPPED_MESSAGE_MAX,
-			),
-		);
+/**
+ * A party's contact info, which the wire format still spells `email` on both parties.
+ *
+ * The value is free text — an email address, a phone number, a postal address — so it is held to the contact limits rather than to an address pattern: at most {@link MAX_CONTACT_LINES} lines of at most {@link MAX_CONTACT_LINE_CHARS} characters, {@link MAX_CONTACT_CHARS} in total, trimmed at the ends, with control characters limited to newlines and tabs.
+ * The line endings are normalized first, CRLF and a lone CR to LF, so a contact value pasted from an editor that writes Windows endings is stored, and re-serialized, in the one spelling the wire format carries.
+ * A shape that reads as an email address goes down the legacy branch instead and is held to {@link MAX_EMAIL_CHARS}, the cap the field carried before it widened, so a share link written then still validates: every value the old rule accepted is accepted here too.
+ */
+function contact(value: unknown, path: string): string {
+	if (typeof value !== "string") {
+		throw new InvalidInvoiceError(path, `must be a string, got ${preview(value)}`);
 	}
-	return address;
+	// The legacy test below reads the stored spelling, so the line endings and the NFC composition `text` applies are settled first.
+	const normalized = value.normalize("NFC").replace(/\r\n?/g, "\n");
+	if (EMAIL_PATTERN.test(normalized)) {
+		return text(normalized, path, { max: MAX_EMAIL_CHARS });
+	}
+	const lines = text(normalized, path, { max: MAX_CONTACT_CHARS, multiline: true }).split("\n");
+	if (lines.length > MAX_CONTACT_LINES) {
+		throw new InvalidInvoiceError(path, `must hold at most ${MAX_CONTACT_LINES} lines, got ${lines.length}`);
+	}
+	for (const line of lines) {
+		if (line.length > MAX_CONTACT_LINE_CHARS) {
+			throw new InvalidInvoiceError(
+				path,
+				`must hold lines of at most ${MAX_CONTACT_LINE_CHARS} characters, got ${line.length}`,
+			);
+		}
+	}
+	return lines.join("\n");
 }
 
 function date(value: unknown, path: string): string {
@@ -371,7 +401,7 @@ function payeeField(value: unknown, path: string, asset: Asset): Payee {
 	return Object.freeze({
 		name: text(payee.name, `${path}.name`, { max: MAX_NAME_CHARS }),
 		address: payoutAddress(payee.address, `${path}.address`, asset),
-		...(payee.email === undefined ? {} : { email: email(payee.email, `${path}.email`) }),
+		...(payee.email === undefined ? {} : { email: contact(payee.email, `${path}.email`) }),
 		...(payee.notes === undefined ? {} : { notes: text(payee.notes, `${path}.notes`, { max: MAX_PAYEE_NOTES_CHARS, multiline: true }) }),
 	});
 }
@@ -381,7 +411,7 @@ function payerField(value: unknown, path: string): Payer {
 	assertKnownFields(payer, path, PAYER_FIELDS);
 	return Object.freeze({
 		name: text(payer.name, `${path}.name`, { max: MAX_NAME_CHARS }),
-		...(payer.email === undefined ? {} : { email: email(payer.email, `${path}.email`) }),
+		...(payer.email === undefined ? {} : { email: contact(payer.email, `${path}.email`) }),
 	});
 }
 

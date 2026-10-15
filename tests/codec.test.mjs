@@ -8,6 +8,10 @@ import { canonicalIconText } from "../app/js/util/icon-canonical-text.js";
 import {
 	INVOICE_KIND,
 	INVOICE_VERSION,
+	MAX_CONTACT_CHARS,
+	MAX_CONTACT_LINES,
+	MAX_CONTACT_LINE_CHARS,
+	MAX_EMAIL_CHARS,
 	MAX_ITEMS,
 	InvalidInvoiceError,
 	UnsupportedInvoiceVersionError,
@@ -241,22 +245,97 @@ test("payee and payer identity is validated field by field", () => {
 		/payee\.name: must be a string/,
 	);
 	rejects("an array payee", () => make({ payee: [PAYEE] }), InvalidInvoiceError, /payee: must be a JSON object/);
-	rejects(
-		"a malformed email",
-		() => make({ payee: { name: "X", address: PAYEE, email: "nope@nope" } }),
-		InvalidInvoiceError,
-		/payee\.email: must be an email address/,
+	assert.equal(
+		make({ payee: { name: "X", address: PAYEE, email: "nope@nope" } }).payee.email,
+		"nope@nope",
+		"a value the legacy email spelling refuses is accepted as free-text contact info",
 	);
 	assert.equal(
 		make({ payer: { name: "Acme", email: "ap@acme.example" } }).payer.email,
 		"ap@acme.example",
-		"a payer email is accepted",
+		"a payer contact value takes the same rules",
 	);
 	rejects(
 		"a nameless payer",
 		() => make({ payer: { email: "ap@acme.example" } }),
 		InvalidInvoiceError,
 		/payer\.name: must be a string/,
+	);
+});
+
+test("a party's contact info is bounded by line count, line length, and total length, with the legacy email spelling still accepted", () => {
+	const contact = (email) => make({ payee: { name: "Studio Example", address: PAYEE, email } }).payee.email;
+	const fourLines = ["Studio Example", "billing@example.com", "+44 20 7946 0958", "12 Rue de l'Exemple, Paris"].join("\n");
+	assert.equal(contact(fourLines), fourLines, "four lines inside every limit are stored as written");
+	assert.equal(contact("line one\r\nline two"), "line one\nline two", "a CRLF ending is normalized to LF");
+	assert.equal(contact("line one\rline two"), "line one\nline two", "a lone CR is normalized to LF");
+	assert.equal(contact("billing@example.com"), "billing@example.com", "the legacy email spelling is accepted unchanged");
+	assert.equal(
+		contact(`${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length)}@example.com`).length,
+		MAX_EMAIL_CHARS,
+		"a legacy email spelling is accepted at the legacy cap, past the contact cap",
+	);
+
+	rejects(
+		"a line past the line cap",
+		() => make({ payee: { name: "X", address: PAYEE, email: "x".repeat(MAX_CONTACT_LINE_CHARS + 1) } }),
+		InvalidInvoiceError,
+		/payee\.email: must hold lines of at most 40 characters, got 41/,
+	);
+	rejects(
+		"more lines than the line cap",
+		() => make({ payee: { name: "X", address: PAYEE, email: "a\nb\nc\nd\ne" } }),
+		InvalidInvoiceError,
+		/payee\.email: must hold at most 4 lines, got 5/,
+	);
+	rejects(
+		"a value past the total cap",
+		() => make({ payee: { name: "X", address: PAYEE, email: "x".repeat(MAX_CONTACT_CHARS + 1) } }),
+		InvalidInvoiceError,
+		/payee\.email: must be 1 to 160 characters long, got 161/,
+	);
+	rejects(
+		"a legacy email past the legacy cap",
+		() => make({ payee: { name: "X", address: PAYEE, email: `${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length + 1)}@example.com` } }),
+		InvalidInvoiceError,
+		/payee\.email: must be 1 to 320 characters long, got 321/,
+	);
+	rejects(
+		"a padded contact value",
+		() => make({ payee: { name: "X", address: PAYEE, email: " line\nline " } }),
+		InvalidInvoiceError,
+		/payee\.email: must not start or end with whitespace/,
+	);
+	rejects(
+		"a contact value carrying a control character",
+		() => make({ payee: { name: "X", address: PAYEE, email: "line\u0000line" } }),
+		InvalidInvoiceError,
+		/payee\.email: must not contain control characters other than newlines and tabs/,
+	);
+});
+
+test("a contact value on either party survives validation and the canonical JSON", () => {
+	const payeeContact = "Studio Example\nbilling@example.com";
+	const payerContact = "Acme GmbH\nap@acme.example";
+	const invoice = make({
+		payee: { name: "Studio Example", address: PAYEE, email: payeeContact },
+		payer: { name: "Acme GmbH", email: payerContact },
+	});
+	assert.equal(invoice.payee.email, payeeContact, "the payee's contact lines are stored as written");
+	assert.equal(invoice.payer.email, payerContact, "the payer's contact info takes the same rules");
+	assert.deepEqual(validateInvoice(invoice), invoice, "validation is idempotent on a contact value");
+	assert.ok(
+		serializeInvoice(invoice).includes('"email":"Studio Example\\nbilling@example.com"'),
+		"the contact value keeps the `email` key and its escaped line break in the canonical JSON",
+	);
+	assert.ok(
+		serializeInvoice(invoice).includes('"email":"Acme GmbH\\nap@acme.example"'),
+		"and the payer's contact info is written the same way",
+	);
+	assert.deepEqual(
+		validateInvoice(JSON.parse(serializeInvoice(invoice))),
+		invoice,
+		"and the invoice survives the JSON the encoder writes",
 	);
 });
 
@@ -1123,7 +1202,7 @@ test("an oversized value inside a within-cap payload yields a bounded notice", (
 	const hugeQuantity = json.replace("\"quantity\":\"2\"", `"quantity":"${"9".repeat(50000)}"`);
 	const hugePrice = json.replace("\"unitPrice\":\"150\"", `"unitPrice":"1.${"0".repeat(50000)}1"`);
 	const hugeIssued = json.replace("\"issued\":\"2026-10-03\"", `"issued":"${"9".repeat(50000)}"`);
-	// The longest accepted email address stays inside every payload limit, yet the refusal that quotes it runs past 400 characters, so it has to be bounded like the address and amount refusals.
+	// A 320-character contact value is inside every payload limit yet past the contact cap, so the refusal it earns has to stay bounded like the address and amount refusals.
 	const longEmail = json.replace(`"address":"${PAYEE}"`, `"address":"${PAYEE}","email":"${"x".repeat(320)}"`);
 	const hugeRootKey = json.replace("{", `{"${"k".repeat(50000)}":1,`);
 	const hugeNestedKey = json.replace("\"payee\":{", `"payee":{"${"k".repeat(50000)}":1,`);
