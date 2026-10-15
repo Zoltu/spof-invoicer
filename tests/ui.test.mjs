@@ -1142,7 +1142,7 @@ test("a pick that settles after Remove icon does not re-apply the removed icon",
 	}
 });
 
-test("the icon cap is measured on the NFC form the invoice stores, not the bytes on disk", async () => {
+test("the icon cap is measured on the trimmed, NFC-composed form the invoice stores, not the bytes on disk", async () => {
 	const fake = installInteractiveDocument();
 	try {
 		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
@@ -1175,14 +1175,14 @@ test("checkIconText decides the icon field's accept or refuse from the file's te
 	assert.deepEqual(
 		checkIconText(overCap),
 		{ ok: false, message: `The icon is ${Buffer.byteLength(overCap, "utf8")} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.` },
-		"an over-cap document is refused with the form's own byte-cap message",
+		"an over-cap document is refused with the gate's own byte-cap message",
 	);
 
 	const malformed = checkIconText("not an svg at all");
 	assert.equal(malformed.ok, false, "a document the gate refuses is refused");
 	assert.match(malformed.message, /must contain a single <svg> root element/, "with the gate's own reason, which carries no namespace of its own");
 
-	// The measure is the NFC-composed value, not the raw spelling: an NFD text over the cap on disk is accepted and stored composed.
+	// The measure is the trimmed, NFC-composed value, not the raw spelling: an NFD text over the cap on disk is accepted and stored composed.
 	const overhead = Buffer.byteLength("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"></svg>", "utf8");
 	const nfd = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">${"e\u0301".repeat(Math.floor((MAX_ICON_SVG_BYTES - overhead) / 2))}</svg>`;
 	assert.ok(Buffer.byteLength(nfd, "utf8") > MAX_ICON_SVG_BYTES, "the NFD spelling exceeds the cap on disk");
@@ -1205,13 +1205,14 @@ test("checkIconText decides the icon field's accept or refuse from the file's te
 	assert.deepEqual(checkIconText(""), { ok: false, message: "must not be empty" }, "an empty document is refused as its own fault");
 });
 
-test("checkIconText trims a file's surrounding whitespace before the gate reads it", () => {
+test("checkIconText accepts a padded file through the gate, the one place that trims and composes", () => {
 	// The common case a picker meets is an SVG saved with a trailing newline, so the surrounding whitespace is trimmed rather than refused: the trimmed text is the canonical value the field stores and the text the byte cap measures.
 	const cases = [
 		["a leading newline and tab", `\n\t${ICON_SVG}`],
 		["a trailing newline", `${ICON_SVG}\n`],
 		["both ends", ` ${ICON_SVG}\n\n`],
 		["a leading byte-order mark", `\uFEFF${ICON_SVG}`],
+		["a trailing byte-order mark", `${ICON_SVG}\uFEFF`],
 	];
 	for (const [label, text] of cases) {
 		assert.deepEqual(checkIconText(text), { ok: true, svg: ICON_SVG }, `${label} is trimmed to the canonical text the gate returns`);
@@ -1227,7 +1228,7 @@ test("checkIconText trims a file's surrounding whitespace before the gate reads 
 		"a content byte past the cap is refused whatever whitespace surrounds it",
 	);
 
-	// Trimming removes a spelling fault and nothing else: the gate's rules still decide the trimmed text, and the two canonicalizations compose.
+	// The gate's trim removes a spelling fault and nothing else: every other rule still decides the trimmed, composed text, and this helper canonicalizes nothing of its own.
 	const malformed = checkIconText("not an svg at all\n");
 	assert.equal(malformed.ok, false, "a padded malformed document is still refused");
 	assert.match(malformed.message, /must contain a single <svg> root element/, "with the gate's own reason");

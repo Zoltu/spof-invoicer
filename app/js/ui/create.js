@@ -4,7 +4,7 @@
  * The view is split in two layers so most of it is testable without a browser: the pure form state and its mapping to a validated {@link Invoice} live in the exported helpers at the top, and the DOM building at the bottom only wires those helpers to inputs.
  * The payee's own screen shows the invoice the form creates, not only its share link: the section `ui/payment-section.ts` owns is drawn into this view for each invoice the form builds, so the payee can pay it, or copy its link, its address, and its amount, without opening their own share link.
  * Every rendered string — a field value, a validation message, a share payload — reaches the page as a text child of `util/dom.ts`'s `h()`, so nothing a user or a share link supplies can become markup.
- * An optional SVG icon is chosen from a file input and checked in place — a generous raw read ceiling on the file's own size first, then the byte cap on the trimmed, NFC-composed value, then the icon gate — before it enters the form state, so an over-large, over-cap, or malformed file is refused under its own field and the icon the form already carries stays; the icon the form does carry is previewed through the icon leaf's own data URL, never as markup.
+ * An optional SVG icon is chosen from a file input and checked in place — a generous raw read ceiling on the file's own size first, then the icon gate, which applies its raw code-unit bound, its byte cap on the trimmed, NFC-composed text, and its construct rules — before it enters the form state, so an over-large, over-cap, or malformed file is refused under its own field and the icon the form already carries stays; the icon the form does carry is previewed through the icon leaf's own data URL, never as markup.
  */
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset } from "../assets/registry.js";
 import { MAX_JSON_BYTES, encodedJsonBytes } from "../invoice/codec.js";
@@ -14,8 +14,7 @@ import { PaymentLinkBudgetError, requireLinkBudget } from "../payment/links.js";
 import { toBaseUnits } from "../util/decimal.js";
 import { h } from "../util/dom.js";
 import { boundMessage, messageOf } from "../util/errors.js";
-import { iconByteLength } from "../util/icon-byte-length.js";
-import { MAX_ICON_DIMENSION, MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS, MAX_ICON_SVG_BYTES, iconByteCapRefusal, iconFileSizeRefusal, iconRawCodeUnitRefusal } from "../util/icon-capacity.js";
+import { MAX_ICON_DIMENSION, MAX_ICON_FILE_BYTES, MAX_ICON_SVG_BYTES, iconFileSizeRefusal } from "../util/icon-capacity.js";
 import { svgDataUrl } from "../util/svg-data-url.js";
 import { checksumStatus } from "../wallet/address.js";
 import { EVM_ADDRESS_FORMS } from "../wallet/address.js";
@@ -179,22 +178,14 @@ function iconRefusalMessage(error) {
 /**
  * Decide whether the text a chosen icon file yields is one the form may carry, as a value rather than by mutating the form, so the decision is testable without a browser.
  *
- * The bounds apply to a value only once it is known to be a string, and the gate's own raw code-unit bound is applied first, before anything measures or composes it, so a caller that reaches this helper without the form's file-size pre-check cannot make it normalize an unbounded string or slip past the gate's pre-composition guard; the refusal that bound yields is {@link iconRawCodeUnitRefusal}, the one wording of it, which the gate raises for the same value.
- * A string is then measured with {@link iconByteLength} — the same NFC-composed UTF-8 byte length the icon gate bounds — so an over-cap document is refused under the field with {@link iconByteCapRefusal}, the one wording of that refusal, which the gate raises for the same value; the form checks first, so the gate's own copy of it never reaches this field, and the gate supplies the reason for every other refusal through {@link iconRefusalMessage}.
- * The measurement is taken on the trimmed spelling, because the gate's canonical value is the trimmed text: an icon whose file carries a trailing newline at the byte cap stays inside it, so the picker refuses nothing the gate would accept.
- * A value that is not a string skips both bounds and reaches the gate, whose own `TypeError` becomes this field's refusal through that same bounded reason — so a file read that answers something other than text is refused under the field rather than escaping as an unhandled rejection from the change handler that does not await it.
- * The DOM layer keeps the file read and the form mutation around this decision.
+ * The icon gate is the one decider, so this helper keeps no bound of its own to hold in step with the gate's: `validateIcon` applies its raw code-unit bound to the text before it composes anything, canonicalizes the text that survives with `util/icon-canonical-text.ts`'s `canonicalIconText`, measures that canonical text against the byte cap with `util/icon-byte-length.ts`'s `iconByteLength`, and applies every other rule of its own, wording each refusal once.
+ * The gate applies those bounds to the text whatever path reached this helper, so a direct caller cannot make it normalize an unbounded string or slip past the raw bound, and an icon whose file carries a trailing newline at the byte cap stays inside it.
+ * The picker refuses a file the gate would accept where their two bounds disagree: the form bounds the file's bytes before decoding it while the gate bounds the decoded text's code units, so a file just past {@link MAX_ICON_FILE_BYTES} whose text decodes to at most `MAX_ICON_RAW_CODE_UNITS` code units is refused by the picker but accepted by the gate — which takes multibyte characters, since an all-ASCII file decodes to one code unit per byte — and the size check is therefore not redundant with the gate's raw bound.
+ * The refusal the gate raises becomes this field's message through {@link iconRefusalMessage}, which bounds it like every other message the form renders.
+ * A value that is not a string reaches the same call, whose own `TypeError` becomes this field's refusal through that same bounded reason — so a file read that answers something other than text is refused under the field rather than escaping as an unhandled rejection from the change handler that does not await it.
+ * The DOM layer keeps the file's own declared-size pre-check, the file read, and the form mutation around this decision.
  */
 export function checkIconText(text) {
-    if (typeof text === "string") {
-        if (text.length > MAX_ICON_RAW_CODE_UNITS) {
-            return { ok: false, message: iconRawCodeUnitRefusal(text.length) };
-        }
-        const bytes = iconByteLength(text.trim());
-        if (bytes > MAX_ICON_SVG_BYTES) {
-            return { ok: false, message: iconByteCapRefusal(bytes) };
-        }
-    }
     try {
         return { ok: true, svg: validateIcon(text) };
     }
@@ -592,7 +583,7 @@ export function renderCreateView(options) {
     /**
      * Read the payee's chosen file, check it in place, and store it.
      *
-     * The file is refused on its own declared size before it is read at all, so one far past {@link MAX_ICON_FILE_BYTES} is never decoded, and the text it yields is then decided by {@link checkIconText}, which measures the trimmed, NFC-composed value with the same byte length the icon gate bounds.
+     * The file is refused on its own declared size before it is read at all, so one far past {@link MAX_ICON_FILE_BYTES} is never decoded, and the text it yields is then decided by {@link checkIconText}, which hands the text to the icon gate: the gate's raw code-unit bound, its byte cap on the trimmed, NFC-composed value, and the reason it raises are the field's.
      * Each pick claims the form's own selection token before its read and answers only while that token is still current, so two overlapping picks resolve in pick order and the last pick wins rather than whichever read settles last; a later pick or a removal that bumps the token makes this read stale, and a stale read applies neither its failure nor its success.
      * A refusal leaves the form's icon — and so the invoice the form would build — exactly as it was, clears the input through {@link refuseIconPick} so the refused file can be chosen again, and a file that passes is stored as the gate's own canonical text.
      */

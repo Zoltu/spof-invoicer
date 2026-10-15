@@ -5,7 +5,10 @@ import { test } from "node:test";
 import { InvalidIconError, MAX_ICON_DIMENSION, MAX_ICON_PIXELS, MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { MAX_SVG_DATA_URL_PAYLOAD, isSvgDataUrl } from "../app/js/util/data-url.js";
 import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS, iconFileSizeRefusal, iconRawCodeUnitRefusal } from "../app/js/util/icon-capacity.js";
+import { iconByteLength } from "../app/js/util/icon-byte-length.js";
+import { canonicalIconText } from "../app/js/util/icon-canonical-text.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
+import { runTypeProbe } from "./helpers/type-probe.mjs";
 import { refusalError, refusalMessage } from "./helpers/refusals.mjs";
 
 const PREFIX = "data:image/svg+xml;base64,";
@@ -97,7 +100,7 @@ test("validateIcon composes its text to NFC", () => {
 	assert.equal(validateIcon(nfd), nfd.normalize("NFC"));
 });
 
-test("validateIcon measures the byte cap on the NFC form it stores, not the NFD spelling it is given", () => {
+test("validateIcon measures the byte cap on the canonical form it stores, not the NFD spelling it is given", () => {
 	const overhead = Buffer.byteLength(BYTE_CAP_HEAD + BYTE_CAP_TAIL, "utf8");
 	// Each NFD "é" (`e\u0301`) is three UTF-8 bytes and composes to the two-byte NFC "é", so this document is over the cap as typed yet inside it once composed.
 	const count = Math.floor((MAX_ICON_SVG_BYTES - overhead) / 2);
@@ -106,6 +109,38 @@ test("validateIcon measures the byte cap on the NFC form it stores, not the NFD 
 	assert.ok(Buffer.byteLength(nfd, "utf8") > MAX_ICON_SVG_BYTES, "the NFD spelling exceeds the cap");
 	assert.ok(Buffer.byteLength(nfc, "utf8") <= MAX_ICON_SVG_BYTES, "the NFC form sits within the cap");
 	assert.equal(validateIcon(nfd), nfc);
+});
+
+test("iconByteLength measures the UTF-8 bytes of the canonical text it is handed", () => {
+	// The measurement's parameter is the branded canonical text, so the typechecker refuses a raw spelling; these assertions pin what that brand protects, and that no canonicalization hides behind the call.
+	const canonical = canonicalIconText(SMALL_SVG);
+	assert.equal(iconByteLength(canonical), Buffer.byteLength(canonical, "utf8"), "the measurement is the UTF-8 length of the text it is handed");
+	assert.equal(iconByteLength(canonicalIconText(SVG_AT_BYTE_CAP)), MAX_ICON_SVG_BYTES, "canonical text at the byte cap measures exactly at it");
+	assert.ok(iconByteLength("\n" + SMALL_SVG + " ") > iconByteLength(canonical), "a padded spelling measures longer rather than being canonicalized behind the call");
+});
+
+test("the canonical-icon-text brand refuses a raw spelling to the measurement at compile time", () => {
+	// The brand's promise is a compile error, not only a comment, so the probe carries a `@ts-expect-error` on a raw string handed to `iconByteLength` beside two calls that must compile: the canonicalizer's own result, and the gate's return value.
+	// Widening the measurement's parameter back to `string` consumes that expectation and fails the compile, and so does a `validateIcon` whose declared return type drops the brand it already produced.
+	// The probe source is generated from this committed string into a throwaway directory at run time, so no untracked path is required for a clean checkout to run the suite; its own `package.json` makes it an ES module and its tsconfig extends the root one, so the probe is checked under the project's own configuration — `verbatimModuleSyntax`, `isolatedModules`, `moduleDetection`, `noImplicitOverride`, `noFallthroughCasesInSwitch` and the rest — rather than a hand-copied flag list that can drift.
+	runTypeProbe({
+		prefix: "invoice-icon-brand-probe-",
+		fileName: "icon-brand.ts",
+		failureMessage: "the type probe must compile cleanly under the project's own configuration, so a raw spelling handed to the measurement is a compile error while the canonicalizer's result and the gate's own return value measure without a cast",
+		source: (specifier) => `/** The compile-time probe for the canonical-icon-text brand, compiled by tests/icon.test.mjs under the project's own tsconfig. */
+import { validateIcon } from "${specifier("app/ts/invoice/icon.js")}";
+import { canonicalIconText } from "${specifier("app/ts/util/icon-canonical-text.js")}";
+import { iconByteLength } from "${specifier("app/ts/util/icon-byte-length.js")}";
+
+const svg = "<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"64\\" height=\\"64\\"></svg>";
+
+iconByteLength(canonicalIconText(svg));
+iconByteLength(validateIcon(svg));
+
+// @ts-expect-error a raw spelling handed to the measurement is a compile error, so a parameter widened back to string would consume this expectation and fail the compile
+iconByteLength(svg);
+`,
+	});
 });
 
 test("validateIcon accepts a document exactly at the byte cap and refuses one byte over", () => {
@@ -134,8 +169,9 @@ test("validateIcon trims surrounding whitespace, including around NFD text", () 
 	const nfc = nfd.normalize("NFC");
 	assert.equal(validateIcon(` ${nfd}`), nfc, "a leading space is trimmed and the text that remains is composed");
 	assert.equal(validateIcon(`${nfd}\n`), nfc, "a trailing newline is trimmed too");
-	assert.equal(validateIcon(`\n\t ${nfd} \r\n`), nfc, "every surrounding whitespace character is, at both ends");
-	assert.equal(validateIcon(`\uFEFF${nfd}`), nfc, "and a leading byte-order mark, which trim() drops with them");
+	assert.equal(validateIcon(`\n\t ${nfd} \r\n`), nfc, "every surrounding whitespace character is trimmed, at both ends");
+	assert.equal(validateIcon(`\uFEFF${nfd}`), nfc, "and a leading byte-order mark, which trim() drops as surrounding whitespace");
+	assert.equal(validateIcon(`${nfd}\uFEFF`), nfc, "and a trailing byte-order mark, which trim() drops the same way");
 	// Whitespace is trimmed only at the ends: the document's own interior whitespace is left exactly as it was written.
 	const spaced = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><title> two  words </title></svg>";
 	assert.equal(validateIcon(` ${spaced}\n`), spaced, "whitespace inside the document is untouched");
@@ -143,6 +179,16 @@ test("validateIcon trims surrounding whitespace, including around NFD text", () 
 	assert.equal(refusalMessage(() => validateIcon(" \n\t ")), "must not be empty", "a value that is whitespace alone trims to nothing and is refused as empty");
 	// The byte cap is measured on the trimmed text, so the newline an editor leaves at a file's end does not push a document at the cap past it.
 	assert.equal(validateIcon(`${SVG_AT_BYTE_CAP}\n`), SVG_AT_BYTE_CAP, "a document at the byte cap is accepted with a trailing newline");
+});
+
+test("validateIcon trims a CRLF-saved document's trailing newline and refuses the CR left at its interior line breaks", () => {
+	// The trim reaches the ends alone, so the composition the module doc and the README state is pinned here: a document saved with CRLF endings loses its trailing CRLF and keeps a CR at each interior line break, which the unchanged control-character rule refuses rather than the gate accepting a file whose interior endings it never repaired.
+	const crlf = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\">\r\n<rect width=\"64\" height=\"64\"/>\r\n</svg>\r\n";
+	const trimmed = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\">\r\n<rect width=\"64\" height=\"64\"/>\r\n</svg>";
+	assert.equal(canonicalIconText(crlf), trimmed, "the canonicalizer trims the trailing CRLF and leaves the interior CRs where the file wrote them");
+	const refusal = refusalError(() => validateIcon(crlf));
+	assert.ok(refusal instanceof InvalidIconError, "the CRLF-saved document is refused by the icon gate");
+	assert.equal(refusal.message, "must not contain control characters other than newlines and tabs", "the refusal is the unchanged control-character rule, not a trim that repaired the interior CRs");
 });
 
 test("validateIcon refuses a control character", () => {
@@ -499,7 +545,7 @@ test("the form's raw read ceiling and the gate's pre-composition bound are one s
 	assert.equal(
 		iconRawCodeUnitRefusal(MAX_ICON_RAW_CODE_UNITS + 1),
 		`The icon is ${MAX_ICON_RAW_CODE_UNITS + 1} characters before normalization, over the ${MAX_ICON_RAW_CODE_UNITS}-character limit.`,
-		"and the refusal both readers state for it is one wording, stated here beside the number",
+		"and the refusal the gate states for it is one wording, stated here beside the number",
 	);
 	assert.equal(
 		iconFileSizeRefusal(MAX_ICON_FILE_BYTES + 1),

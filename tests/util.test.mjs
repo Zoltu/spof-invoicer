@@ -2,30 +2,17 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import { fromBaseUnits, toBaseUnits, UINT256_MAX } from "../app/js/util/decimal.js";
 import { append, h, safeUrl } from "../app/js/util/dom.js";
 import { base58, base58check, base58xmr, bech32, bech32m, hexToBytes, sha256, toHex, utf8ToBytes } from "../app/js/util/encoding.js";
 import { describe, preview } from "../app/js/util/errors.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { boundRaw } from "../app/js/util/text.js";
-import { findTsc } from "../build.mjs";
+import { runTypeProbe } from "./helpers/type-probe.mjs";
 import { installFakeDocument } from "./helpers/dom.mjs";
 import { readEmittedModule, repoRelativeTarget, staticImportReach } from "./helpers/static-imports.mjs";
 
 const EIGHTEEN = 10n ** 18n;
-
-/** The deepest directory that contains every one of `paths`, which is the `rootDir` a probe tsconfig must set to span both the throwaway probe directory and the sources it imports. */
-function commonAncestor(...paths) {
-	const parts = paths.map((value) => resolve(value).split(sep));
-	let end = 0;
-	while (end < parts[0].length && parts.every((entry) => entry[end] === parts[0][end])) end += 1;
-	return parts[0].slice(0, end).join(sep) || sep;
-}
 
 test("toBaseUnits scales a decimal string by the asset's decimals", () => {
 	assert.equal(toBaseUnits("1.5", 6), 1500000n);
@@ -432,13 +419,11 @@ test("preview reads a value's toStringTag under a guard", () => {
 test("DomAttributes refuses an src on a widened or union-typed tag at compile time, and admits it on an img", () => {
 	// The probe carries a `@ts-expect-error` on the union-typed tag and on a spread that smuggles a plain string into `src`, so a `tsc` run exits zero only while both lines are compile errors and the `<img>` call site still compiles.
 	// The probe source is generated from this committed string into a throwaway directory at run time, so no untracked path is required for a clean checkout to run the suite; its own `package.json` makes it an ES module and its tsconfig extends the root one, so the probe is checked under the project's own configuration — `verbatimModuleSyntax`, `isolatedModules`, `moduleDetection`, `noImplicitOverride`, `noFallthroughCasesInSwitch` and the rest — rather than a hand-copied flag list that can drift.
-	const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-	const tsc = findTsc();
-	assert.notEqual(tsc, null, "typescript is installed");
-	const dir = mkdtempSync(join(tmpdir(), "invoice-type-probe-"));
-	try {
-		const specifier = (target) => relative(dir, join(root, target)).split(sep).join("/");
-		const probe = `/** The compile-time probe for the DomAttributes src sink, compiled by tests/util.test.mjs under the project's own tsconfig. */
+	runTypeProbe({
+		prefix: "invoice-type-probe-",
+		fileName: "dom-src.ts",
+		failureMessage: "the type probe must compile cleanly under the project's own configuration, so an src is a compile error on a union-typed tag and on a spread, and still admitted on an img",
+		source: (specifier) => `/** The compile-time probe for the DomAttributes src sink, compiled by tests/util.test.mjs under the project's own tsconfig. */
 import { h } from "${specifier("app/ts/util/dom.js")}";
 import { svgDataUrl } from "${specifier("app/ts/util/svg-data-url.js")}";
 
@@ -452,19 +437,8 @@ h("img", { src: url, alt: "" });
 
 // @ts-expect-error a spread that smuggles a plain string into src is a compile error, so the brand holds at the spread too
 h("img", { ...{ src: "logo.svg" } });
-`;
-		writeFileSync(join(dir, "dom-src.ts"), probe);
-		writeFileSync(join(dir, "package.json"), '{ "type": "module" }\n');
-		writeFileSync(
-			join(dir, "tsconfig.json"),
-			`${JSON.stringify({ extends: join(root, "tsconfig.json"), compilerOptions: { rootDir: commonAncestor(dir, root), noEmit: true }, include: ["dom-src.ts"] }, null, "\t")}\n`,
-		);
-		const result = spawnSync(process.execPath, [tsc, "-p", join(dir, "tsconfig.json"), "--noEmit"], { cwd: root, encoding: "utf8" });
-		assert.equal(result.error, undefined, `tsc could not run: ${result.error}`);
-		assert.equal(result.status, 0, `the type probe must compile cleanly under the project's own configuration, so an src is a compile error on a union-typed tag and on a spread, and still admitted on an img:\n${result.stdout}${result.stderr}`);
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
+`,
+	});
 });
 
 test("the emitted markup builder's static graph reaches no encoding or vendored module", () => {

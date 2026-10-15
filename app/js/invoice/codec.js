@@ -15,7 +15,7 @@
  * Base32 is the sole encoding because its encode is a linear, uncapped pass over the bytes, so it scales with the invoice size and the 64 KiB cap below stands as the format's real limit; base58 was withdrawn precisely because its big-number conversion is quadratic and does not scale.
  * A `pinv1-` (base64url) blob is recognised as a blob and refused with a clear error naming the retired encoding, never decoded.
  *
- * The JSON is canonical — {@link serializeInvoice} writes it in a fixed key order with no whitespace, no absent optional field, text already composed to NFC, and every number in its shortest exact spelling — and {@link decodeInvoice} refuses anything that is not byte-for-byte what this encoder writes, so a repeated key (the last one winning silently in `JSON.parse`) cannot hide inside a share string, and neither can an NFD spelling of the same visible text nor a longer spelling of the same number.
+ * The JSON is canonical — {@link serializeInvoice} writes it in a fixed key order with no whitespace, no absent optional field, text already composed to NFC and the optional icon's surrounding whitespace trimmed, a byte-order mark at either end with it, and every number in its shortest exact spelling — and {@link decodeInvoice} refuses anything that is not byte-for-byte what this encoder writes, so a repeated key (the last one winning silently in `JSON.parse`) cannot hide inside a share string, and neither can an NFD spelling of the same visible text, an icon padded with whitespace or a byte-order mark at either end, nor a longer spelling of the same number.
  *
  * Money is transported as a decimal string of the asset's own units — `"150.00"`, never a JSON number and never base units — so every value survives the round trip exactly and a reader can convert it with `toBaseUnits` alone.
  * {@link decodeInvoice} derives the totals; they are never transported.
@@ -84,7 +84,7 @@ function bytesToJson(bytes) {
  * The canonical JSON text of a validated invoice: fixed key order, no whitespace, absent optional fields omitted.
  * This is the wire form; changing it changes the format, so it is pinned by a test.
  * Items and the tax carry the canonical numeric spellings {@link validateInvoice} stored, so this emits exactly the one encoding the decoder accepts.
- * The optional icon is written last, after `notes`, and carries the NFC-composed text {@link validateInvoice} stored, so an icon is transported verbatim and an icon-less invoice keeps the payload it had before the field existed.
+ * The optional icon is written last, after `notes`, and carries the trimmed, NFC-composed text {@link validateInvoice} stored, so an icon is transported verbatim and an icon-less invoice keeps the payload it had before the field existed.
  */
 export function serializeInvoice(invoice) {
     return JSON.stringify({
@@ -226,12 +226,18 @@ function decodePayload(payload) {
  * Why a payload that parsed into a valid invoice is still not the text this encoder writes.
  *
  * Validation re-encodes the payee address to the one canonical spelling its family stores it in — the EIP-55 checksummed form for an EVM payee, the lower-case Bech32 spelling for a Zcash one — so a payload that names a payable address in another case that spells the same address parses into a valid invoice yet is not the canonical text — naming that divergence is the point, because the generic message would otherwise blame a key order or a number the payload spelled correctly.
+ * Validation likewise repairs the icon with `util/icon-canonical-text.ts`'s `canonicalIconText`, the one definition of canonical icon text — the icon's surrounding whitespace trimmed, a byte-order mark at either end included, and the text that remains composed to NFC — so a payload that spells the icon with any of those faults is one the model admits and this byte-for-byte comparison is what refuses.
+ * The reason below paraphrases that same rule, so a change to `canonicalIconText` has to update this reason rather than leave it naming a fault the canonicalization no longer covers; naming that divergence is the point, because the generic message lists four causes and the icon is not among them.
  * Every other divergence is the JSON spelling itself.
  */
 function nonCanonicalReason(parsed, invoice) {
     const spelled = payeeAddressOf(parsed);
     if (spelled !== undefined && spelled !== invoice.payee.address && spelled.toLowerCase() === invoice.payee.address.toLowerCase()) {
         return `the payload spells the payee address ${spelled}, but its canonical spelling is ${invoice.payee.address}, the same address in the one case its family stores it in — the payload is not in the canonical form this encoder writes`;
+    }
+    const icon = iconTextOf(parsed);
+    if (icon !== undefined && icon !== invoice.icon) {
+        return "the payload spells the icon with surrounding whitespace, a byte-order mark at either end, or an uncomposed spelling, but the icon gate stores the trimmed, NFC-composed text — the payload is not in the canonical form this encoder writes";
     }
     return "the payload is not in the canonical form this encoder writes — it repeats a key, reorders keys, adds whitespace, or spells a number non-canonically";
 }
@@ -244,5 +250,12 @@ function payeeAddressOf(parsed) {
         return undefined;
     const address = payee.address;
     return typeof address === "string" ? address : undefined;
+}
+/** The icon as the parsed JSON spells it, or `undefined` when the shape does not carry one. */
+function iconTextOf(parsed) {
+    if (typeof parsed !== "object" || parsed === null)
+        return undefined;
+    const icon = parsed.icon;
+    return typeof icon === "string" ? icon : undefined;
 }
 //# sourceMappingURL=codec.js.map

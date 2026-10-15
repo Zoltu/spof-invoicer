@@ -3,7 +3,7 @@
  *
  * Running the gate here is what makes this module a validation boundary as well as a transport one: a value the gate refuses — a non-string, an empty or over-cap document, a document whose root `<svg>` element carries no SVG namespace declaration, a document carrying a refused construct — is refused with the gate's own `TypeError` or `InvalidIconError` rather than armored into a `data:` URL, so no future sink can be handed text that was never validated.
  * The branded {@link SvgDataUrl} it returns, the prefix it composes, and the shape check that recognizes the result all live in `util/data-url.ts`, the leaf `util/dom.ts` imports; the base64 encoder this module reads stays on this module's graph alone.
- * It transports the gate's own canonical text — the NFC-composed value the gate returns rather than the raw spelling it was handed — UTF-8 encoded and base64-armored, so no character of the document needs escaping inside an attribute.
+ * It transports the gate's own canonical text — the trimmed, NFC-composed value the gate returns rather than the raw spelling it was handed — UTF-8 encoded and base64-armored, so no character of the document needs escaping inside an attribute.
  * The result is an image-sink value, meant for an `HTMLImageElement` `src` or a `<canvas>` draw and never for a navigation target, an inline markup sink, or a fetch.
  */
 import { validateIcon } from "../invoice/icon.js";

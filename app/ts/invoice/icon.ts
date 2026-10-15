@@ -21,6 +21,7 @@
  */
 
 import { preview } from "../util/errors.js";
+import { canonicalIconText, type CanonicalIconText } from "../util/icon-canonical-text.js";
 import { iconByteLength } from "../util/icon-byte-length.js";
 import { MAX_ICON_DIMENSION, MAX_ICON_RAW_CODE_UNITS, MAX_ICON_SVG_BYTES, iconByteCapRefusal, iconRawCodeUnitRefusal } from "../util/icon-capacity.js";
 import { INVISIBLE_FORMATTING, LONE_SURROGATE, MULTI_LINE_CONTROL } from "../util/text.js";
@@ -173,7 +174,7 @@ const PREDEFINED_ENTITIES: ReadonlyMap<string, string> = new Map([
 const CSS_ESCAPE = /\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|(\r\n|[\n\r\f])|([\s\S]))/g;
 
 /**
- * Raised by {@link validateIcon} for a string that fails a value check — an empty or over-long document, a non-canonical spelling, or a forbidden construct; a value of another type throws a `TypeError` instead.
+ * Raised by {@link validateIcon} for a string that fails a value check — an empty or over-long document or a forbidden construct; a value of another type throws a `TypeError` instead.
  *
  * The message is the reason alone: the `invoice:` namespace belongs to the model layer that wraps this refusal under the icon field's path, so a prefix applied here as well would reach a payer as `invoice: icon: invoice: …`.
  */
@@ -423,9 +424,11 @@ function requireUniqueReadAttributes(root: RootAttributes, elementName: string):
 /**
  * Validate an untrusted value into the canonical SVG text a caller may store.
  *
- * A string longer than {@link MAX_ICON_RAW_CODE_UNITS} is refused before it is composed, with {@link iconRawCodeUnitRefusal}, the one wording of that bound, which the create form reads under the icon field as well, so the normalization and encoding below never do work proportional to an unbounded input.
- * Its surrounding whitespace is trimmed rather than refused — `String.prototype.trim()`, which also drops a leading U+FEFF byte-order mark — so the newline an editor leaves at a file's end is not a fault, and every check below reads the trimmed text.
- * The trimmed value is composed to NFC so one visible document has a single encoded form, and it must not be empty and must be at most {@link MAX_ICON_SVG_BYTES} UTF-8 bytes, so the cap bounds the bytes of the value a caller stores rather than the bytes of whatever spelling arrived.
+ * A string longer than {@link MAX_ICON_RAW_CODE_UNITS} is refused before it is composed, with {@link iconRawCodeUnitRefusal}, the one wording of that bound, so the normalization and encoding below never do work proportional to an unbounded input; a spelling handed in through the create form's file read cannot reach that refusal, because that read bounds the file's bytes before decoding it and a UTF-8 file decodes to at most one code unit per byte.
+ * Its surrounding whitespace is trimmed rather than refused — `String.prototype.trim()`, which also drops a U+FEFF byte-order mark at either end — so the newline an editor leaves at a file's end is not a fault, and every check below reads the trimmed text.
+ * That trimmed text is composed to NFC by `util/icon-canonical-text.ts`'s `canonicalIconText`, the one definition of canonical icon text this gate and the create form share, so one visible document has a single encoded form and the create form's icon field accepts or refuses a chosen file on the text this gate stores.
+ * The byte cap is measured over that canonical text — `util/icon-byte-length.ts`'s `iconByteLength` measures the text it is handed — so the value is canonicalized once at this call site rather than a second time behind the measurement.
+ * The canonical text must not be empty and must be at most {@link MAX_ICON_SVG_BYTES} UTF-8 bytes, so the cap bounds the bytes of the value a caller stores rather than the bytes of whatever spelling arrived.
  * An over-cap value is refused with {@link iconByteCapRefusal}, the one wording of that refusal, which the create form shows under the icon field; an empty value is its own fault rather than a cap it exceeded.
  * Control characters other than newlines and tabs, invisible or direction-formatting characters, and lone surrogate code units are refused, exactly as the invoice's own text fields are.
  * The construct denylist then refuses a processing instruction, an embedded script, an inline event handler and a `style` attribute, each read where its name begins at an attribute boundary so `data-once` and `data-style` stay ordinary attribute names, or a `<style>` element, a denied element by its local name read after the element name's last colon whatever the spelling or count of its namespace prefix — including `<image>`, the other document and subresource loaders, and the reference-carrying elements, so a nested document or an external reference cannot be smuggled in behind a value this scan does not read — an entity declaration, an external doctype, a `filter` attribute for the filter chain it names, and every `href`, `xlink:href`, and non-empty `url(…)` value that does not begin with `#`, so a relative or external reference on an element the denylist does not name is refused as well.
@@ -435,14 +438,14 @@ function requireUniqueReadAttributes(root: RootAttributes, elementName: string):
  * A value that is not a string throws a `TypeError`, naming what arrived through a bounded preview; a string that fails any check below throws an {@link InvalidIconError}.
  * Returns the trimmed, NFC-composed text; a caller that stores it stores the canonical form.
  */
-export function validateIcon(value: unknown): string {
+export function validateIcon(value: unknown): CanonicalIconText {
 	if (typeof value !== "string") {
 		throw new TypeError(`expected an SVG string, got ${preview(value)}`);
 	}
 	if (value.length > MAX_ICON_RAW_CODE_UNITS) {
 		throw new InvalidIconError(iconRawCodeUnitRefusal(value.length));
 	}
-	const svg = value.trim().normalize("NFC");
+	const svg = canonicalIconText(value);
 	const bytes = iconByteLength(svg);
 	if (bytes === 0) {
 		throw new InvalidIconError("must not be empty");

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { UINT256_MAX } from "../app/js/util/decimal.js";
 import { base32nopad, utf8 } from "../app/js/util/encoding.js";
+import { canonicalIconText } from "../app/js/util/icon-canonical-text.js";
 import {
 	INVOICE_KIND,
 	INVOICE_VERSION,
@@ -30,6 +31,7 @@ import {
 } from "../app/js/invoice/codec.js";
 import { MAX_ICON_SVG_BYTES } from "../app/js/invoice/icon.js";
 import { SHARE_FRAGMENT_PREFIX, buildShareUrl, decodeShare, encodeShare } from "../app/js/invoice/share.js";
+
 import { currentRoute, parseHash } from "../app/js/app/router.js";
 
 const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
@@ -850,19 +852,22 @@ test("a payload whose icon is not the canonical text is refused", () => {
 	assert.ok(json.includes(encoded), "the fixture carries the icon as the encoder wrote it");
 	assert.equal(make({ icon: ICON_NFD }).icon, ICON_NFC, "validation composes an NFD icon to NFC");
 
-	rejects(
-		"an NFD icon",
-		() => decodeInvoice(b32(json.replace(encoded, JSON.stringify(ICON_NFD)))),
-		ShareFormatError,
-		/not in the canonical form/,
-	);
-	// The gate trims the stored text, so this payload parses into a valid invoice — and the byte-for-byte rule is what refuses it: the icon it carries is not the text this encoder writes, so the wire format stays exactly as strict as it is documented to be.
-	rejects(
-		"an icon with trailing whitespace",
-		() => decodeInvoice(b32(json.replace(encoded, JSON.stringify(`${ICON_NFC} `)))),
-		ShareFormatError,
-		/not in the canonical form/,
-	);
+	// The reason names the icon divergence rather than leaving it to the generic message, whose four listed causes do not include the icon.
+	const iconDivergence = /spells the icon with surrounding whitespace, a byte-order mark at either end, or an uncomposed spelling, but the icon gate stores the trimmed, NFC-composed text — the payload is not in the canonical form this encoder writes/;
+	// The spellings this case feeds are derived from the canonicalizer rather than assumed divergent: each is one `canonicalIconText` changes, so a canonicalization step that stops treating one of these as a fault fails the derivation below instead of leaving the reason naming a fault the code no longer has.
+	const spellings = [
+		["an NFD icon", ICON_NFD],
+		["an icon with trailing whitespace", `${ICON_NFC} `],
+		["an icon with a leading byte-order mark", `\uFEFF${ICON_NFC}`],
+		["an icon with a trailing byte-order mark", `${ICON_NFC}\uFEFF`],
+	];
+	const divergent = spellings.filter(([, spelled]) => canonicalIconText(spelled) !== spelled);
+	assert.equal(divergent.length, spellings.length, "the canonicalizer changes every spelling this case feeds, rather than the case assuming which spellings diverge");
+	for (const [label, spelled] of divergent) {
+		// The gate trims and composes the stored text, so this payload parses into a valid invoice — and the byte-for-byte rule is what refuses it: the icon it carries is not the text this encoder writes, so the wire format stays exactly as strict as it is documented to be.
+		assert.equal(canonicalIconText(spelled), ICON_NFC, `${label}: the divergent spelling canonicalizes back to the icon the encoder wrote`);
+		rejects(label, () => decodeInvoice(b32(json.replace(encoded, JSON.stringify(spelled)))), ShareFormatError, iconDivergence);
+	}
 
 	const withNotes = serializeInvoice(make({ icon: ICON_NFC, notes: "note" }));
 	const reordered = withNotes.replace(`"notes":"note","icon":${encoded}`, `"icon":${encoded},"notes":"note"`);
