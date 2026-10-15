@@ -5,8 +5,8 @@
  * Totals are never transported — {@link computeTotals} derives them from the invoice's own inputs, so a share string cannot smuggle in a total that disagrees with its own lines.
  * {@link validateInvoice} checks every field of an untrusted parsed object and fails closed with a field path; {@link createInvoice} is the same validation for an object built in memory.
  * The optional icon is the one field whose rules live outside this module: `invoice/icon.ts` bounds and canonicalizes it, and {@link validateInvoice} reads that gate's refusal under the `icon` path.
- * The icon is also the one text field whose surrounding whitespace is repaired rather than refused: that gate canonicalizes it, where {@link text} refuses any other field that starts or ends with whitespace.
- * That repair is what lets a payload carrying such an icon parse into a valid invoice here, so a shared payload whose icon is not the text this build writes is refused one layer up, by `invoice/codec.ts`'s byte-for-byte comparison rather than by this validator.
+ * The icon is also the one field whose surrounding whitespace this validator repairs rather than refuses: the gate trims it, where {@link text} refuses any other field that starts or ends with whitespace.
+ * That repair admits an icon whose stored text can differ from the spelling a payload carried, so this validator alone cannot hold the field to one wire spelling: the wire format's single-spelling guarantee for the icon rests one layer up, on `invoice/codec.ts`'s byte-for-byte comparison of the decoded JSON against the canonical text `serializeInvoice` writes — the boundary every decode path passes through.
  *
  * Text is normalized to Unicode NFC as it is validated, so one visible string has a single encoded form and an NFD spelling of a name is not a second, equally valid spelling of the same invoice.
  * Invisible and direction-formatting characters (zero-width spaces, bidi marks and overrides, the soft hyphen, the byte-order mark, and other default-ignorable formatting) are refused, a single-line field also refuses the Unicode line and paragraph separators, and the C1 control block is refused alongside the C0 controls, so a stored name or id cannot be made to render differently from how it reads.
@@ -212,6 +212,7 @@ function payoutAddress(value, path, asset) {
  *
  * The gate owns the rules — the byte cap, the canonicalization, the root `<svg>` dimension bound, and the construct denylist — and its refusal reaches the field this module read the value from, bounded with the same cap the other wrapped messages use, because the message names the rejected value.
  * The icon is the one text field the gate repairs rather than refuses, a repair the module block above states the reason for.
+ * Because that repair admits a spelling this build would not write, the field's single wire spelling does not rest on this validator: it rests on `invoice/codec.ts`'s byte-for-byte comparison of the decoded JSON against the canonical text, which every decode path passes through.
  * The gate's own error travels with it as the `cause`, so a surface that acts on the refusal reads the class the validator raised — an `InvalidIconError` for a malformed document, a `TypeError` for a value that is not text — rather than a wording to match.
  */
 function iconField(value, path) {

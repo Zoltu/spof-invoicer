@@ -325,6 +325,12 @@ test("validateIcon requires a single root element and admits a nested <svg> and 
 	// A second element at the document level leaves the value with more than one root, which a browser refuses to decode as an image.
 	assert.throws(() => validateIcon(`${root}${root}`), InvalidIconError, "a second root element is refused");
 	assert.match(refusalMessage(() => validateIcon(`${root}${root}`)), /single <svg> root element/, "the refusal names the single-root requirement");
+	// The walk requires the root it reads to be closed and to follow nothing but whitespace, so a root the document never closes and a root that non-whitespace text precedes — each one a document a browser refuses to decode — are refused here rather than admitted.
+	const unclosed = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\">";
+	assert.throws(() => validateIcon(unclosed), InvalidIconError, "a root the document never closes is refused");
+	assert.match(refusalMessage(() => validateIcon(unclosed)), /single <svg> root element/, "and the refusal names the single-root requirement");
+	assert.throws(() => validateIcon(`garbage${root}`), InvalidIconError, "non-whitespace text before the root is refused");
+	assert.equal(validateIcon(` \n${root}`), root, "whitespace before the root is trimmed, not read as text that closes the gate");
 	// The walk tracks nesting: the inner `<svg>` here is an ordinary element inside the root, and the element after the closed root is a second one.
 	const nestedThenSecond = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><svg width=\"32\" height=\"32\"/></svg><svg width=\"1\" height=\"1\"/>";
 	assert.throws(() => validateIcon(nestedThenSecond), InvalidIconError, "an element after a closed root is a second root");

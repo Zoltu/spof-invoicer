@@ -9,7 +9,10 @@
  */
 /** All C0 and C1 controls, DEL, and the Unicode line and paragraph separators, for a single-line field. */
 export const SINGLE_LINE_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
-/** The same minus tab and newline, for a field whose value may hold lines. */
+/**
+ * The same minus tab and newline, for a field whose value may hold lines.
+ * The rule reads text whose ends a caller has already dealt with: the invoice's own text fields refuse a leading or trailing whitespace, and the icon gate reads this rule over the canonical text `util/icon-canonical-text.ts` returns, whose trim has already removed a boundary VT (U+000B), FF (U+000C), CR (U+000D), U+2028, or U+2029 — so an occurrence this rule refuses is one that survives inside the text rather than at its end.
+ */
 export const MULTI_LINE_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/;
 /**
  * Invisible and direction-formatting characters, keyed on Unicode's `Default_Ignorable_Code_Point` property rather than a hand-written list.

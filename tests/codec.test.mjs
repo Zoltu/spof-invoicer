@@ -883,6 +883,55 @@ test("a payload whose icon is not the canonical text is refused", () => {
 	assert.match(refusal.message, /expected an SVG string/);
 });
 
+test("a transported icon that is a second encoding of the same icon is still refused", () => {
+	// The icon is the one field validation repairs, so `validateInvoice` admits every spelling below and stores the canonical text; the wire format's single-spelling guarantee for it therefore rests on the codec's byte-for-byte comparison against that canonical text, not on the validator, and this case locks that comparison as the guard.
+	const canonical = make({ icon: ICON_NFC });
+	const json = serializeInvoice(canonical);
+	const encoded = JSON.stringify(ICON_NFC);
+	assert.ok(json.includes(encoded), "the fixture carries the icon as the encoder wrote it");
+	// Each replacement embeds a second encoding of the same icon in place of the value the encoder wrote, and the repeated-key case repeats the key rather than the value.
+	const cases = [
+		["a padded icon", JSON.stringify(`${ICON_NFC} `), /spells the icon with surrounding whitespace/],
+		["a leading byte-order mark", JSON.stringify(`\uFEFF${ICON_NFC}`), /spells the icon with surrounding whitespace/],
+		["an NFD icon", JSON.stringify(ICON_NFD), /spells the icon with surrounding whitespace/],
+		["an escaped icon", encoded.replace("svg", "\\u0073vg"), /not in the canonical form/],
+		["a repeated icon key", `${encoded},${JSON.stringify("icon")}:${encoded}`, /not in the canonical form/],
+	];
+	for (const [label, replacement, pattern] of cases) {
+		const payload = json.replace(encoded, replacement);
+		assert.notEqual(payload, json, `${label}: the fixture really respells the icon`);
+		assert.equal(validateInvoice(JSON.parse(payload)).icon, ICON_NFC, `${label}: validation admits the second encoding and stores the canonical text`);
+		rejects(label, () => decodeInvoice(b32(payload)), ShareFormatError, pattern);
+	}
+	assert.equal(decodeInvoice(encodeInvoice(canonical)).icon, ICON_NFC, "the canonical icon still decodes");
+});
+
+test("a boundary-controlled or BOM-prefixed icon is stored and transported as the canonical text with the stripped characters absent", () => {
+	// The gate's trim repairs a boundary control or a byte-order mark that the control and invisible-formatting rules would otherwise refuse, so the stripped character must reach neither the stored invoice nor the JSON a share link carries; comparing against the canonical invoice's own bytes locks that no sink retains it, which the prose invariant in `util/icon-canonical-text.ts` states but cannot enforce.
+	const canonical = make({ icon: ICON_NFC });
+	const canonicalJson = serializeInvoice(canonical);
+	const repaired = [
+		["a vertical tab", "\u000B"],
+		["a form feed", "\u000C"],
+		["a carriage return", "\r"],
+		["a line separator", "\u2028"],
+		["a paragraph separator", "\u2029"],
+		["a byte-order mark", "\uFEFF"],
+	];
+	for (const [label, character] of repaired) {
+		for (const [where, spelled] of [["leading", `${character}${ICON_NFC}`], ["trailing", `${ICON_NFC}${character}`], ["both ends", `${character}${ICON_NFC}${character}`]]) {
+			assert.notEqual(spelled, ICON_NFC, `${label} at the ${where}: the fixture is a divergent spelling`);
+			assert.equal(canonicalIconText(spelled), ICON_NFC, `${label} at the ${where}: the canonicalizer strips the character`);
+			const invoice = make({ icon: spelled });
+			assert.equal(invoice.icon, ICON_NFC, `${label} at the ${where}: the stored icon is the canonical text with the character gone`);
+			assert.equal(serializeInvoice(invoice), canonicalJson, `${label} at the ${where}: the transported JSON carries none of the stripped character`);
+			for (const [container, transport] of [["the fragment payload", encodeInvoice(invoice)], ["the base32 blob", encodeInvoiceBlob(invoice)]]) {
+				assert.deepEqual(decodeShare(transport), canonical, `${label} at the ${where} through ${container}`);
+			}
+		}
+	}
+});
+
 test("compact invoices fit the share string and oversized ones are refused", () => {
 	const many = (count, descriptionLength) => ({
 		items: Array.from({ length: count }, (_, index) => ({

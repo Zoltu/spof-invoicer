@@ -234,6 +234,7 @@ function decodePayload(payload: string): Invoice {
 	} catch (error) {
 		throw new ShareFormatError(`the payload is not JSON: ${boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX)}`);
 	}
+	// This byte-for-byte comparison, not `validateInvoice`, is what holds the wire format to one spelling per value: validation repairs the icon through the same canonicalization the encoder applies, so a payload whose icon is a second encoding of the same icon parses into a valid invoice and the comparison is what refuses it.
 	const invoice = validateInvoice(parsed);
 	if (serializeInvoice(invoice) !== json) {
 		throw new ShareFormatError(nonCanonicalReason(parsed, invoice));
@@ -246,6 +247,7 @@ function decodePayload(payload: string): Invoice {
  *
  * Validation re-encodes the payee address to the one canonical spelling its family stores it in — the EIP-55 checksummed form for an EVM payee, the lower-case Bech32 spelling for a Zcash one — so a payload that names a payable address in another case that spells the same address parses into a valid invoice yet is not the canonical text — naming that divergence is the point, because the generic message would otherwise blame a key order or a number the payload spelled correctly.
  * Validation likewise repairs the icon with `util/icon-canonical-text.ts`'s `canonicalIconText`, the one definition of canonical icon text, so a payload that spells the icon with any fault that canonicalization repairs is one the model admits and this byte-for-byte comparison is what refuses.
+ * That makes this comparison, not {@link validateInvoice}, the guard on the icon's single wire spelling: a decode path that validated a transported icon without it would admit a second encoding of one icon.
  * The reason below paraphrases that same rule, so a change to `canonicalIconText` has to update this reason rather than leave it naming a fault the canonicalization no longer covers.
  * Every other divergence is the JSON spelling itself.
  */

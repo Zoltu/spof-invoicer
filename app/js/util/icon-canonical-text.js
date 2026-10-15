@@ -11,9 +11,11 @@
  * The empty string the form's state uses for "no icon" is what keeps those boundaries a plain `string`: the brand has no way to say a value holds no icon.
  */
 /**
- * The canonical text of an icon value: its surrounding whitespace trimmed and the text that remains composed to NFC, the one spelling the invoice's icon field stores and the text the byte cap bounds.
- * The trim is `String.prototype.trim()`, which also drops a U+FEFF byte-order mark at either end, so a file's own byte-order mark is not a fault.
- * The trim reaches the ends alone and repairs only the surrounding whitespace: a multi-line SVG saved with CRLF endings has its trailing CRLF trimmed here and keeps a CR at each of its interior line breaks, which the icon gate then refuses through `util/text.ts`'s `MULTI_LINE_CONTROL` — the rule that admits LF and tab alone, so CR, U+2028, and U+2029 are refused wherever they sit inside the text.
+ * The canonical text of an icon value: the ends of the text trimmed by `String.prototype.trim()` and the text that remains composed to NFC, the one spelling the invoice's icon field stores and the text the byte cap bounds.
+ * The trim's removal set is wider than the word whitespace suggests: `String.prototype.trim()` strips, at either end alone, every character of the spec's `WhiteSpace` and `LineTerminator` productions — tab (U+0009), LF (U+000A), VT (U+000B), FF (U+000C), CR (U+000D), space (U+0020), no-break space (U+00A0), ogham space mark (U+1680), U+2000–U+200A, line separator (U+2028), paragraph separator (U+2029), narrow no-break space (U+202F), medium mathematical space (U+205F), ideographic space (U+3000), and the byte-order mark U+FEFF.
+ * Several of those are characters the icon gate otherwise refuses: VT (U+000B), FF (U+000C), CR (U+000D), U+2028, and U+2029 are the boundary faults `util/text.ts`'s `MULTI_LINE_CONTROL` refuses inside the text, and the byte-order mark is one `INVISIBLE_FORMATTING` refuses, so a document whose only fault was such a character at a boundary is repaired here rather than refused.
+ * That repair is not an evasion, because of where its result flows: the trimmed, NFC-composed text this function returns is the string the icon gate scans, the value the model stores, the text the codec serializes, and the text a renderer is handed — so a character stripped from a boundary reaches none of those, gone before any check or sink reads the value.
+ * The trim reaches the ends alone: a multi-line SVG saved with CRLF endings has its trailing CRLF trimmed here and keeps a CR at each interior line break, which the icon gate then refuses through `util/text.ts`'s `MULTI_LINE_CONTROL`.
  * It returns the branded {@link CanonicalIconText}, the type a reader that requires canonical text accepts.
  */
 export function canonicalIconText(value) {
