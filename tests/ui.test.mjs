@@ -13,7 +13,7 @@ import { refusalMessage } from "./helpers/refusals.mjs";
 import { findAll, findButton, hasClass, inputValues, textOf } from "./helpers/tree.mjs";
 import { nextTask } from "./helpers/wait.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
-import { MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
+import { MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
 import { MAX_JSON_BYTES, encodeInvoice } from "../app/js/invoice/codec.js";
 import { MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { decodeShare } from "../app/js/invoice/share.js";
@@ -171,6 +171,110 @@ test("invoiceInputFromState trims text and omits empty optional fields", () => {
 	assert.equal(input.chainId, "0x1", "the chain comes from the selected asset");
 	assert.equal("icon" in input, false, "an empty icon field is omitted like the other optional fields");
 	assert.equal(invoiceInputFromState({ ...formState(), iconSvg: ICON_SVG }).icon, ICON_SVG, "a chosen icon rides in the input the model validates");
+});
+
+test("invoiceInputFromState carries each party's contact info and omits both when empty", () => {
+	const payeeContact = "Studio Example\nbilling@example.com\n+1 555 0100";
+	const payerContact = "Accounts payable\nap@acme.example";
+	const input = invoiceInputFromState({
+		...emptyFormState("2026-10-03"),
+		payeeName: "Studio Example",
+		payeeAddress: PAYEE,
+		payeeContact,
+		payerName: "Acme GmbH",
+		payerContact,
+		items: [line()],
+	});
+	assert.equal(input.payee.email, payeeContact, "the payee's contact lines reach the model as written");
+	assert.deepEqual(input.payer, { name: "Acme GmbH", email: payerContact }, "and the bill-to block carries its own contact beside the name");
+
+	const without = invoiceInputFromState({
+		...emptyFormState("2026-10-03"),
+		payeeName: "Studio Example",
+		payeeAddress: PAYEE,
+		items: [line()],
+	});
+	assert.equal("email" in without.payee, false, "two empty contact fields leave the payee with no contact key");
+	assert.equal("payer" in without, false, "and no bill-to block at all");
+});
+
+test("a contact the model refuses is reported under the party's own contact field", () => {
+	const tooMany = ["one", "two", "three", "four", "five"].join("\n");
+	const payee = parseFormState(formState({ payeeContact: tooMany }));
+	assert.equal(payee.ok, false);
+	assert.equal(payee.errors[0].field, "payeeContact", "the payee's refusal lands in the payee's contact field");
+	const payer = parseFormState(formState({ payerName: "Acme GmbH", payerContact: tooMany }));
+	assert.equal(payer.ok, false);
+	assert.equal(payer.errors[0].field, "payerContact", "and the payer's refusal in the payer's");
+	assert.match(payer.errors[0].message, new RegExp(`at most ${MAX_CONTACT_LINES} lines`));
+});
+
+test("the create form carries a contact info field for each party", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const limits = new RegExp(`Up to ${MAX_CONTACT_LINES} lines of ${MAX_CONTACT_LINE_CHARS} characters each`);
+		for (const [name, id] of [["payeeContact", "payee-contact"], ["payerContact", "payer-contact"]]) {
+			const control = controlNamed(view, name);
+			assert.equal(control.tagName, "textarea", `${name} takes more than one line`);
+			const label = findAll(view, (node) => node.tagName === "label" && node.attributes?.for === id)[0];
+			assert.ok(label, `the form carries a label for ${id}`);
+			assert.equal(textOf(label), "Contact info (optional)", `${name} is labelled as contact info`);
+			assert.match(textOf(label.parentNode), limits, `${name} names the limits it is held to`);
+			assert.equal(findAll(view, (node) => node.attributes?.id === `${id}-error`).length, 1, `${name} carries the error slot its refusals land in`);
+		}
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the form shares an invoice carrying a multiline payee contact and a bill-to name and contact", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		setControl(view, "payeeName", "Studio Example");
+		setControl(view, "payeeAddress", PAYEE);
+		setControl(view, "payeeContact", "Studio Example\nbilling@example.com");
+		setControl(view, "payerName", "Acme GmbH");
+		setControl(view, "payerContact", "Accounts payable\nap@acme.example");
+		setControl(view, "item-0-description", "Design work");
+		setControl(view, "item-0-quantity", "2");
+		setControl(view, "item-0-unitPrice", "150");
+		view.children[2].dispatch("submit");
+		const backdrop = document.body.children.find((child) => child.attributes?.class?.includes("dialog-backdrop"));
+		assert.ok(backdrop, "the share dialog opens for the valid form");
+		const url = findAll(backdrop, (node) => node.attributes?.class === "share-value")[0].attributes.value;
+		const shared = decodeShare(url.slice(url.indexOf("#")));
+		assert.equal(shared.payee.email, "Studio Example\nbilling@example.com", "the payee's contact lines reach the shared invoice");
+		assert.deepEqual(shared.payer, { name: "Acme GmbH", email: "Accounts payable\nap@acme.example" }, "and the bill-to block its name and contact");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a bill-to contact without a client name is refused under the client-name field", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		setControl(view, "payeeName", "Studio Example");
+		setControl(view, "payeeAddress", PAYEE);
+		setControl(view, "payerContact", "ap@acme.example");
+		setControl(view, "item-0-description", "Design work");
+		setControl(view, "item-0-quantity", "2");
+		setControl(view, "item-0-unitPrice", "150");
+		view.children[2].dispatch("submit");
+		assert.equal(
+			document.body.children.some((child) => child.attributes?.class?.includes("dialog-backdrop")),
+			false,
+			"no share dialog opens while the bill-to block has no name",
+		);
+		const error = findAll(view, (node) => node.attributes?.id === "payer-name-error")[0];
+		assert.ok(error, "the client-name field carries an error slot");
+		assert.match(textOf(error), /Client name is required when contact info is given/);
+		assert.equal(error.attributes.hidden, undefined, "and the message is shown under that field");
+	} finally {
+		fake.restore();
+	}
 });
 
 test("parseFormState builds a validated invoice", () => {

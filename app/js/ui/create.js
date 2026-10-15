@@ -9,7 +9,7 @@
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset } from "../assets/registry.js";
 import { MAX_JSON_BYTES, encodedJsonBytes } from "../invoice/codec.js";
 import { validateIcon } from "../invoice/icon.js";
-import { InvalidInvoiceError, MAX_ITEMS, computeTotalsFor, createInvoice, } from "../invoice/model.js";
+import { InvalidInvoiceError, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_ITEMS, computeTotalsFor, createInvoice, } from "../invoice/model.js";
 import { PaymentLinkBudgetError, requireLinkBudget } from "../payment/links.js";
 import { toBaseUnits } from "../util/decimal.js";
 import { h } from "../util/dom.js";
@@ -28,6 +28,12 @@ import { buildShareBundle, openShareDialog } from "./share.js";
  * A model message can embed the rejected value, so the same defensive clip the notice applies is applied here before any error reaches the DOM.
  */
 const FIELD_MESSAGE_MAX = 300;
+/**
+ * The hint both contact fields carry.
+ *
+ * It is composed from the model's own limit constants, so the hint cannot name a bound the validator does not hold, and it names the legacy email spelling because a party with one line to give is not asked for several.
+ */
+const CONTACT_HINT = `Up to ${MAX_CONTACT_LINES} lines of ${MAX_CONTACT_LINE_CHARS} characters each; a single-line email address is accepted as it is.`;
 /** A fresh, empty line with a sensible starting quantity. */
 export function emptyItem() {
     return { description: "", quantity: "1", unitPrice: "" };
@@ -37,11 +43,12 @@ export function emptyFormState(today) {
     return {
         payeeName: "",
         payeeAddress: "",
-        payeeEmail: "",
+        payeeContact: "",
         invoiceId: `INV-${today.replace(/-/g, "")}`,
         issued: today,
         due: "",
         payerName: "",
+        payerContact: "",
         assetId: ASSETS[0].id,
         items: [emptyItem()],
         taxEnabled: false,
@@ -87,8 +94,9 @@ export function moveItem(state, index, delta) {
 export function invoiceInputFromState(state) {
     const asset = requireAsset(state.assetId);
     const payerName = state.payerName.trim();
+    const payerContact = state.payerContact.trim();
     const notes = state.notes.trim();
-    const payeeEmail = state.payeeEmail.trim();
+    const payeeContact = state.payeeContact.trim();
     const due = state.due.trim();
     const taxLabel = state.taxLabel.trim();
     return {
@@ -99,9 +107,10 @@ export function invoiceInputFromState(state) {
             name: state.payeeName.trim(),
             // The address is untrusted form text, kept as the string it is; createInvoice re-dispatches it through `wallet/payout-address.ts`'s requirePayoutAddress, which validates it against the selected asset's family — an EIP-55 checked `0x` address for an EVM asset, the chain's own grammar for Zcash or Monero — rather than asserting a family here.
             address: state.payeeAddress.trim(),
-            ...(payeeEmail === "" ? {} : { email: payeeEmail }),
+            ...(payeeContact === "" ? {} : { email: payeeContact }),
         },
-        ...(payerName === "" ? {} : { payer: { name: payerName } }),
+        // The bill-to block is emitted once either of its two fields is filled, so a contact without a name reaches the model as a payer whose name is missing; `requiredFieldErrors` reports that as the client-name error before the model is asked.
+        ...(payerName === "" && payerContact === "" ? {} : { payer: { name: payerName, ...(payerContact === "" ? {} : { email: payerContact }) } }),
         chainId: asset.chainId,
         asset: state.assetId,
         items: state.items.map((item) => ({
@@ -137,6 +146,9 @@ function requiredFieldErrors(state) {
         errors.push({ field: "payeeName", message: "Payee name is required" });
     if (state.payeeAddress.trim() === "")
         errors.push({ field: "payeeAddress", message: "Payout address is required" });
+    if (state.payerContact.trim() !== "" && state.payerName.trim() === "") {
+        errors.push({ field: "payerName", message: "Client name is required when contact info is given" });
+    }
     if (state.invoiceId.trim() === "")
         errors.push({ field: "invoiceId", message: "Invoice number is required" });
     if (state.issued.trim() === "")
@@ -223,8 +235,9 @@ function fieldKeyForPath(path) {
         due: "due",
         "payee.name": "payeeName",
         "payee.address": "payeeAddress",
-        "payee.email": "payeeEmail",
+        "payee.email": "payeeContact",
         "payer.name": "payerName",
+        "payer.email": "payerContact",
         asset: "asset",
         "tax.label": "taxLabel",
         "tax.rate": "taxRate",
@@ -471,11 +484,12 @@ export function renderCreateView(options) {
     const payeeAddress = h("input", { type: "text", name: "payeeAddress", value: state.payeeAddress, placeholder: payoutAddressPlaceholder(requireAsset(state.assetId)) });
     // Its single child changes in place, so the node stays mounted: an empty caution is hidden rather than removed.
     const payoutWarning = h("p", { class: "field-warning", role: "status", hidden: true }, "");
-    const payeeEmail = h("input", { type: "text", name: "payeeEmail", value: state.payeeEmail, placeholder: "billing@example.com" });
+    const payeeContact = h("textarea", { name: "payeeContact", placeholder: "Email, phone, or address" }, state.payeeContact);
     const invoiceId = h("input", { type: "text", name: "invoiceId", value: state.invoiceId, placeholder: "INV-0001" });
     const issued = h("input", { type: "text", name: "issued", value: state.issued, placeholder: "YYYY-MM-DD" });
     const due = h("input", { type: "text", name: "due", value: state.due, placeholder: "YYYY-MM-DD (optional)" });
     const payerName = h("input", { type: "text", name: "payerName", value: state.payerName, placeholder: "Client name (optional)" });
+    const payerContact = h("textarea", { name: "payerContact", placeholder: "Email, phone, or address" }, state.payerContact);
     const assetSelect = h("select", { name: "asset" }, ...ASSETS.map((asset) => h("option", { value: asset.id, selected: asset.id === state.assetId }, `${asset.symbol} — ${asset.name}`)));
     const notes = h("textarea", { name: "notes", placeholder: "Payment terms, thank you note…" }, state.notes);
     const iconInput = h("input", { type: "file", name: "icon", accept: "image/svg+xml,.svg" });
@@ -705,8 +719,8 @@ export function renderCreateView(options) {
         state.payeeAddress = payeeAddress.value;
         syncPayoutWarning();
     });
-    bind(payeeEmail, () => {
-        state.payeeEmail = payeeEmail.value;
+    bind(payeeContact, () => {
+        state.payeeContact = payeeContact.value;
     });
     bind(invoiceId, () => {
         state.invoiceId = invoiceId.value;
@@ -719,6 +733,9 @@ export function renderCreateView(options) {
     });
     bind(payerName, () => {
         state.payerName = payerName.value;
+    });
+    bind(payerContact, () => {
+        state.payerContact = payerContact.value;
     });
     bind(notes, () => {
         state.notes = notes.value;
@@ -768,7 +785,7 @@ export function renderCreateView(options) {
     addButton.addEventListener("click", () => {
         replaceItems(addItem(state));
     });
-    const form = h("form", { class: "create-form" }, h("fieldset", { class: "form-section" }, h("legend", {}, "Your details and asset"), fieldGroup("payee-name", "Payee name", payeeName, errorsByKey, "payeeName"), fieldGroup("asset", "Asset", assetSelect, errorsByKey, "asset"), fieldGroup("payee-address", "Payout address", payeeAddress, errorsByKey, "payeeAddress", "The address this invoice pays to."), payoutWarning, fieldGroup("payee-email", "Contact email (optional)", payeeEmail, errorsByKey, "payeeEmail")), h("fieldset", { class: "form-section" }, h("legend", {}, "Brand icon (optional)"), fieldGroup("icon", "Icon", iconInput, errorsByKey, "icon", `An SVG up to ${MAX_ICON_SVG_BYTES} bytes and ${MAX_ICON_DIMENSION}×${MAX_ICON_DIMENSION} pixels. It is carried in the share link and never fetched.`), iconPreview, iconRemove), h("fieldset", { class: "form-section" }, h("legend", {}, "Invoice details"), fieldGroup("invoice-id", "Invoice number", invoiceId, errorsByKey, "invoiceId"), fieldGroup("issued", "Issue date", issued, errorsByKey, "issued", "YYYY-MM-DD"), fieldGroup("due", "Due date (optional)", due, errorsByKey, "due", "YYYY-MM-DD")), h("fieldset", { class: "form-section" }, h("legend", {}, "Bill to (optional)"), fieldGroup("payer-name", "Client name", payerName, errorsByKey, "payerName")), h("fieldset", { class: "form-section" }, h("legend", {}, "Line items"), h("table", { class: "items-table" }, h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Description"), h("th", { scope: "col" }, "Qty"), h("th", { scope: "col" }, "Unit price"), h("th", { scope: "col" }, "Amount"), h("th", { scope: "col" }, ""))), tbody), addButton, h("p", { class: "field-hint" }, `Up to ${MAX_ITEMS} lines; the encoded invoice must fit the ${MAX_JSON_BYTES / 1024} KiB share limit.`)), h("fieldset", { class: "form-section" }, h("legend", {}, "Tax and notes"), h("div", { class: "field field-inline" }, taxToggle, h("label", { for: "tax-enabled" }, "Add tax")), taxFields, fieldGroup("notes", "Notes and terms (optional)", notes, errorsByKey, "notes")), errorSummary, h("div", { class: "totals" }, h("table", { class: "totals-table" }, h("tbody", {}, h("tr", { class: "totals-row" }, h("th", { scope: "row" }, "Subtotal"), h("td", {}, subtotalText)), taxRow, h("tr", { class: "totals-row totals-total" }, h("th", { scope: "row" }, "Total"), h("td", {}, totalText))))), shareSizeNote, h("div", { class: "form-actions" }, h("button", { type: "submit", class: "btn btn-primary" }, "Create share link")));
+    const form = h("form", { class: "create-form" }, h("fieldset", { class: "form-section" }, h("legend", {}, "Your details and asset"), fieldGroup("payee-name", "Payee name", payeeName, errorsByKey, "payeeName"), fieldGroup("asset", "Asset", assetSelect, errorsByKey, "asset"), fieldGroup("payee-address", "Payout address", payeeAddress, errorsByKey, "payeeAddress", "The address this invoice pays to."), payoutWarning, fieldGroup("payee-contact", "Contact info (optional)", payeeContact, errorsByKey, "payeeContact", CONTACT_HINT)), h("fieldset", { class: "form-section" }, h("legend", {}, "Brand icon (optional)"), fieldGroup("icon", "Icon", iconInput, errorsByKey, "icon", `An SVG up to ${MAX_ICON_SVG_BYTES} bytes and ${MAX_ICON_DIMENSION}×${MAX_ICON_DIMENSION} pixels. It is carried in the share link and never fetched.`), iconPreview, iconRemove), h("fieldset", { class: "form-section" }, h("legend", {}, "Invoice details"), fieldGroup("invoice-id", "Invoice number", invoiceId, errorsByKey, "invoiceId"), fieldGroup("issued", "Issue date", issued, errorsByKey, "issued", "YYYY-MM-DD"), fieldGroup("due", "Due date (optional)", due, errorsByKey, "due", "YYYY-MM-DD")), h("fieldset", { class: "form-section" }, h("legend", {}, "Bill to (optional)"), fieldGroup("payer-name", "Client name", payerName, errorsByKey, "payerName"), fieldGroup("payer-contact", "Contact info (optional)", payerContact, errorsByKey, "payerContact", CONTACT_HINT)), h("fieldset", { class: "form-section" }, h("legend", {}, "Line items"), h("table", { class: "items-table" }, h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Description"), h("th", { scope: "col" }, "Qty"), h("th", { scope: "col" }, "Unit price"), h("th", { scope: "col" }, "Amount"), h("th", { scope: "col" }, ""))), tbody), addButton, h("p", { class: "field-hint" }, `Up to ${MAX_ITEMS} lines; the encoded invoice must fit the ${MAX_JSON_BYTES / 1024} KiB share limit.`)), h("fieldset", { class: "form-section" }, h("legend", {}, "Tax and notes"), h("div", { class: "field field-inline" }, taxToggle, h("label", { for: "tax-enabled" }, "Add tax")), taxFields, fieldGroup("notes", "Notes and terms (optional)", notes, errorsByKey, "notes")), errorSummary, h("div", { class: "totals" }, h("table", { class: "totals-table" }, h("tbody", {}, h("tr", { class: "totals-row" }, h("th", { scope: "row" }, "Subtotal"), h("td", {}, subtotalText)), taxRow, h("tr", { class: "totals-row totals-total" }, h("th", { scope: "row" }, "Total"), h("td", {}, totalText))))), shareSizeNote, h("div", { class: "form-actions" }, h("button", { type: "submit", class: "btn btn-primary" }, "Create share link")));
     form.addEventListener("submit", (event) => {
         event.preventDefault();
         const plan = planShare(state, options.baseUrl);

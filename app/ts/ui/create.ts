@@ -12,6 +12,8 @@ import { MAX_JSON_BYTES, encodedJsonBytes } from "../invoice/codec.js";
 import { validateIcon } from "../invoice/icon.js";
 import {
 	InvalidInvoiceError,
+	MAX_CONTACT_LINE_CHARS,
+	MAX_CONTACT_LINES,
 	MAX_ITEMS,
 	computeTotalsFor,
 	createInvoice,
@@ -43,6 +45,13 @@ import { buildShareBundle, openShareDialog, type ClipboardLike, type ShareBundle
 const FIELD_MESSAGE_MAX = 300;
 
 /**
+ * The hint both contact fields carry.
+ *
+ * It is composed from the model's own limit constants, so the hint cannot name a bound the validator does not hold, and it names the legacy email spelling because a party with one line to give is not asked for several.
+ */
+const CONTACT_HINT = `Up to ${MAX_CONTACT_LINES} lines of ${MAX_CONTACT_LINE_CHARS} characters each; a single-line email address is accepted as it is.`;
+
+/**
  * One editable line, as typed.
  * Values are the raw strings in the inputs, canonicalized on submit.
  *
@@ -62,11 +71,12 @@ export interface ItemDraft {
 export interface CreateFormState {
 	payeeName: string;
 	payeeAddress: string;
-	payeeEmail: string;
+	payeeContact: string;
 	invoiceId: string;
 	issued: string;
 	due: string;
 	payerName: string;
+	payerContact: string;
 	assetId: AssetId;
 	items: ItemDraft[];
 	taxEnabled: boolean;
@@ -113,11 +123,12 @@ export function emptyFormState(today: string): CreateFormState {
 	return {
 		payeeName: "",
 		payeeAddress: "",
-		payeeEmail: "",
+		payeeContact: "",
 		invoiceId: `INV-${today.replace(/-/g, "")}`,
 		issued: today,
 		due: "",
 		payerName: "",
+		payerContact: "",
 		assetId: ASSETS[0].id,
 		items: [emptyItem()],
 		taxEnabled: false,
@@ -166,8 +177,9 @@ export function moveItem(state: CreateFormState, index: number, delta: number): 
 export function invoiceInputFromState(state: CreateFormState): InvoiceInput {
 	const asset = requireAsset(state.assetId);
 	const payerName = state.payerName.trim();
+	const payerContact = state.payerContact.trim();
 	const notes = state.notes.trim();
-	const payeeEmail = state.payeeEmail.trim();
+	const payeeContact = state.payeeContact.trim();
 	const due = state.due.trim();
 	const taxLabel = state.taxLabel.trim();
 	return {
@@ -178,9 +190,10 @@ export function invoiceInputFromState(state: CreateFormState): InvoiceInput {
 			name: state.payeeName.trim(),
 			// The address is untrusted form text, kept as the string it is; createInvoice re-dispatches it through `wallet/payout-address.ts`'s requirePayoutAddress, which validates it against the selected asset's family — an EIP-55 checked `0x` address for an EVM asset, the chain's own grammar for Zcash or Monero — rather than asserting a family here.
 			address: state.payeeAddress.trim(),
-			...(payeeEmail === "" ? {} : { email: payeeEmail }),
+			...(payeeContact === "" ? {} : { email: payeeContact }),
 		},
-		...(payerName === "" ? {} : { payer: { name: payerName } }),
+		// The bill-to block is emitted once either of its two fields is filled, so a contact without a name reaches the model as a payer whose name is missing; `requiredFieldErrors` reports that as the client-name error before the model is asked.
+		...(payerName === "" && payerContact === "" ? {} : { payer: { name: payerName, ...(payerContact === "" ? {} : { email: payerContact }) } }),
 		chainId: asset.chainId,
 		asset: state.assetId,
 		items: state.items.map((item) => ({
@@ -215,6 +228,9 @@ function requiredFieldErrors(state: CreateFormState): FieldError[] {
 	const errors: FieldError[] = [];
 	if (state.payeeName.trim() === "") errors.push({ field: "payeeName", message: "Payee name is required" });
 	if (state.payeeAddress.trim() === "") errors.push({ field: "payeeAddress", message: "Payout address is required" });
+	if (state.payerContact.trim() !== "" && state.payerName.trim() === "") {
+		errors.push({ field: "payerName", message: "Client name is required when contact info is given" });
+	}
 	if (state.invoiceId.trim() === "") errors.push({ field: "invoiceId", message: "Invoice number is required" });
 	if (state.issued.trim() === "") errors.push({ field: "issued", message: "Issue date is required" });
 	state.items.forEach((item, index) => {
@@ -306,8 +322,9 @@ function fieldKeyForPath(path: string): string {
 		due: "due",
 		"payee.name": "payeeName",
 		"payee.address": "payeeAddress",
-		"payee.email": "payeeEmail",
+		"payee.email": "payeeContact",
 		"payer.name": "payerName",
+		"payer.email": "payerContact",
 		asset: "asset",
 		"tax.label": "taxLabel",
 		"tax.rate": "taxRate",
@@ -587,11 +604,12 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	const payeeAddress = h("input", { type: "text", name: "payeeAddress", value: state.payeeAddress, placeholder: payoutAddressPlaceholder(requireAsset(state.assetId)) });
 	// Its single child changes in place, so the node stays mounted: an empty caution is hidden rather than removed.
 	const payoutWarning = h("p", { class: "field-warning", role: "status", hidden: true }, "");
-	const payeeEmail = h("input", { type: "text", name: "payeeEmail", value: state.payeeEmail, placeholder: "billing@example.com" });
+	const payeeContact = h("textarea", { name: "payeeContact", placeholder: "Email, phone, or address" }, state.payeeContact);
 	const invoiceId = h("input", { type: "text", name: "invoiceId", value: state.invoiceId, placeholder: "INV-0001" });
 	const issued = h("input", { type: "text", name: "issued", value: state.issued, placeholder: "YYYY-MM-DD" });
 	const due = h("input", { type: "text", name: "due", value: state.due, placeholder: "YYYY-MM-DD (optional)" });
 	const payerName = h("input", { type: "text", name: "payerName", value: state.payerName, placeholder: "Client name (optional)" });
+	const payerContact = h("textarea", { name: "payerContact", placeholder: "Email, phone, or address" }, state.payerContact);
 	const assetSelect = h(
 		"select",
 		{ name: "asset" },
@@ -838,8 +856,8 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 		state.payeeAddress = payeeAddress.value;
 		syncPayoutWarning();
 	});
-	bind(payeeEmail, () => {
-		state.payeeEmail = payeeEmail.value;
+	bind(payeeContact, () => {
+		state.payeeContact = payeeContact.value;
 	});
 	bind(invoiceId, () => {
 		state.invoiceId = invoiceId.value;
@@ -852,6 +870,9 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	});
 	bind(payerName, () => {
 		state.payerName = payerName.value;
+	});
+	bind(payerContact, () => {
+		state.payerContact = payerContact.value;
 	});
 	bind(notes, () => {
 		state.notes = notes.value;
@@ -911,7 +932,7 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 			fieldGroup("asset", "Asset", assetSelect, errorsByKey, "asset"),
 			fieldGroup("payee-address", "Payout address", payeeAddress, errorsByKey, "payeeAddress", "The address this invoice pays to."),
 			payoutWarning,
-			fieldGroup("payee-email", "Contact email (optional)", payeeEmail, errorsByKey, "payeeEmail"),
+			fieldGroup("payee-contact", "Contact info (optional)", payeeContact, errorsByKey, "payeeContact", CONTACT_HINT),
 		),
 		h(
 			"fieldset",
@@ -934,6 +955,7 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 			{ class: "form-section" },
 			h("legend", {}, "Bill to (optional)"),
 			fieldGroup("payer-name", "Client name", payerName, errorsByKey, "payerName"),
+			fieldGroup("payer-contact", "Contact info (optional)", payerContact, errorsByKey, "payerContact", CONTACT_HINT),
 		),
 		h(
 			"fieldset",
