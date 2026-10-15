@@ -15,7 +15,7 @@
  * Base32 is the sole encoding because its encode is a linear, uncapped pass over the bytes, so it scales with the invoice size and the 64 KiB cap below stands as the format's real limit; base58 was withdrawn precisely because its big-number conversion is quadratic and does not scale.
  * A `pinv1-` (base64url) blob is recognised as a blob and refused with a clear error naming the retired encoding, never decoded.
  *
- * The JSON is canonical — {@link serializeInvoice} writes it in a fixed key order with no whitespace, no absent optional field, text already composed to NFC and the optional icon's surrounding whitespace trimmed, a byte-order mark at either end with it, and every number in its shortest exact spelling — and {@link decodeInvoice} refuses anything that is not byte-for-byte what this encoder writes, so a repeated key (the last one winning silently in `JSON.parse`) cannot hide inside a share string, and neither can an NFD spelling of the same visible text, an icon padded with whitespace or a byte-order mark at either end, nor a longer spelling of the same number.
+ * The JSON is canonical — {@link serializeInvoice} writes it in a fixed key order with no whitespace, no absent optional field, text already composed to NFC and the optional icon's line endings normalized to LF with its surrounding whitespace trimmed, a byte-order mark at either end with it, and every number in its shortest exact spelling — and {@link decodeInvoice} refuses anything that is not byte-for-byte what this encoder writes, so a repeated key (the last one winning silently in `JSON.parse`) cannot hide inside a share string, and neither can an NFD spelling of the same visible text, an icon padded with whitespace or a byte-order mark at either end, nor a longer spelling of the same number.
  *
  * Money is transported as a decimal string of the asset's own units — `"150.00"`, never a JSON number and never base units — so every value survives the round trip exactly and a reader can convert it with `toBaseUnits` alone.
  * {@link decodeInvoice} derives the totals; they are never transported.
@@ -239,7 +239,7 @@ function nonCanonicalReason(parsed, invoice) {
     }
     const icon = iconTextOf(parsed);
     if (icon !== undefined && icon !== invoice.icon) {
-        return "the payload spells the icon with surrounding whitespace, a byte-order mark at either end, or an uncomposed spelling, but the icon gate stores the trimmed, NFC-composed text — the payload is not in the canonical form this encoder writes";
+        return "the payload spells the icon with surrounding whitespace, a byte-order mark at either end, a CRLF or lone-CR line ending, or an uncomposed spelling, but the icon gate stores the line-ending-normalized, trimmed, NFC-composed text — the payload is not in the canonical form this encoder writes";
     }
     return "the payload is not in the canonical form this encoder writes — it repeats a key, reorders keys, adds whitespace, or spells a number non-canonically";
 }

@@ -852,7 +852,7 @@ test("a payload whose icon is not the canonical text is refused", () => {
 	assert.equal(make({ icon: ICON_NFD }).icon, ICON_NFC, "validation composes an NFD icon to NFC");
 
 	// The reason names the icon divergence rather than leaving it to the generic message, whose four listed causes do not include the icon.
-	const iconDivergence = /spells the icon with surrounding whitespace, a byte-order mark at either end, or an uncomposed spelling, but the icon gate stores the trimmed, NFC-composed text — the payload is not in the canonical form this encoder writes/;
+	const iconDivergence = /spells the icon with surrounding whitespace, a byte-order mark at either end, a CRLF or lone-CR line ending, or an uncomposed spelling, but the icon gate stores the line-ending-normalized, trimmed, NFC-composed text — the payload is not in the canonical form this encoder writes/;
 	// The spellings this case feeds are derived from the canonicalizer rather than assumed divergent: each is one `canonicalIconText` changes, so a canonicalization step that stops treating one of these as a fault fails the derivation below instead of leaving the reason naming a fault the code no longer has.
 	const cases = [
 		["an NFD icon", ICON_NFD],
@@ -867,6 +867,16 @@ test("a payload whose icon is not the canonical text is refused", () => {
 		assert.equal(canonicalIconText(spelled), ICON_NFC, `${label}: the divergent spelling canonicalizes back to the icon the encoder wrote`);
 		rejects(label, () => decodeInvoice(b32(json.replace(encoded, JSON.stringify(spelled)))), ShareFormatError, iconDivergence);
 	}
+
+	// The canonicalizer's line-ending normalization is a repair like the ones above: a multi-line document respelled with CRLF endings parses into a valid invoice, and the byte-for-byte comparison is what refuses it, with the same reason naming that repaired line ending.
+	const multiline = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\">\n<rect width=\"32\" height=\"32\"/>\n</svg>";
+	const crlfSpelled = multiline.replace(/\n/g, "\r\n");
+	const multilineJson = serializeInvoice(make({ icon: multiline }));
+	const crlfJson = multilineJson.replace(JSON.stringify(multiline), JSON.stringify(crlfSpelled));
+	assert.notEqual(crlfJson, multilineJson, "the fixture really respells the icon with CRLF line endings");
+	assert.equal(canonicalIconText(crlfSpelled), multiline, "the canonicalizer normalizes those endings back to the document the encoder wrote");
+	assert.equal(validateInvoice(JSON.parse(crlfJson)).icon, multiline, "validation admits the second encoding and stores the canonical text");
+	rejects("a CRLF-spelled icon", () => decodeInvoice(b32(crlfJson)), ShareFormatError, iconDivergence);
 
 	const withNotes = serializeInvoice(make({ icon: ICON_NFC, notes: "note" }));
 	const reordered = withNotes.replace(`"notes":"note","icon":${encoded}`, `"icon":${encoded},"notes":"note"`);

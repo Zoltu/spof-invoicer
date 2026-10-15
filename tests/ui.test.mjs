@@ -1168,6 +1168,55 @@ test("the icon cap is measured on the trimmed, NFC-composed form the invoice sto
 	}
 });
 
+test("a whitespace-padded icon file is accepted through the picker and previewed with its interior whitespace untouched", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
+		const preview = () => findAll(view, (node) => hasClass(node, "icon-preview"))[0];
+		// The reported case: a file saved with whitespace around the document — a leading space or tab, a trailing newline, both at once — reaches the change handler as the file's own text, and the gate trims that padding while the whitespace inside the document stays where the file wrote it.
+		const interior = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><title> two  words </title><rect width=\"32\" height=\"32\"/></svg>";
+		const cases = [
+			["a leading space and tab", ` \t${interior}`],
+			["a trailing newline", `${interior}\n`],
+			["both ends", `\n\t${interior}\r\n`],
+		];
+		for (const [label, text] of cases) {
+			input.files = [iconFile(text)];
+			input.dispatch("change");
+			await nextTask();
+			assert.equal(message().attributes.hidden, "", `${label}: the icon field shows no message`);
+			assert.doesNotMatch(textOf(message()), /must not start or end with whitespace/, `${label}: the whitespace fault the report named is not shown`);
+			assert.equal(preview().attributes.src, svgDataUrl(interior), `${label}: the padded file is stored and previewed as the trimmed text, its interior whitespace untouched`);
+		}
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a CRLF-saved icon file is accepted through the picker, its line endings normalized to LF", async () => {
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const input = controlNamed(view, "icon");
+		const message = () => findAll(view, (node) => node.attributes?.id === "icon-error")[0];
+		const preview = () => findAll(view, (node) => hasClass(node, "icon-preview"))[0];
+		// A multi-line document saved on Windows: the CR at each interior line break is a line ending the gate normalizes rather than the control-character fault it used to raise, so the file a Windows editor saves is previewed like any other.
+		const crlf = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\">\r\n<rect width=\"32\" height=\"32\" fill=\"#123456\"/>\r\n</svg>\r\n";
+		const lf = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\">\n<rect width=\"32\" height=\"32\" fill=\"#123456\"/>\n</svg>";
+
+		input.files = [iconFile(crlf)];
+		input.dispatch("change");
+		await nextTask();
+
+		assert.equal(message().attributes.hidden, "", "no message is shown under the icon field");
+		assert.equal(preview().attributes.src, svgDataUrl(lf), "the file is stored and previewed as the normalized canonical text the gate returns");
+	} finally {
+		fake.restore();
+	}
+});
+
 test("checkIconText decides the icon field's accept or refuse from the file's text alone", () => {
 	assert.deepEqual(checkIconText(ICON_SVG), { ok: true, svg: ICON_SVG }, "a good document yields the gate's own canonical text");
 

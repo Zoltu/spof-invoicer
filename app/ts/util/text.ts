@@ -13,7 +13,7 @@ export const SINGLE_LINE_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
 /**
  * The same minus tab and newline, for a field whose value may hold lines.
- * The rule reads text whose ends a caller has already dealt with: the invoice's own text fields refuse a leading or trailing whitespace, and the icon gate reads this rule over the canonical text `util/icon-canonical-text.ts` returns, whose trim has already removed a boundary VT (U+000B), FF (U+000C), CR (U+000D), U+2028, or U+2029 — so an occurrence this rule refuses is one that survives inside the text rather than at its end.
+ * The rule reads text whose ends a caller has already dealt with: the invoice's own text fields refuse a leading or trailing whitespace, and the icon gate reads this rule over the canonical text `util/icon-canonical-text.ts` returns, whose line-ending normalization has already turned every CR into the bare LF this rule admits and whose trim has already removed a boundary VT (U+000B), FF (U+000C), U+2028, or U+2029 — so an occurrence this rule refuses is one that survives inside the text rather than at its end.
  */
 export const MULTI_LINE_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/;
 

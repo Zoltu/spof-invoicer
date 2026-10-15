@@ -180,14 +180,15 @@ test("validateIcon trims surrounding whitespace, including around NFD text", () 
 	assert.equal(validateIcon(`${SVG_AT_BYTE_CAP}\n`), SVG_AT_BYTE_CAP, "a document at the byte cap is accepted with a trailing newline");
 });
 
-test("validateIcon trims a CRLF-saved document's trailing newline and refuses the CR left at its interior line breaks", () => {
-	// The trim reaches the ends alone, so the composition the module doc and the README state is pinned here: a document saved with CRLF endings loses its trailing CRLF and keeps a CR at each interior line break, which the unchanged control-character rule refuses rather than the gate accepting a file whose interior endings it never repaired.
+test("validateIcon accepts a CRLF-saved multi-line document, normalizing its line endings to the bare newlines the gate admits", () => {
+	// A Windows-saved file is the ordinary case rather than a fault: an XML processor normalizes CRLF and a lone CR to LF before it reads a document, so the canonicalizer applies that normalization and the icon gate reads the text the browser's image context reads rather than refusing a file whose interior endings it never repaired.
 	const crlf = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\">\r\n<rect width=\"64\" height=\"64\"/>\r\n</svg>\r\n";
-	const trimmed = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\">\r\n<rect width=\"64\" height=\"64\"/>\r\n</svg>";
-	assert.equal(canonicalIconText(crlf), trimmed, "the canonicalizer trims the trailing CRLF and leaves the interior CRs where the file wrote them");
-	const refusal = refusalError(() => validateIcon(crlf));
-	assert.ok(refusal instanceof InvalidIconError, "the CRLF-saved document is refused by the icon gate");
-	assert.equal(refusal.message, "must not contain control characters other than newlines and tabs", "the refusal is the unchanged control-character rule, not a trim that repaired the interior CRs");
+	const lf = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\">\n<rect width=\"64\" height=\"64\"/>\n</svg>";
+	assert.equal(canonicalIconText(crlf), lf, "the canonicalizer normalizes each CRLF to a bare LF and trims the trailing one");
+	assert.equal(validateIcon(crlf), lf, "the CRLF-saved document is accepted as the canonical text the gate stores");
+	assert.equal(validateIcon(crlf.replace(/\r\n/g, "\r")), lf, "so is the same document saved with lone CRs, the other line ending an XML processor normalizes");
+	// The normalization repairs a line ending and nothing else: a control character that survives it is still refused.
+	assert.throws(() => validateIcon(lf.replace("\n<rect", "\n\u0001<rect")), InvalidIconError, "a control character inside the text is still refused");
 });
 
 test("validateIcon refuses a control character", () => {

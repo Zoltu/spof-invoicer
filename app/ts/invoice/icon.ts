@@ -430,7 +430,7 @@ function requireUniqueReadAttributes(root: RootAttributes, elementName: string):
  * Validate an untrusted value into the canonical SVG text a caller may store.
  *
  * A string longer than {@link MAX_ICON_RAW_CODE_UNITS} is refused before it is composed, with {@link iconRawCodeUnitRefusal}, the one wording of that bound, so the normalization and encoding below never do work proportional to an unbounded input; a spelling handed in through the create form's file read cannot reach that refusal, because that read bounds the file's bytes before decoding it and a UTF-8 file decodes to at most one code unit per byte.
- * Its surrounding whitespace is trimmed rather than refused by `util/icon-canonical-text.ts`'s `canonicalIconText`, so the newline an editor leaves at a file's end is not a fault, and every check below reads the canonical text.
+ * Its line endings and its surrounding whitespace are normalized and trimmed rather than refused by `util/icon-canonical-text.ts`'s `canonicalIconText`, so the newline an editor leaves at a file's end and the CRLF endings a Windows editor saves are not faults, and every check below reads the canonical text.
  * That canonicalization is the one definition of canonical icon text this gate and the create form share, so one visible document has a single encoded form and the create form's icon field accepts or refuses a chosen file on the text this gate stores.
  * The byte cap is measured over that canonical text — `util/icon-byte-length.ts`'s `iconByteLength` measures the text it is handed — so the value is canonicalized once at this call site rather than a second time behind the measurement.
  * The canonical text must not be empty and must be at most {@link MAX_ICON_SVG_BYTES} UTF-8 bytes, so the cap bounds the bytes of the value a caller stores rather than the bytes of whatever spelling arrived.
@@ -441,7 +441,7 @@ function requireUniqueReadAttributes(root: RootAttributes, elementName: string):
  * The document must then hold a single root `<svg>` element — a second element at the document level is refused — that element must declare the SVG namespace under the name that binds it, so a value whose root element is outside the SVG namespace is refused rather than reaching the image sink as one the browser declines to decode, and it must declare numeric `width` and `height` within `1` to {@link MAX_ICON_DIMENSION} and a `width` by `height` area within {@link MAX_ICON_PIXELS}. Each of those attributes — `width`, `height`, and the declaration — must appear at most once on the root, because a browser refuses to decode a document that repeats one.
  * The content refusals below are a heuristic over the text rather than a parse and are best-effort, so no content containment relies on them; the amplification-primitive, filter, loader, reference, and dimension refusals are relied on to bound the render.
  * A value that is not a string throws a `TypeError`, naming what arrived through a bounded preview; a string that fails any check below throws an {@link InvalidIconError}.
- * Returns the trimmed, NFC-composed text; a caller that stores it stores the canonical form.
+ * Returns the line-ending-normalized, trimmed, NFC-composed text; a caller that stores it stores the canonical form.
  */
 export function validateIcon(value: unknown): CanonicalIconText {
 	if (typeof value !== "string") {
