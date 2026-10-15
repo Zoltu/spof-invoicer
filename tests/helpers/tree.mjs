@@ -48,6 +48,14 @@ export function inputValues(node) {
 	return findAll(node, (child) => child.tagName === "input").map((input) => String(input.attributes.value));
 }
 
+/**
+ * The text of every value a wallet takes verbatim below `node`, in document order: the elements the payment section marks with `payment-value-verbatim`, which are the values its copy controls hand over.
+ * Such a value is a text node rather than a field's value, so a suite asserting what a copy control reads reads these rather than {@link inputValues}.
+ */
+export function paymentValues(node) {
+	return findAll(node, (element) => hasClass(element, "payment-value-verbatim")).map((element) => textOf(element));
+}
+
 /** The first descendant `<button>` whose text is exactly `label`, or `undefined`. */
 export function findButton(rootNode, label) {
 	return findAll(rootNode, (node) => node.tagName === "button" && textOf(node) === label)[0];

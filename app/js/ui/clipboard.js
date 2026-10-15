@@ -1,16 +1,16 @@
 /**
  * The clipboard seam the copy controls share.
  *
- * A "Copy" affordance appears on more than one surface — the share dialog's two strings and the payment panel's transaction hash — so the small amount of logic that touches the async Clipboard API lives here rather than in whichever module happened to need it first.
- * Both `ui/share.ts` and `ui/pay.ts` depend on this neutral module, so neither is coupled to the other for a generic helper.
+ * A "Copy" affordance appears on more than one surface — the share dialog's two strings, the payment panel's transaction hash, and the payment section's verbatim values — so the small amount of logic that touches the async Clipboard API lives here rather than in whichever module happened to need it first.
+ * `ui/share.ts`, `ui/pay.ts`, and `ui/payment-section.ts` depend on this neutral module, so none of them is coupled to the others for a generic helper.
  *
  * {@link copyText} wraps the one method this app uses (`writeText`).
- * {@link copyWithFallback} is the copy control's own click handler built on top: it writes, confirms the write in the control's status line, and when the clipboard is unavailable or refuses, selects the field and tells the user to copy by hand.
- * Both confirmations are spelled here once, so the two surfaces cannot drift.
+ * {@link copyWithFallback} is the copy control's own click handler built on top: it writes, confirms the write in the control's status line, and when the clipboard is unavailable or refuses, selects the value and tells the user to copy by hand.
+ * Both confirmations are spelled here once, so the surfaces cannot drift.
  */
 /** What a copy control's status reads once the text is on the clipboard. */
 const COPIED = "Copied";
-/** What a copy control's status reads when the clipboard is unavailable and the field is selected. */
+/** What a copy control's status reads when the clipboard is unavailable and the value is selected. */
 const COPY_BY_HAND = "Press Ctrl/Cmd+C to copy";
 /**
  * Copy `text` to the clipboard.
@@ -28,15 +28,34 @@ export async function copyText(text, clipboard) {
     }
 }
 /**
- * Wire a copy click: copy `text`, report the outcome in `status`, and fall back to selecting `field` for a manual copy when the clipboard is unavailable or refuses the write.
+ * Select what `element` shows, so a manual copy takes it.
+ *
+ * A text control selects its own value, since its value is not part of the document tree a range could span; any other element — the payment section's verbatim values are text — has its contents selected through the document's own selection.
  */
-export function copyWithFallback(text, clipboard, field, status) {
+function selectContents(element) {
+    const tag = element.tagName.toLowerCase();
+    if (tag === "input" || tag === "textarea") {
+        element.select();
+        return;
+    }
+    const selection = document.getSelection();
+    if (selection === null)
+        return;
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    selection.removeAllRanges();
+    selection.addRange(range);
+}
+/**
+ * Wire a copy click: copy `text`, report the outcome in `status`, and fall back to selecting `element` for a manual copy when the clipboard is unavailable or refuses the write.
+ */
+export function copyWithFallback(text, clipboard, element, status) {
     void copyText(text, clipboard).then((copied) => {
         if (copied) {
             status.textContent = COPIED;
             return;
         }
-        field.select();
+        selectContents(element);
         status.textContent = COPY_BY_HAND;
     });
 }

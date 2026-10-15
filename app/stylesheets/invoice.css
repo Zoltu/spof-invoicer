@@ -411,8 +411,8 @@
 }
 
 /*
- * The payment terms are what a payer copies into a wallet — the amount, the address, the link — so a value a wallet takes verbatim is drawn in a single-line field with a copy control beside it, and the term lays that field, the control, and the status out on one row.
- * The field never wraps: it holds the value as one run of characters and scrolls its own overflow, so neither the layout nor a text selection can put a line break inside a value that has none.
+ * The payment terms are what a payer copies into a wallet — the amount, the address, the link — so a value a wallet takes verbatim is drawn as ordinary text with a copy control beside it, and the term lays that text, the control, and the status out on one row.
+ * A value never wraps: it holds its characters as one run and scrolls its own overflow, so neither the layout nor a text selection can put a line break inside a value that has none.
  */
 .payment-term dd {
 	margin: 0;
@@ -431,26 +431,20 @@
 	font-size: 0.8125rem;
 }
 
-/* The term value: the field a copy control reads, or the plain text of a term no wallet takes verbatim; a click anywhere in either selects the whole of it rather than starting a character-at-a-time drag. */
+/*
+ * The term value: the text a copy control reads, or the plain text of a term no wallet takes verbatim; a click anywhere in either selects the whole of it rather than starting a character-at-a-time drag.
+ * It is drawn as the text it is rather than as a form control, and it holds its characters on one run: the term is a flex container, so the value is a block box whose own overflow scrolls, and neither the layout nor a text selection can put a line break inside a value that has none.
+ */
 .payment-value {
 	flex: 1 1 0;
 	min-width: 0;
+	white-space: nowrap;
+	overflow-x: auto;
 	user-select: all;
 }
 
-/* The field is drawn as the text it replaces, so the document reads the same either way. */
-input.payment-value {
-	font: inherit;
-	color: inherit;
-	background: transparent;
-	border: none;
-	padding: 0;
-	white-space: nowrap;
-	overflow-x: auto;
-}
-
 /*
- * The print twin of a copyable payment value: the printed page's own presentation of the same string, which print.css shows in the field's place, so on screen it is not shown at all.
+ * The print twin of a copyable payment value: the printed page's own presentation of the same string, which print.css shows in the dropped value's place, so on screen it is not shown at all.
  */
 .payment-value-print {
 	display: none;

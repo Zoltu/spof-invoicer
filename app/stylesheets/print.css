@@ -171,10 +171,11 @@
 
 	/*
 	 * A copyable payment value prints whole.
-	 * The field is a form control, whose value a print engine lays out on one line and clips at the field's edge, and the copy control beside it — the only affordance that hands over the complete value — is hidden above with the rest of the chrome, so a payee address or payment link longer than the column would otherwise reach paper as the prefix that fitted.
-	 * The field is dropped and its print twin, the same string as a text node, takes its place: a row of its own, wrapping across as many lines as the value needs rather than clipping it, so a printed Zcash unified address or payment link is the whole value a payer can still copy by hand.
+	 * The value is drawn on one non-wrapping run, which a print engine lays out on one line and clips at the column's edge, and the copy control beside it — the only affordance that hands over the complete value — is hidden above with the rest of the chrome, so a payee address or payment link longer than the column would otherwise reach paper as the prefix that fitted.
+	 * The value is dropped and its print twin, the same string as a text node, takes its place: a row of its own, wrapping across as many lines as the value needs rather than clipping it, so a printed Zcash unified address or payment link is the whole value a payer can still copy by hand.
+	 * Only the values a wallet takes verbatim are dropped, which is what the class on them names: a term no wallet takes verbatim carries no twin, and its text prints as it stands.
 	 */
-	input.payment-value {
+	.payment-value-verbatim {
 		display: none !important;
 	}
 

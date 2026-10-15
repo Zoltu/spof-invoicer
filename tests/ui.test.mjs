@@ -10,7 +10,7 @@ import { ZEC_PAYEE, XMR_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
 import { readSymbol } from "./helpers/qr-reader.mjs";
 import { refusalMessage } from "./helpers/refusals.mjs";
-import { findAll, findButton, hasClass, inputValues, textOf } from "./helpers/tree.mjs";
+import { findAll, findButton, hasClass, paymentValues, textOf } from "./helpers/tree.mjs";
 import { nextTask } from "./helpers/wait.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
 import { MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
@@ -958,11 +958,11 @@ for (const path of PRIVACY_CREATE_PATH) {
 			setControl(view, "item-0-unitPrice", "150");
 			assert.doesNotThrow(() => view.children[2].dispatch("submit"), "the submit handler must not throw");
 
-			// The payee's own screen: the invoice the form just built shows its own payment section, so the link, its symbol, and the copy fields are reachable without opening the share link.
+			// The payee's own screen: the invoice the form just built shows its own payment section, so the link, its symbol, and the copyable values are reachable without opening the share link.
 			const created = findAll(view, (node) => node.attributes?.class === "invoice-payment")[0];
 			assert.ok(created, "the created invoice's payment details are shown on the create screen");
-			const createdValues = inputValues(created);
-			assert.ok(createdValues.includes(path.payee), "the address the invoice pays to is one of the copy fields");
+			const createdValues = paymentValues(created);
+			assert.ok(createdValues.includes(path.payee), "the address the invoice pays to is one of the copyable values");
 			assert.ok(createdValues.includes("300"), "beside the amount it asks for");
 			const createdLink = createdValues.find((value) => value.startsWith(path.scheme));
 			assert.ok(createdLink, `and the invoice's own ${path.scheme} link`);
@@ -993,7 +993,7 @@ for (const path of PRIVACY_CREATE_PATH) {
 			const payer = renderInvoiceView(shared, { ...TOTAL_OPTIONS, notice: noticeRecorder() });
 			const payment = findAll(payer, (node) => node.attributes?.class === "invoice-payment")[0];
 			assert.ok(payment, "the shared invoice renders its payment section");
-			assert.deepEqual(inputValues(payment), [path.payee, "300", model.paymentLink], "the address, the amount, and the link, each in its own copy field");
+			assert.deepEqual(paymentValues(payment), [path.payee, "300", model.paymentLink], "the address, the amount, and the link, each as its own copyable value");
 			const payerGrid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
 			assert.ok(payerGrid, "the link's symbol is drawn beside them");
 			assertSymbolCellsInDom(payerGrid, model.paymentQr);

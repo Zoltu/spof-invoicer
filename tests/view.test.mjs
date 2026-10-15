@@ -9,7 +9,7 @@ import { installInteractiveDocument } from "./helpers/dom.mjs";
 import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TRANSPARENT_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
 import { readSymbol } from "./helpers/qr-reader.mjs";
-import { findAll, hasClass, inputValues, walk, textOf } from "./helpers/tree.mjs";
+import { findAll, hasClass, inputValues, paymentValues, walk, textOf } from "./helpers/tree.mjs";
 import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 import { SUPPORTED_CHAIN_IDS } from "../app/js/assets/registry.js";
 import { encodeInvoice } from "../app/js/invoice/codec.js";
@@ -642,7 +642,7 @@ test("print.css gates itself to print and keeps the document whole", () => {
 });
 
 test("a printed payment value is the whole value, wrapped rather than clipped", () => {
-	// The print path is the one surface where a payment value reached paper through a form control: an input prints its value on one line and clips it at the field's edge, and the copy control beside it — the only affordance that hands over the complete string — is chrome print.css hides, so a Zcash unified address or the link carrying it would print as the prefix that fitted.
+	// The print path is the one surface where a payment value can reach paper shortened: the on-screen value is held on one non-wrapping run, which a print engine clips at the column's edge, and the copy control beside it — the only affordance that hands over the complete string — is chrome print.css hides, so a Zcash unified address or the link carrying it would print as the prefix that fitted.
 	const address = unifiedOfBytes(189);
 	assert.equal(address.length, MAX_ZCASH_ADDRESS_LENGTH, "the fixture is the widest address the Zcash validator accepts");
 	const invoice = zecInvoice({
@@ -663,22 +663,25 @@ test("a printed payment value is the whole value, wrapped rather than clipped", 
 			[address, amount, model.paymentLink],
 			"each value a wallet takes verbatim carries a print presentation of the value itself, the amount, the address, and the link alike",
 		);
-		const fields = inputValues(payment);
-		assert.deepEqual(fields, [address, amount, model.paymentLink], "and the fields the screen draws hold those same strings");
+		const values = paymentValues(payment);
+		assert.deepEqual(values, [address, amount, model.paymentLink], "and the values the screen draws hold those same strings, each as text rather than a form control's value");
+		assert.deepEqual(inputValues(payment), [], "so no payment value is a form control, and a select-all of the section carries the text a payer reads");
+		assert.equal(values.length, printed.length, "and every value the screen draws carries a twin that takes its place in print");
 		// A value the print path could not show whole would arrive here shortened, with the clipper's own annotation appended — the failure this presentation exists to prevent.
 		printed.forEach((node, index) => {
 			assert.doesNotMatch(textOf(node), /\(\d+ characters\)/, "no printed payment value is a clip's annotated prefix");
-			assert.equal(textOf(node), fields[index], "the print presentation is the field's own string, not a second rendering of it");
+			assert.equal(textOf(node), values[index], "the print presentation is the value's own string, not a second rendering of it");
 		});
 
-		// The swap is the stylesheets' whole contract for the print surface, so both halves are asserted where a print engine reads them: the field is dropped and the twin is shown with a property that lets a value longer than the column break inside itself.
+		// The swap is the stylesheets' whole contract for the print surface, so both halves are asserted where a print engine reads them: the value is dropped and the twin is shown with a property that lets a value longer than the column break inside itself.
 		const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
-		const field = /input\.payment-value \{([^}]*)\}/.exec(printCss)?.[1];
-		assert.ok(field !== undefined, "print.css states what happens to the field a print engine would clip");
-		assert.match(field, /display:\s*none/, "and drops it, so no printed value is a clipped control");
+		const dropped = /\.payment-value-verbatim \{([^}]*)\}/.exec(printCss)?.[1];
+		assert.ok(dropped !== undefined, "print.css states what happens to the on-screen value a print engine would clip");
+		assert.match(dropped, /display:\s*none/, "and drops it, so no printed value is a clipped run");
+		assert.doesNotMatch(printCss, /\.payment-value\s*\{/, "while the plain values of terms no wallet takes verbatim stay in the printed document");
 		const twin = /\.payment-value-print \{([^}]*)\}/.exec(printCss)?.[1];
 		assert.ok(twin !== undefined, "print.css states how the print presentation is shown");
-		assert.match(twin, /display:\s*(?:block|inline)/, "and shows it in the field's place");
+		assert.match(twin, /display:\s*(?:block|inline)/, "and shows it in the dropped value's place");
 		assert.match(
 			twin,
 			/overflow-wrap:\s*(?:anywhere|break-word)|word-break:\s*break-all/,
@@ -687,7 +690,7 @@ test("a printed payment value is the whole value, wrapped rather than clipped", 
 		assert.doesNotMatch(twin, /white-space:\s*nowrap|overflow(?:-[xy])?\s*:\s*(?:hidden|clip)/, "and with nothing that holds it on one line or clips it");
 		const screenTwin = /\.payment-value-print \{([^}]*)\}/.exec(readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8"))?.[1];
 		assert.ok(screenTwin !== undefined, "invoice.css declares the print presentation too, so the two are swapped rather than both drawn");
-		assert.match(screenTwin, /display:\s*none/, "which is hidden on screen, where the field and its copy control are the presentation");
+		assert.match(screenTwin, /display:\s*none/, "which is hidden on screen, where the value and its copy control are the presentation");
 	} finally {
 		fake.restore();
 	}
@@ -883,7 +886,7 @@ test("the payee's Ethereum address renders under Payment details, never under th
 
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
 		assert.ok(payment, "the Payment details section is rendered");
-		assert.ok(inputValues(payment).includes(PAYEE), "the Ethereum address still renders under Payment details");
+		assert.ok(paymentValues(payment).includes(PAYEE), "the Ethereum address still renders under Payment details");
 	} finally {
 		fake.restore();
 	}
@@ -903,7 +906,7 @@ test("an EVM invoice renders its EIP-681 link and symbol and keeps the wallet Pa
 		);
 
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
-		assert.ok(inputValues(payment).includes(link.uri), "the EIP-681 link renders under Payment details");
+		assert.ok(paymentValues(payment).includes(link.uri), "the EIP-681 link renders under Payment details");
 		const grid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
 		assert.ok(grid, "the symbol of that same URI is drawn under Payment details");
 		assertSymbolCellsInDom(grid, encodeQr(link.uri));
@@ -946,7 +949,7 @@ test("a native-ETH invoice renders its own EIP-681 link, the symbol of that URI,
 
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
 		assert.ok(payment, "the Payment details section is rendered");
-		assert.ok(inputValues(payment).includes(link.uri), "the EIP-681 link renders under Payment details");
+		assert.ok(paymentValues(payment).includes(link.uri), "the EIP-681 link renders under Payment details");
 
 		const model = buildInvoiceViewModel(invoice, "2026-10-03");
 		const grid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
@@ -984,14 +987,14 @@ test("a privacy-chain invoice offers no wallet Pay control and names its own han
 		assert.equal(textOf(hint), UNSUPPORTED_WALLET_MESSAGE, "the hint is the message module's own sentence, not a second spelling of it");
 
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
-		assert.ok(inputValues(payment).includes(ZEC_PAYEE), "the Zcash address renders under Payment details");
+		assert.ok(paymentValues(payment).includes(ZEC_PAYEE), "the Zcash address renders under Payment details");
 		assert.ok(textOf(payment).includes("Zcash"), "and the network renders under its own name");
 		assert.equal(textOf(payment).includes("(zcash)"), false, "with no id suffix a wallet would not show, since no wallet reads this app's slug for a privacy chain");
 
 		const link = buildPaymentLink(zecInvoice());
 		assert.equal(link.uri.startsWith("zcash:"), true, "the invoice's own scheme builds the link");
-		assert.ok(inputValues(payment).includes(link.uri), "the link renders under Payment details, ready to select and copy");
-		assert.ok(inputValues(payment).includes("300"), "and the amount it asks for sits in its own copy field beside it");
+		assert.ok(paymentValues(payment).includes(link.uri), "the link renders under Payment details, ready to select and copy");
+		assert.ok(paymentValues(payment).includes("300"), "and the amount it asks for sits beside it as its own copyable value");
 
 		const size = encodeQr(link.uri).size;
 		const grid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
@@ -1076,14 +1079,14 @@ test("a Monero invoice renders its link and the symbol of that same URI, with no
 
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
 		assert.ok(payment, "the Payment details section is rendered");
-		assert.ok(inputValues(payment).includes(XMR_PAYEE), "the Monero address renders under Payment details");
+		assert.ok(paymentValues(payment).includes(XMR_PAYEE), "the Monero address renders under Payment details");
 		assert.ok(textOf(payment).includes("Monero"), "and the network renders under its own name");
 		assert.equal(textOf(payment).includes("(monero)"), false, "with no id suffix a wallet would not show, since no wallet reads this app's slug for a privacy chain");
-		assert.ok(inputValues(payment).includes("300"), "and the amount it asks for sits in its own copy field beside it");
+		assert.ok(paymentValues(payment).includes("300"), "and the amount it asks for sits beside it as its own copyable value");
 
 		const link = buildPaymentLink(invoice);
 		assert.equal(link.uri, `monero:${XMR_PAYEE}?tx_amount=300`, "the Monero link is its own scheme's spelling of the address and the amount");
-		assert.ok(inputValues(payment).includes(link.uri), "and the rendered document carries that whole URI, ready to select and copy");
+		assert.ok(paymentValues(payment).includes(link.uri), "and the rendered document carries that whole URI, ready to select and copy");
 
 		const model = buildInvoiceViewModel(invoice, "2026-10-03");
 		const grid = findAll(payment, (node) => hasClass(node, "payment-qr"))[0];
@@ -1112,8 +1115,8 @@ test("a transparent Zcash payee renders its own ZIP-321 link and the symbol of t
 		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder(), pay: () => {} });
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
 		assert.ok(payment, "the Payment details section is rendered");
-		assert.ok(inputValues(payment).includes(ZEC_TRANSPARENT_PAYEE), "the transparent address renders under Payment details");
-		assert.ok(inputValues(payment).includes(link.uri), "beside the link it is paid by, ready to select and copy");
+		assert.ok(paymentValues(payment).includes(ZEC_TRANSPARENT_PAYEE), "the transparent address renders under Payment details");
+		assert.ok(paymentValues(payment).includes(link.uri), "beside the link it is paid by, ready to select and copy");
 
 		const model = buildInvoiceViewModel(invoice, "2026-10-03");
 		assert.deepEqual(model.paymentQr.modules, encodeQr(link.uri).modules, "and the view model's matrix is the one this displayed URI encodes, module for module");
@@ -1166,7 +1169,7 @@ test("the amount, the payee address, and the payment link copy byte for byte, at
 		assert.equal(written[0], link.payee, "the copied address is the payee the link's URI encodes");
 		assert.equal(readSymbol(model.paymentQr).text, written[2], "and an independent decoder reads the copied link back out of the symbol's payload");
 		assert.equal(written[2].length, 404, "the widest value a legal ZEC invoice carries: a 311-character address, its scheme prefix, and a uint256-scale amount");
-		assert.deepEqual(inputValues(view), written, "and the fields the copy controls read hold those same strings, one line each");
+		assert.deepEqual(paymentValues(view), written, "and the values the copy controls read hold those same strings, each as one run of text");
 	} finally {
 		fake.restore();
 	}

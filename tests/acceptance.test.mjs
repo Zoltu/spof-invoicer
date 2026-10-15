@@ -23,7 +23,7 @@ import { assertSymbolCells } from "./helpers/qr-symbol.mjs";
 import { refusalError, refusalMessage } from "./helpers/refusals.mjs";
 import { servedTreeProblems } from "./helpers/served-drift.mjs";
 import { USDC_LOWER } from "./helpers/tokens.mjs";
-import { findAll, findButton, hasClass, inputValues, textOf } from "./helpers/tree.mjs";
+import { findAll, findButton, hasClass, paymentValues, textOf } from "./helpers/tree.mjs";
 import { SERVED_BUNDLES } from "./helpers/vendor-bundles.mjs";
 import { nextTask, waitFor } from "./helpers/wait.mjs";
 import { ACCOUNT, TX_HASH, installWindow, mockProvider } from "./helpers/wallet-mock.mjs";
@@ -465,10 +465,10 @@ test("a shared link renders the official document, and hostile text stays text",
 		assert.equal(link.uri.startsWith("zcash:"), true, "the invoice's own scheme builds the link");
 		const zecShell = mountSharedLink(encodeShare(zec));
 		const zecText = textOf(zecShell.content);
-		assert.ok(inputValues(zecShell.content).includes(ZEC_PAYEE), "the rendered document carries the address it pays to");
-		assert.ok(inputValues(zecShell.content).includes("1.5"), "and the amount, in its own copy field");
+		assert.ok(paymentValues(zecShell.content).includes(ZEC_PAYEE), "the rendered document carries the address it pays to");
+		assert.ok(paymentValues(zecShell.content).includes("1.5"), "and the amount, in its own copyable value");
 		assert.ok(zecText.includes("1.5 ZEC"), "with the total due drawn in the asset's own figures");
-		assert.ok(inputValues(zecShell.content).includes(link.uri), "and the payment link itself");
+		assert.ok(paymentValues(zecShell.content).includes(link.uri), "and the payment link itself");
 		assert.ok(zecText.includes(UNSUPPORTED_WALLET_MESSAGE), "beside a hint naming that hand-off");
 		assert.equal(findButton(zecShell.content, "Pay"), undefined, "no injected-wallet control is offered for it");
 
@@ -486,10 +486,10 @@ test("a shared link renders the official document, and hostile text stays text",
 		assert.equal(xmrLink.uri, `monero:${XMR_PAYEE}?tx_amount=1.5`, "the Monero link is its own scheme's spelling of the address and the amount");
 		const xmrShell = mountSharedLink(encodeShare(xmr));
 		const xmrText = textOf(xmrShell.content);
-		assert.ok(inputValues(xmrShell.content).includes(XMR_PAYEE), "the rendered document carries the address it pays to");
-		assert.ok(inputValues(xmrShell.content).includes("1.5"), "and the amount, in its own copy field");
+		assert.ok(paymentValues(xmrShell.content).includes(XMR_PAYEE), "the rendered document carries the address it pays to");
+		assert.ok(paymentValues(xmrShell.content).includes("1.5"), "and the amount, in its own copyable value");
 		assert.ok(xmrText.includes("1.5 XMR"), "with the total due drawn in the asset's own figures");
-		assert.ok(inputValues(xmrShell.content).includes(xmrLink.uri), "and the payment link itself");
+		assert.ok(paymentValues(xmrShell.content).includes(xmrLink.uri), "and the payment link itself");
 		assert.ok(xmrText.includes(UNSUPPORTED_WALLET_MESSAGE), "beside a hint naming that hand-off");
 		assert.equal(findButton(xmrShell.content, "Pay"), undefined, "no injected-wallet control is offered for it");
 
@@ -514,10 +514,10 @@ test("a Zcash invoice paying a mainnet unified address carries its link and its 
 	try {
 		const shell = mountSharedLink(encodeShare(invoice));
 		const text = textOf(shell.content);
-		assert.ok(inputValues(shell.content).includes(ZEC_UNIFIED_PAYEE), "the rendered document carries the unified address it pays to");
-		assert.ok(inputValues(shell.content).includes("1.5"), "and the amount, in its own copy field");
+		assert.ok(paymentValues(shell.content).includes(ZEC_UNIFIED_PAYEE), "the rendered document carries the unified address it pays to");
+		assert.ok(paymentValues(shell.content).includes("1.5"), "and the amount, in its own copyable value");
 		assert.ok(text.includes("1.5 ZEC"), "with the total due drawn in the asset's own figures");
-		assert.ok(inputValues(shell.content).includes(link.uri), "and the payment link built from it");
+		assert.ok(paymentValues(shell.content).includes(link.uri), "and the payment link built from it");
 		assert.equal(findButton(shell.content, "Pay"), undefined, "no injected-wallet control is offered for it");
 
 		const view = buildInvoiceViewModel(invoice, TODAY);
