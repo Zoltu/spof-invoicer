@@ -4,7 +4,7 @@
  * The view is split in two layers so most of it is testable without a browser: the pure form state and its mapping to a validated {@link Invoice} live in the exported helpers at the top, and the DOM building at the bottom only wires those helpers to inputs.
  * The payee's own screen shows the invoice the form creates, not only its share link: the section `ui/payment-section.ts` owns is drawn into this view for each invoice the form builds, so the payee can pay it, or copy its link, its address, and its amount, without opening their own share link.
  * Every rendered string — a field value, a validation message, a share payload — reaches the page as a text child of `util/dom.ts`'s `h()`, so nothing a user or a share link supplies can become markup.
- * An optional SVG icon is chosen from a file input and checked in place — a generous raw read ceiling on the file's own size first, then the byte cap on the NFC-composed value, then the icon gate — before it enters the form state, so an over-large, over-cap, or malformed file is refused under its own field and the icon the form already carries stays; the icon the form does carry is previewed through the icon leaf's own data URL, never as markup.
+ * An optional SVG icon is chosen from a file input and checked in place — a generous raw read ceiling on the file's own size first, then the byte cap on the trimmed, NFC-composed value, then the icon gate — before it enters the form state, so an over-large, over-cap, or malformed file is refused under its own field and the icon the form already carries stays; the icon the form does carry is previewed through the icon leaf's own data URL, never as markup.
  */
 
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset, type Asset, type AssetFamily, type AssetId } from "../assets/registry.js";
@@ -265,6 +265,7 @@ export type IconCheck =
  *
  * The bounds apply to a value only once it is known to be a string, and the gate's own raw code-unit bound is applied first, before anything measures or composes it, so a caller that reaches this helper without the form's file-size pre-check cannot make it normalize an unbounded string or slip past the gate's pre-composition guard; the refusal that bound yields is {@link iconRawCodeUnitRefusal}, the one wording of it, which the gate raises for the same value.
  * A string is then measured with {@link iconByteLength} — the same NFC-composed UTF-8 byte length the icon gate bounds — so an over-cap document is refused under the field with {@link iconByteCapRefusal}, the one wording of that refusal, which the gate raises for the same value; the form checks first, so the gate's own copy of it never reaches this field, and the gate supplies the reason for every other refusal through {@link iconRefusalMessage}.
+ * The measurement is taken on the trimmed spelling, because the gate's canonical value is the trimmed text: an icon whose file carries a trailing newline at the byte cap stays inside it, so the picker refuses nothing the gate would accept.
  * A value that is not a string skips both bounds and reaches the gate, whose own `TypeError` becomes this field's refusal through that same bounded reason — so a file read that answers something other than text is refused under the field rather than escaping as an unhandled rejection from the change handler that does not await it.
  * The DOM layer keeps the file read and the form mutation around this decision.
  */
@@ -273,7 +274,7 @@ export function checkIconText(text: unknown): IconCheck {
 		if (text.length > MAX_ICON_RAW_CODE_UNITS) {
 			return { ok: false, message: iconRawCodeUnitRefusal(text.length) };
 		}
-		const bytes = iconByteLength(text);
+		const bytes = iconByteLength(text.trim());
 		if (bytes > MAX_ICON_SVG_BYTES) {
 			return { ok: false, message: iconByteCapRefusal(bytes) };
 		}
@@ -724,7 +725,7 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	/**
 	 * Read the payee's chosen file, check it in place, and store it.
 	 *
-	 * The file is refused on its own declared size before it is read at all, so one far past {@link MAX_ICON_FILE_BYTES} is never decoded, and the text it yields is then decided by {@link checkIconText}, which measures the NFC-composed value with the same byte length the icon gate bounds.
+	 * The file is refused on its own declared size before it is read at all, so one far past {@link MAX_ICON_FILE_BYTES} is never decoded, and the text it yields is then decided by {@link checkIconText}, which measures the trimmed, NFC-composed value with the same byte length the icon gate bounds.
 	 * Each pick claims the form's own selection token before its read and answers only while that token is still current, so two overlapping picks resolve in pick order and the last pick wins rather than whichever read settles last; a later pick or a removal that bumps the token makes this read stale, and a stale read applies neither its failure nor its success.
 	 * A refusal leaves the form's icon — and so the invoice the form would build — exactly as it was, clears the input through {@link refuseIconPick} so the refused file can be chosen again, and a file that passes is stored as the gate's own canonical text.
 	 */

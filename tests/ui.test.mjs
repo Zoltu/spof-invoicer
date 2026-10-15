@@ -1205,6 +1205,37 @@ test("checkIconText decides the icon field's accept or refuse from the file's te
 	assert.deepEqual(checkIconText(""), { ok: false, message: "must not be empty" }, "an empty document is refused as its own fault");
 });
 
+test("checkIconText trims a file's surrounding whitespace before the gate reads it", () => {
+	// The common case a picker meets is an SVG saved with a trailing newline, so the surrounding whitespace is trimmed rather than refused: the trimmed text is the canonical value the field stores and the text the byte cap measures.
+	const cases = [
+		["a leading newline and tab", `\n\t${ICON_SVG}`],
+		["a trailing newline", `${ICON_SVG}\n`],
+		["both ends", ` ${ICON_SVG}\n\n`],
+		["a leading byte-order mark", `\uFEFF${ICON_SVG}`],
+	];
+	for (const [label, text] of cases) {
+		assert.deepEqual(checkIconText(text), { ok: true, svg: ICON_SVG }, `${label} is trimmed to the canonical text the gate returns`);
+	}
+
+	// The cap is measured on that same trimmed text, so a document sitting at it keeps its place once the newline an editor added is trimmed off.
+	const atCap = ICON_SVG.replace("</svg>", "x".repeat(MAX_ICON_SVG_BYTES - Buffer.byteLength(ICON_SVG, "utf8")) + "</svg>");
+	assert.equal(Buffer.byteLength(atCap, "utf8"), MAX_ICON_SVG_BYTES, "the fixture sits exactly at the icon byte cap");
+	assert.deepEqual(checkIconText(`${atCap}\n`), { ok: true, svg: atCap }, "one trailing newline past the cap is still within it once trimmed");
+	assert.deepEqual(
+		checkIconText(`${atCap}x\n`),
+		{ ok: false, message: `The icon is ${MAX_ICON_SVG_BYTES + 1} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.` },
+		"a content byte past the cap is refused whatever whitespace surrounds it",
+	);
+
+	// Trimming removes a spelling fault and nothing else: the gate's rules still decide the trimmed text, and the two canonicalizations compose.
+	const malformed = checkIconText("not an svg at all\n");
+	assert.equal(malformed.ok, false, "a padded malformed document is still refused");
+	assert.match(malformed.message, /must contain a single <svg> root element/, "with the gate's own reason");
+	assert.deepEqual(checkIconText(" \n\t "), { ok: false, message: "must not be empty" }, "a file that is whitespace alone trims to nothing and is refused as empty");
+	const nfd = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><title>cafe\u0301</title></svg>";
+	assert.deepEqual(checkIconText(` ${nfd}\n`), { ok: true, svg: nfd.normalize("NFC") }, "a padded NFD spelling is trimmed and composed");
+});
+
 test("checkIconText refuses a read that yields something other than text rather than throwing", () => {
 	assert.deepEqual(
 		checkIconText(42),

@@ -128,10 +128,21 @@ test("validateIcon throws a TypeError for a non-string and refuses an empty or o
 	assert.throws(() => validateIcon(huge), InvalidIconError);
 });
 
-test("validateIcon refuses surrounding whitespace, including around NFD text", () => {
+test("validateIcon trims surrounding whitespace, including around NFD text", () => {
+	// An SVG saved with a trailing newline, or one an editor indented at its ends, is the ordinary case rather than a fault: the surrounding whitespace is trimmed and the trimmed text is the value the gate returns.
 	const nfd = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><title>cafe\u0301</title></svg>";
-	assert.throws(() => validateIcon(` ${nfd}`), InvalidIconError);
-	assert.throws(() => validateIcon(`${nfd} `), InvalidIconError);
+	const nfc = nfd.normalize("NFC");
+	assert.equal(validateIcon(` ${nfd}`), nfc, "a leading space is trimmed and the text that remains is composed");
+	assert.equal(validateIcon(`${nfd}\n`), nfc, "a trailing newline is trimmed too");
+	assert.equal(validateIcon(`\n\t ${nfd} \r\n`), nfc, "every surrounding whitespace character is, at both ends");
+	assert.equal(validateIcon(`\uFEFF${nfd}`), nfc, "and a leading byte-order mark, which trim() drops with them");
+	// Whitespace is trimmed only at the ends: the document's own interior whitespace is left exactly as it was written.
+	const spaced = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><title> two  words </title></svg>";
+	assert.equal(validateIcon(` ${spaced}\n`), spaced, "whitespace inside the document is untouched");
+	// Trimming the value down to nothing is the empty document's own fault rather than a whitespace fault.
+	assert.equal(refusalMessage(() => validateIcon(" \n\t ")), "must not be empty", "a value that is whitespace alone trims to nothing and is refused as empty");
+	// The byte cap is measured on the trimmed text, so the newline an editor leaves at a file's end does not push a document at the cap past it.
+	assert.equal(validateIcon(`${SVG_AT_BYTE_CAP}\n`), SVG_AT_BYTE_CAP, "a document at the byte cap is accepted with a trailing newline");
 });
 
 test("validateIcon refuses a control character", () => {

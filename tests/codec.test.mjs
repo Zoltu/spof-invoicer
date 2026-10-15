@@ -818,7 +818,6 @@ test("an icon is validated as it is read, under the icon path", () => {
 		["an over-cap icon", overCap, "InvalidIconError", `The icon is ${Buffer.byteLength(overCap, "utf8")} bytes, over the ${MAX_ICON_SVG_BYTES}-byte limit.`],
 		["an empty icon", "", "InvalidIconError", "must not be empty"],
 		["a script-bearing icon", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><script>alert(1)</script></svg>", "InvalidIconError", "must not contain a <script> element"],
-		["an icon with trailing whitespace", `${ICON} `, "InvalidIconError", "must not start or end with whitespace"],
 		["a null icon", null, "TypeError", "expected an SVG string, got null"],
 		["a numeric icon", 42, "TypeError", "expected an SVG string, got 42"],
 	];
@@ -828,6 +827,8 @@ test("an icon is validated as it is read, under the icon path", () => {
 		assert.equal(refusal.message, `invoice: icon: ${reason}`, label);
 	}
 	assert.equal(make({ icon: ICON }).icon, ICON, "a well-formed icon is accepted");
+	// The gate stores the trimmed text as its canonical value, so the surrounding whitespace a file was saved with is not a fault on this path either.
+	assert.equal(make({ icon: `${ICON} ` }).icon, ICON, "the gate trims surrounding whitespace and stores the trimmed text");
 });
 
 test("the notice a payer sees for a shared link whose icon is refused carries the namespace once", () => {
@@ -855,11 +856,12 @@ test("a payload whose icon is not the canonical text is refused", () => {
 		ShareFormatError,
 		/not in the canonical form/,
 	);
+	// The gate trims the stored text, so this payload parses into a valid invoice — and the byte-for-byte rule is what refuses it: the icon it carries is not the text this encoder writes, so the wire format stays exactly as strict as it is documented to be.
 	rejects(
 		"an icon with trailing whitespace",
 		() => decodeInvoice(b32(json.replace(encoded, JSON.stringify(`${ICON_NFC} `)))),
-		InvalidInvoiceError,
-		/icon: /,
+		ShareFormatError,
+		/not in the canonical form/,
 	);
 
 	const withNotes = serializeInvoice(make({ icon: ICON_NFC, notes: "note" }));
