@@ -434,6 +434,7 @@
 /*
  * The term value: the text a copy control reads, or the plain text of a term no wallet takes verbatim; a click anywhere in either selects the whole of it rather than starting a character-at-a-time drag.
  * It is drawn as the text it is rather than as a form control, and it holds its characters on one run: the term is a flex container, so the value is a block box whose own overflow scrolls, and neither the layout nor a text selection can put a line break inside a value that has none.
+ * One line box carries the value of every term, stated in an absolute length rather than left to each face's own size, so the mono face a verbatim term is set in draws no shorter a line than the plain Asset and Network terms above it and the terms keep the list's gap apart rather than a rhythm of their own.
  */
 .payment-value {
 	flex: 1 1 0;
@@ -441,6 +442,7 @@
 	white-space: nowrap;
 	overflow-x: auto;
 	user-select: all;
+	line-height: 1.4rem;
 }
 
 /*
@@ -450,16 +452,37 @@
 	display: none;
 }
 
-/* The copy control and the status reporting its outcome are screen affordances, hidden in print with the document’s other chrome. */
+/*
+ * The copy control and the status reporting its outcome are screen affordances, hidden in print with the document's other chrome.
+ * Neither is a value a payer reads, so neither is carried by a text selection: a select-all of the section yields each term's label and its value, with no control's face and no copied-message in between.
+ */
 .payment-copy,
 .payment-status {
 	flex: 0 0 auto;
+	user-select: none;
 }
 
+/*
+ * The copy control sits inside the line box its value is drawn on rather than setting its row's height, which is what the `.btn` padding it inherits would do: the control is given a shorter padding and a smaller face on a leading of its own, so its border box stays under the mono value's line and a verbatim row is no taller than the plain rows beside it.
+ */
+.payment-copy {
+	padding: 0.2rem 0.6rem;
+	font-size: 0.75rem;
+	line-height: 1;
+}
+
+/*
+ * The status states the outcome of the last copy on a line of its own, so a message never reflows the row it belongs to.
+ */
 .payment-status {
 	flex-basis: 100%;
 	font-size: 0.8125rem;
 	color: var(--success);
+}
+
+/* No copy has run yet, so the status carries nothing: an empty element must not keep the full-width line the rule above it reserves, which would hold every verbatim row apart from its neighbour before the first copy. */
+.payment-status:empty {
+	display: none;
 }
 
 /*

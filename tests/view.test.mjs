@@ -1313,3 +1313,75 @@ test("a contact line is displayed whole at its widest legal spelling, and the di
 		fake.restore();
 	}
 });
+
+test("a verbatim payment row is no taller than the value it draws, and an empty status keeps no line", () => {
+	// The payment terms are one list, so a row taller than the plain Asset and Network rows around it reads as uneven spacing; the copy control's inherited `.btn` padding and the empty status's reserved full-width line are the two things that would make a verbatim row the taller one.
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
+	const value = ruleBody(invoiceCss, ".payment-value");
+	const copy = ruleBody(invoiceCss, ".payment-copy");
+	const status = ruleBody(invoiceCss, ".payment-status");
+	const button = ruleBody(appCss, ".btn");
+	assert.ok(
+		value !== undefined && copy !== undefined && status !== undefined && button !== undefined,
+		"invoice.css declares the value, the copy control, and the status, and app.css the button whose padding the control overrides",
+	);
+
+	// The value's line box carries every term in an absolute length, so the mono face of a verbatim term does not compute a shorter line of its own and leave that row below the height of the plain rows.
+	const line = declaration(value, "line-height");
+	assert.ok(String(line).endsWith("rem"), "the value's line box is stated in rem rather than left to each face's own size");
+	const linePx = pxLength(line, ".payment-value line-height");
+
+	// The tallest box on a row sets that row's height, so what has to fit inside the line is the control's whole border box: its face, its leading, its padding, and the border `.btn` declares.
+	const face = pxLength(declaration(copy, "font-size"), ".payment-copy font-size");
+	const leading = Number(declaration(copy, "line-height"));
+	assert.ok(Number.isFinite(leading), "the control's leading is a multiple of its own face, so its box follows from that face");
+	const [padding] = String(declaration(copy, "padding")).split(/\s+/);
+	const [btnPadding] = String(declaration(button, "padding")).split(/\s+/);
+	const [border] = String(declaration(button, "border")).split(/\s+/);
+	const control = face * leading + 2 * pxLength(padding, ".payment-copy padding") + 2 * pxLength(border, ".btn border");
+	assert.ok(control <= linePx, `the copy control's ${control}px box fits inside the ${linePx}px line its value is drawn on, so it adds no height to its row`);
+	assert.ok(
+		pxLength(padding, ".payment-copy padding") < pxLength(btnPadding, ".btn padding"),
+		"and the padding it is given is shorter than the .btn padding it overrides",
+	);
+
+	// The status keeps the full-width line a message needs and gives it up while it is empty, so nothing holds a verbatim row apart from its neighbour before the first copy.
+	assert.match(invoiceCss, /\.payment-status \{\n\tflex-basis: 100%;/, "a copied-message states itself on a line of its own rather than reflowing its row");
+	assert.match(invoiceCss, /\.payment-status:empty \{\n\tdisplay: none;\n\}/, "and an empty status takes no line at all");
+
+	// Neither affordance is part of the text a payer selects, which is what makes a select-all of the section read one label and one value per line.
+	assert.match(
+		invoiceCss,
+		/\.payment-copy,\n\.payment-status \{\n\tflex: 0 0 auto;\n\tuser-select: none;\n\}/,
+		"the copy control and the status are both outside a text selection of the section",
+	);
+});
+
+/** The declarations of the one rule a stylesheet declares under `selector`, or `undefined` when it declares none: every stylesheet here writes one declaration per line, which is the shape this reads. */
+function ruleBody(css, selector) {
+	const start = css.indexOf("\n" + selector + " {");
+	if (start === -1) return undefined;
+	const open = css.indexOf("{", start);
+	return css.slice(open + 1, css.indexOf("}", open));
+}
+
+/** The value of one `property` declaration in a rule body, or `undefined` when the rule declares none. */
+function declaration(body, property) {
+	const line = String(body ?? "")
+		.split("\n")
+		.map((entry) => entry.trim())
+		.find((entry) => entry.startsWith(property + ": "));
+	return line === undefined ? undefined : line.slice(property.length + 2, -1);
+}
+
+/** The 16px root font size a rem resolves against, which the page declares no font size of its own to change. */
+const ROOT_FONT_PX = 16;
+
+/** The pixels a stylesheet's `rem` or `px` length states, with the unit required so a length in another unit cannot pass as one. */
+function pxLength(length, where) {
+	const text = String(length).trim();
+	if (text.endsWith("rem")) return Number(text.slice(0, -3)) * ROOT_FONT_PX;
+	assert.ok(text.endsWith("px"), `${where} states its length in rem or px, not ${text}`);
+	return Number(text.slice(0, -2));
+}
