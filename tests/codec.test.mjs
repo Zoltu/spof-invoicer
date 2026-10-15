@@ -1250,3 +1250,65 @@ test("decode accepts exactly the envelope the encoder writes", () => {
 	rejects("encoding it", () => encodeInvoice(oversized), ShareFormatError, /the share limit is 65536/);
 	rejects("decoding the same bytes", () => decodeInvoice(payload), ShareFormatError, /the share limit is 65536/);
 });
+
+/** The canonical JSON a build wrote when a party's `email` field held a single-line email address: the legacy payload the share format has to keep reading, key order and all. */
+const LEGACY_CONTACT_JSON = "{\"v\":1,\"t\":\"invoice\",\"id\":\"INV-0001\",\"issued\":\"2026-10-03\",\"payee\":{\"name\":\"Studio Example\",\"address\":\"0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\",\"email\":\"billing@example.com\"},\"payer\":{\"name\":\"Acme GmbH\",\"email\":\"ap@acme.example\"},\"chainId\":\"0x1\",\"asset\":\"usdc\",\"items\":[{\"description\":\"Design work\",\"quantity\":\"2\",\"unitPrice\":\"150\"}]}";
+
+test("a legacy payload spelling both parties' email fields stays readable byte for byte", () => {
+	const legacy = make({
+		payee: { name: "Studio Example", address: PAYEE, email: "billing@example.com" },
+		payer: { name: "Acme GmbH", email: "ap@acme.example" },
+	});
+	// The fixture is the canonical JSON a build wrote when the field held an email address alone, so this pins the key, its position inside both party objects, and the absence of a schema bump together.
+	assert.equal(serializeInvoice(legacy), LEGACY_CONTACT_JSON, "the widened field is still written under `email`, byte for byte");
+	assert.equal(legacy.v, 1, "the schema version stays 1");
+	const payload = b32(LEGACY_CONTACT_JSON);
+	assert.deepEqual(decodeInvoice(payload), legacy, "the legacy payload decodes into the same invoice");
+	assert.equal(encodeInvoice(decodeInvoice(payload)), payload, "and re-encodes to the bytes it arrived as");
+	assert.equal(encodeInvoiceBlob(legacy), `pinv1b-${payload}`, "a legacy invoice still shares as a blob of the same payload");
+
+	const longest = `${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length)}@example.com`;
+	const atCap = make({ payee: { name: "Studio Example", address: PAYEE, email: longest } });
+	const atCapPayload = encodeInvoice(atCap);
+	assert.equal(atCap.payee.email.length, MAX_EMAIL_CHARS, "the fixture is a legacy email at exactly the legacy cap");
+	assert.equal(decodeInvoice(atCapPayload).payee.email, longest, "past the contact cap, a legacy email still survives the container");
+	assert.equal(encodeInvoice(decodeInvoice(atCapPayload)), atCapPayload, "and re-encodes byte for byte");
+});
+
+test("a multiline contact value round-trips through the share containers", () => {
+	const payeeContact = ["Studio Example", "billing@example.com", "+44 20 7946 0958", "12 Rue de l'Exemple, Paris"].join("\n");
+	const payerContact = ["Acme GmbH", "ap@acme.example", "+49 30 1234567"].join("\n");
+	const invoice = make({
+		payee: { name: "Studio Example", address: PAYEE, email: payeeContact },
+		payer: { name: "Acme GmbH", email: payerContact },
+	});
+	assert.equal(invoice.payee.email, payeeContact, "the payee's lines are stored as written");
+	assert.equal(invoice.payer.email, payerContact, "and the payer's lines take the same rules");
+	const payload = encodeInvoice(invoice);
+	assert.ok(serializeInvoice(invoice).includes(JSON.stringify(payeeContact)), "the lines travel as one escaped JSON string under `email`");
+	assert.deepEqual(decodeInvoice(payload), invoice, "the multiline contact value decodes back from the fragment payload");
+	assert.deepEqual(decodeInvoiceBlob(encodeInvoiceBlob(invoice)), invoice, "and from the base32 blob");
+	assert.deepEqual(decodeShare(SHARE_FRAGMENT_PREFIX + payload), invoice, "and from the full fragment");
+	assert.equal(encodeInvoice(decodeInvoice(payload)), payload, "and re-encodes byte for byte");
+});
+
+test("a contact value respelled with CRLF or a lone CR is refused as non-canonical", () => {
+	const contact = "Studio Example\nbilling@example.com";
+	const invoice = make({ payee: { name: "Studio Example", address: PAYEE, email: contact } });
+	const json = serializeInvoice(invoice);
+	// The model normalizes the endings to LF before it stores them, so each payload below parses into a valid invoice and the byte-for-byte comparison is what refuses it — the same shape by which an NFD text or a padded icon is refused.
+	for (const [label, ending] of [["a CRLF", "\r\n"], ["a lone CR", "\r"]]) {
+		const respelled = json.replace(JSON.stringify(contact), JSON.stringify(contact.replace(/\n/g, ending)));
+		assert.notEqual(respelled, json, `${label}: the fixture really respells the contact value with that ending`);
+		assert.equal(validateInvoice(JSON.parse(respelled)).payee.email, contact, `${label}: validation repairs the ending to one LF`);
+		rejects(`${label}-spelled payee contact value`, () => decodeInvoice(b32(respelled)), ShareFormatError, /not in the canonical form/);
+	}
+
+	const payerContact = "Acme GmbH\nap@acme.example";
+	const payerJson = serializeInvoice(make({ payer: { name: "Acme GmbH", email: payerContact } }));
+	const payerCrlf = payerJson.replace(JSON.stringify(payerContact), JSON.stringify(payerContact.replace(/\n/g, "\r\n")));
+	assert.notEqual(payerCrlf, payerJson, "the fixture really respells the payer's contact value");
+	rejects("a CRLF-spelled payer contact value", () => decodeInvoice(b32(payerCrlf)), ShareFormatError, /not in the canonical form/);
+	// The LF spelling of the same value decodes, so each refusal above is the respelling rather than the field.
+	assert.deepEqual(decodeInvoice(encodeInvoice(invoice)), invoice, "the LF spelling of the same value still decodes");
+});

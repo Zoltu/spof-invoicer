@@ -17,6 +17,8 @@
  *
  * The JSON is canonical — {@link serializeInvoice} writes it in a fixed key order with no whitespace, no absent optional field, text already composed to NFC and the optional icon's line endings normalized to LF with its surrounding whitespace trimmed, a byte-order mark at either end with it, and every number in its shortest exact spelling — and {@link decodeInvoice} refuses anything that is not byte-for-byte what this encoder writes, so a repeated key (the last one winning silently in `JSON.parse`) cannot hide inside a share string, and neither can an NFD spelling of the same visible text, an icon padded with whitespace or a byte-order mark at either end, nor a longer spelling of the same number.
  *
+ * Either party's `email` key carries free-text contact info — an email address, a phone number, a postal address — and it keeps that name however wide its value grows: widening a field adds no second spelling of it, so a payload a build wrote when the key held an email address alone still decodes and re-encodes byte for byte, and no schema version changes.
+ *
  * Money is transported as a decimal string of the asset's own units — `"150.00"`, never a JSON number and never base units — so every value survives the round trip exactly and a reader can convert it with `toBaseUnits` alone.
  * {@link decodeInvoice} derives the totals; they are never transported.
  *
@@ -96,6 +98,7 @@ function bytesToJson(bytes: Uint8Array): string {
  * The canonical JSON text of a validated invoice: fixed key order, no whitespace, absent optional fields omitted.
  * This is the wire form; changing it changes the format, so it is pinned by a test.
  * Items and the tax carry the canonical numeric spellings {@link validateInvoice} stored, so this emits exactly the one encoding the decoder accepts.
+ * A party's contact info is written under `email` on both parties — the name the field has always carried on the wire, whatever shape its value takes — so the field widening to free text moves no byte of a payload that existed before it.
  * The optional icon is written last, after `notes`, and carries the trimmed, NFC-composed text {@link validateInvoice} stored, so an icon is transported verbatim and an icon-less invoice keeps the payload it had before the field existed.
  */
 export function serializeInvoice(invoice: Invoice): string {
@@ -234,7 +237,7 @@ function decodePayload(payload: string): Invoice {
 	} catch (error) {
 		throw new ShareFormatError(`the payload is not JSON: ${boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX)}`);
 	}
-	// This byte-for-byte comparison, not `validateInvoice`, is what holds the wire format to one spelling per value: validation repairs the icon through the same canonicalization the encoder applies, so a payload whose icon is a second encoding of the same icon parses into a valid invoice and the comparison is what refuses it.
+	// This byte-for-byte comparison, not `validateInvoice`, is what holds the wire format to one spelling per value: validation repairs the icon through the same canonicalization the encoder applies, and it repairs a contact value's CRLF or lone-CR line endings to LF, so a payload whose icon or contact value is a second encoding of the same text parses into a valid invoice and the comparison is what refuses it.
 	const invoice = validateInvoice(parsed);
 	if (serializeInvoice(invoice) !== json) {
 		throw new ShareFormatError(nonCanonicalReason(parsed, invoice));
@@ -247,6 +250,7 @@ function decodePayload(payload: string): Invoice {
  *
  * Validation re-encodes the payee address to the one canonical spelling its family stores it in — the EIP-55 checksummed form for an EVM payee, the lower-case Bech32 spelling for a Zcash one — so a payload that names a payable address in another case that spells the same address parses into a valid invoice yet is not the canonical text — naming that divergence is the point, because the generic message would otherwise blame a key order or a number the payload spelled correctly.
  * Validation likewise repairs the icon with `util/icon-canonical-text.ts`'s `canonicalIconText`, the one definition of canonical icon text, so a payload that spells the icon with any fault that canonicalization repairs is one the model admits and this byte-for-byte comparison is what refuses.
+ * It also normalizes a party contact value's line endings to LF, so a contact value spelled with CRLF or a lone CR is another repair this comparison, and no other check, refuses.
  * That makes this comparison, not {@link validateInvoice}, the guard on the icon's single wire spelling: a decode path that validated a transported icon without it would admit a second encoding of one icon.
  * The reason below paraphrases that same rule, so a change to `canonicalIconText` has to update this reason rather than leave it naming a fault the canonicalization no longer covers.
  * Every other divergence is the JSON spelling itself.
