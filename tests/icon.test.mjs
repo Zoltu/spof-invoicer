@@ -1,4 +1,4 @@
-/** The suite for the invoice icon validator and the `data:` URL leaf: the round trip through `svgDataUrl`/`isSvgDataUrl` and the accept/refuse boundary of `validateIcon`. */
+/** The suite for the invoice icon validator, the `data:` URL leaf, and the icon canonicalization (`util/icon-canonical-text.ts` and `util/icon-byte-length.ts`): the round trip through `svgDataUrl`/`isSvgDataUrl`, the canonical text and its byte length, the accept/refuse boundary of `validateIcon`, and the compile-time refusal of a raw spelling at `iconByteLength`. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,8 +8,8 @@ import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS, iconFileSizeRefusal, icon
 import { iconByteLength } from "../app/js/util/icon-byte-length.js";
 import { canonicalIconText } from "../app/js/util/icon-canonical-text.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
-import { runTypeProbe } from "./helpers/type-probe.mjs";
 import { refusalError, refusalMessage } from "./helpers/refusals.mjs";
+import { runTypeProbe } from "./helpers/type-probe.mjs";
 
 const PREFIX = "data:image/svg+xml;base64,";
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
@@ -122,7 +122,6 @@ test("iconByteLength measures the UTF-8 bytes of the canonical text it is handed
 test("the canonical-icon-text brand refuses a raw spelling to the measurement at compile time", () => {
 	// The brand's promise is a compile error, not only a comment, so the probe carries a `@ts-expect-error` on a raw string handed to `iconByteLength` beside two calls that must compile: the canonicalizer's own result, and the gate's return value.
 	// Widening the measurement's parameter back to `string` consumes that expectation and fails the compile, and so does a `validateIcon` whose declared return type drops the brand it already produced.
-	// The probe source is generated from this committed string into a throwaway directory at run time, so no untracked path is required for a clean checkout to run the suite; its own `package.json` makes it an ES module and its tsconfig extends the root one, so the probe is checked under the project's own configuration — `verbatimModuleSyntax`, `isolatedModules`, `moduleDetection`, `noImplicitOverride`, `noFallthroughCasesInSwitch` and the rest — rather than a hand-copied flag list that can drift.
 	runTypeProbe({
 		prefix: "invoice-icon-brand-probe-",
 		fileName: "icon-brand.ts",

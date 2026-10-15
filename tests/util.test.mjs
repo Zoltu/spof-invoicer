@@ -1,4 +1,4 @@
-/** The suite for the util modules: decimal and base-unit conversion, the encoding primitives (hex, base58/base58xmr/base58check, bech32/bech32m, sha-256), the DOM helpers, error descriptions, and text bounding. */
+/** The suite for the util modules: decimal and base-unit conversion, the encoding primitives (hex, base58/base58xmr/base58check, bech32/bech32m, sha-256), the DOM helpers, error descriptions, text bounding, and the compile-time refusal of an `src` on a widened tag. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,9 +8,9 @@ import { base58, base58check, base58xmr, bech32, bech32m, hexToBytes, sha256, to
 import { describe, preview } from "../app/js/util/errors.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { boundRaw } from "../app/js/util/text.js";
-import { runTypeProbe } from "./helpers/type-probe.mjs";
 import { installFakeDocument } from "./helpers/dom.mjs";
 import { readEmittedModule, repoRelativeTarget, staticImportReach } from "./helpers/static-imports.mjs";
+import { runTypeProbe } from "./helpers/type-probe.mjs";
 
 const EIGHTEEN = 10n ** 18n;
 
@@ -418,7 +418,6 @@ test("preview reads a value's toStringTag under a guard", () => {
 
 test("DomAttributes refuses an src on a widened or union-typed tag at compile time, and admits it on an img", () => {
 	// The probe carries a `@ts-expect-error` on the union-typed tag and on a spread that smuggles a plain string into `src`, so a `tsc` run exits zero only while both lines are compile errors and the `<img>` call site still compiles.
-	// The probe source is generated from this committed string into a throwaway directory at run time, so no untracked path is required for a clean checkout to run the suite; its own `package.json` makes it an ES module and its tsconfig extends the root one, so the probe is checked under the project's own configuration — `verbatimModuleSyntax`, `isolatedModules`, `moduleDetection`, `noImplicitOverride`, `noFallthroughCasesInSwitch` and the rest — rather than a hand-copied flag list that can drift.
 	runTypeProbe({
 		prefix: "invoice-type-probe-",
 		fileName: "dom-src.ts",

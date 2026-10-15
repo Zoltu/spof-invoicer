@@ -5,7 +5,7 @@
  * Totals are never transported — {@link computeTotals} derives them from the invoice's own inputs, so a share string cannot smuggle in a total that disagrees with its own lines.
  * {@link validateInvoice} checks every field of an untrusted parsed object and fails closed with a field path; {@link createInvoice} is the same validation for an object built in memory.
  * The optional icon is the one field whose rules live outside this module: `invoice/icon.ts` bounds and canonicalizes it, and {@link validateInvoice} reads that gate's refusal under the `icon` path.
- * The icon is also the one text field whose surrounding whitespace is repaired rather than refused: that gate trims it and composes what remains, where {@link text} refuses any other field that starts or ends with whitespace.
+ * The icon is also the one text field whose surrounding whitespace is repaired rather than refused: that gate canonicalizes it, where {@link text} refuses any other field that starts or ends with whitespace.
  * That repair is what lets a payload carrying such an icon parse into a valid invoice here, so a shared payload whose icon is not the text this build writes is refused one layer up, by `invoice/codec.ts`'s byte-for-byte comparison rather than by this validator.
  *
  * Text is normalized to Unicode NFC as it is validated, so one visible string has a single encoded form and an NFD spelling of a name is not a second, equally valid spelling of the same invoice.
@@ -210,8 +210,8 @@ function payoutAddress(value, path, asset) {
 /**
  * The optional icon, validated by the icon gate and refused under this field's path.
  *
- * The gate owns the rules — the byte cap, the trim and NFC composition, the root `<svg>` dimension bound, and the construct denylist — and its refusal reaches the field this module read the value from, bounded with the same cap the other wrapped messages use, because the message names the rejected value.
- * The icon is the one text field whose surrounding whitespace the gate repairs rather than refuses — it trims the ends and composes what remains — where {@link text} refuses every other field that starts or ends with whitespace.
+ * The gate owns the rules — the byte cap, the canonicalization, the root `<svg>` dimension bound, and the construct denylist — and its refusal reaches the field this module read the value from, bounded with the same cap the other wrapped messages use, because the message names the rejected value.
+ * The icon is the one text field the gate repairs rather than refuses, a repair the module block above states the reason for.
  * The gate's own error travels with it as the `cause`, so a surface that acts on the refusal reads the class the validator raised — an `InvalidIconError` for a malformed document, a `TypeError` for a value that is not text — rather than a wording to match.
  */
 function iconField(value, path) {
@@ -361,11 +361,11 @@ export function computeTotals(invoice) {
 /**
  * Validate an untrusted value — a parsed share payload, a hand-built object — into an {@link Invoice}.
  *
- * Nothing is trusted, and the icon's surrounding whitespace is the one thing repaired rather than refused: every field must be present with the right shape, no unknown field is tolerated, and the money rules are enforced by {@link computeTotals}.
+ * Nothing is trusted: every field must be present with the right shape, no unknown field is tolerated, and the money rules are enforced by {@link computeTotals}.
  * Optional fields may be absent or `undefined`; both mean the same thing.
  * Dates are compared as `YYYY-MM-DD` strings, which orders identically to the calendar.
  * Text is composed to NFC, invisible formatting is refused, and money fields are folded to their canonical spelling.
- * An optional icon is read through {@link iconField}, so a decoded invoice carries the canonical text the icon gate returned — trimmed at its ends and composed to NFC, where every other text field refuses surrounding whitespace — and an icon the gate refuses is refused rather than kept.
+ * An optional icon is read through {@link iconField}, so a decoded invoice carries the canonical text the icon gate returned — the `util/icon-canonical-text.ts` spelling, the one repair the module block above states the reason for — and an icon the gate refuses is refused rather than kept.
  * The result is frozen.
  */
 export function validateInvoice(value) {

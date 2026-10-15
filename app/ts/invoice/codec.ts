@@ -245,8 +245,8 @@ function decodePayload(payload: string): Invoice {
  * Why a payload that parsed into a valid invoice is still not the text this encoder writes.
  *
  * Validation re-encodes the payee address to the one canonical spelling its family stores it in — the EIP-55 checksummed form for an EVM payee, the lower-case Bech32 spelling for a Zcash one — so a payload that names a payable address in another case that spells the same address parses into a valid invoice yet is not the canonical text — naming that divergence is the point, because the generic message would otherwise blame a key order or a number the payload spelled correctly.
- * Validation likewise repairs the icon with `util/icon-canonical-text.ts`'s `canonicalIconText`, the one definition of canonical icon text — the icon's surrounding whitespace trimmed, a byte-order mark at either end included, and the text that remains composed to NFC — so a payload that spells the icon with any of those faults is one the model admits and this byte-for-byte comparison is what refuses.
- * The reason below paraphrases that same rule, so a change to `canonicalIconText` has to update this reason rather than leave it naming a fault the canonicalization no longer covers; naming that divergence is the point, because the generic message lists four causes and the icon is not among them.
+ * Validation likewise repairs the icon with `util/icon-canonical-text.ts`'s `canonicalIconText`, the one definition of canonical icon text, so a payload that spells the icon with any fault that canonicalization repairs is one the model admits and this byte-for-byte comparison is what refuses.
+ * The reason below paraphrases that same rule, so a change to `canonicalIconText` has to update this reason rather than leave it naming a fault the canonicalization no longer covers.
  * Every other divergence is the JSON spelling itself.
  */
 function nonCanonicalReason(parsed: unknown, invoice: Invoice): string {

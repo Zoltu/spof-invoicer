@@ -11,7 +11,7 @@ export const MAX_ICON_SVG_BYTES = 8192;
 /**
  * The byte-cap refusal: the one wording of this bound, raised by the icon gate for a value past {@link MAX_ICON_SVG_BYTES} and shown by the create form under the icon field.
  *
- * The gate is the one reader that decides this bound, over the UTF-8 byte length of the canonical icon text, which `util/icon-canonical-text.ts`'s `canonicalIconText` gives as the icon text with its surrounding whitespace trimmed and the text that remains composed to NFC, and the create form shows the gate's own refusal for a value past it rather than wording a second copy that could drift out of step.
+ * The gate is the one reader that decides this bound, over the UTF-8 byte length of the canonical icon text, which `util/icon-canonical-text.ts`'s `canonicalIconText` defines, and the create form shows the gate's own refusal for a value past it rather than wording a second copy that could drift out of step.
  * The figure is {@link MAX_ICON_SVG_BYTES}'s and the unit is the one that measurement is in, so stating it here is what lets the gate that refuses an over-cap icon and the create form that shows that refusal say the same thing.
  */
 export function iconByteCapRefusal(bytes) {
@@ -41,7 +41,8 @@ export function iconFileSizeRefusal(bytes) {
  *
  * The create form does not reach it from a chosen file, because that path refuses a file past {@link MAX_ICON_FILE_BYTES} bytes before it reads the file, and a UTF-8 file decodes to at most one code unit per byte, so the text of a file that passes that check is never past this bound.
  * Only a caller that hands the gate a longer spelling directly sees this wording, which is the one way to reach the refusal.
- * It stands beside {@link iconByteCapRefusal} for the reason stated there, and the clause naming the check that ran before normalization is what tells this refusal apart from the composed-byte one rather than leaving the two to read as the same failure.
+ * It is stated in this module beside its own bound, {@link MAX_ICON_RAW_CODE_UNITS}, so the figure a caller is refused against and the reason it is refused with are one statement rather than two kept in step by hand.
+ * The clause naming the check that ran before normalization is what tells this refusal apart from the composed-byte one rather than leaving the two to read as the same failure.
  */
 export function iconRawCodeUnitRefusal(codeUnits) {
     return `The icon is ${codeUnits} characters before normalization, over the ${MAX_ICON_RAW_CODE_UNITS}-character limit.`;
