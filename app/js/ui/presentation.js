@@ -85,6 +85,15 @@ const MAX_PAYMENT_NETWORK_CHARS = Math.max(...SUPPORTED_CHAIN_IDS.map((chainId) 
 function noteLines(notes) {
     return boundMessage(notes, MAX_INVOICE_NOTES_CHARS).split("\n").map((line) => stripDisplayCharacters(line));
 }
+/**
+ * A party's contact info split into the lines the party block renders one detail row per.
+ *
+ * The split comes before the strip for the reason {@link noteLines} gives, so each line loses its own format characters and the contact keeps the lines it was stored with.
+ * Each line is bounded by {@link MAX_EMAIL_CHARS} — the widest of the field's legal forms, the legacy email spelling's own cap, which is wider than the per-line bound the model does not apply to that shape — so a stored email address is displayed whole rather than cut against a narrower cap.
+ */
+function contactLines(contact) {
+    return boundMessage(contact, MAX_EMAIL_CHARS).split("\n").map((line) => clip(line, MAX_EMAIL_CHARS));
+}
 /** A money figure with the asset's symbol, e.g. `357.000001 USDC`. */
 export function money(amount, symbol) {
     return `${amount.text} ${symbol}`;
@@ -168,12 +177,12 @@ export function buildInvoiceViewModel(invoice, today) {
         from: Object.freeze({
             role: "From",
             name: clip(invoice.payee.name, MAX_NAME_CHARS),
-            ...(invoice.payee.email === undefined ? {} : { email: clip(invoice.payee.email, MAX_EMAIL_CHARS) }),
+            ...(invoice.payee.email === undefined ? {} : { email: Object.freeze(contactLines(invoice.payee.email)) }),
         }),
         billTo: invoice.payer === undefined ? null : Object.freeze({
             role: "Bill to",
             name: clip(invoice.payer.name, MAX_NAME_CHARS),
-            ...(invoice.payer.email === undefined ? {} : { email: clip(invoice.payer.email, MAX_EMAIL_CHARS) }),
+            ...(invoice.payer.email === undefined ? {} : { email: Object.freeze(contactLines(invoice.payer.email)) }),
         }),
         dates: Object.freeze([
             Object.freeze({ label: "Issued", value: formatInvoiceDate(invoice.issued) }),

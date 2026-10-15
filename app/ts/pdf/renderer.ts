@@ -749,13 +749,18 @@ function fitIconBox(icon: IconRaster, side: number): { readonly width: number; r
 	return { width: icon.width * scale, height: icon.height * scale };
 }
 
+/** A party's contact lines as the document's own line records, one record per line the party's contact info carries, and none for a party that carries none. */
+function partyDetailLines(contact: readonly string[] | undefined): readonly PartyLine[] {
+	return contact === undefined ? [] : contact.map((line) => ({ text: line, size: SIZE.partyDetail, font: "sans", color: PALETTE.inkSoft }));
+}
+
 function drawParties(flow: Flow, view: InvoiceViewModel): void {
 	const blocks: PartyBlock[] = [
 		{
 			label: view.from.role,
 			lines: [
 				{ text: view.from.name, size: SIZE.partyName, font: "serifBold", color: PALETTE.ink },
-				...(view.from.email === undefined ? [] : ([{ text: view.from.email, size: SIZE.partyDetail, font: "sans", color: PALETTE.inkSoft }] satisfies readonly PartyLine[])),
+				...partyDetailLines(view.from.email),
 			],
 		},
 	];
@@ -764,7 +769,7 @@ function drawParties(flow: Flow, view: InvoiceViewModel): void {
 			label: view.billTo.role,
 			lines: [
 				{ text: view.billTo.name, size: SIZE.partyName, font: "serifBold", color: PALETTE.ink },
-				...(view.billTo.email === undefined ? [] : ([{ text: view.billTo.email, size: SIZE.partyDetail, font: "sans", color: PALETTE.inkSoft }] satisfies readonly PartyLine[])),
+				...partyDetailLines(view.billTo.email),
 			],
 		});
 	}

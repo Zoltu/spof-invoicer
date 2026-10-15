@@ -111,6 +111,16 @@ function noteLines(notes: string): readonly string[] {
 	return boundMessage(notes, MAX_INVOICE_NOTES_CHARS).split("\n").map((line) => stripDisplayCharacters(line));
 }
 
+/**
+ * A party's contact info split into the lines the party block renders one detail row per.
+ *
+ * The split comes before the strip for the reason {@link noteLines} gives, so each line loses its own format characters and the contact keeps the lines it was stored with.
+ * Each line is bounded by {@link MAX_EMAIL_CHARS} — the widest of the field's legal forms, the legacy email spelling's own cap, which is wider than the per-line bound the model does not apply to that shape — so a stored email address is displayed whole rather than cut against a narrower cap.
+ */
+function contactLines(contact: string): readonly string[] {
+	return boundMessage(contact, MAX_EMAIL_CHARS).split("\n").map((line) => clip(line, MAX_EMAIL_CHARS));
+}
+
 /** A money figure with the asset's symbol, e.g. `357.000001 USDC`. */
 export function money(amount: Amount, symbol: string): string {
 	return `${amount.text} ${symbol}`;
@@ -147,11 +157,15 @@ function paymentAddressText(address: PayoutAddress): string {
 	return shown;
 }
 
-/** One party line: the role label, the name, and the email that party carries. */
+/**
+ * One party line: the role label, the name, and the contact lines that party carries.
+ *
+ * The property keeps the model's own field name, the wire key both parties still spell `email`, and holds that field's lines rather than one string, so the party block draws one detail row per line.
+ */
 export interface InvoicePartyView {
 	readonly role: string;
 	readonly name: string;
-	readonly email?: string;
+	readonly email?: readonly string[];
 }
 
 /** A labelled document date, already rendered to its human spelling. */
@@ -288,12 +302,12 @@ export function buildInvoiceViewModel(invoice: Invoice, today: string): InvoiceV
 		from: Object.freeze({
 			role: "From",
 			name: clip(invoice.payee.name, MAX_NAME_CHARS),
-			...(invoice.payee.email === undefined ? {} : { email: clip(invoice.payee.email, MAX_EMAIL_CHARS) }),
+			...(invoice.payee.email === undefined ? {} : { email: Object.freeze(contactLines(invoice.payee.email)) }),
 		}),
 		billTo: invoice.payer === undefined ? null : Object.freeze({
 			role: "Bill to",
 			name: clip(invoice.payer.name, MAX_NAME_CHARS),
-			...(invoice.payer.email === undefined ? {} : { email: clip(invoice.payer.email, MAX_EMAIL_CHARS) }),
+			...(invoice.payer.email === undefined ? {} : { email: Object.freeze(contactLines(invoice.payer.email)) }),
 		}),
 		dates: Object.freeze([
 			Object.freeze({ label: "Issued", value: formatInvoiceDate(invoice.issued) }),

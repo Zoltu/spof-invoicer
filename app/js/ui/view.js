@@ -6,6 +6,7 @@
  * No number is trusted from the share string: the view model recomputes the money from the invoice's own line items.
  *
  * The document is a letterhead, the parties and dates, an itemized table, a prominent total-due block, notes/terms, and payment details.
+ * The letterhead's mark is the payee's own icon when the invoice carries one, in the place of the default brand mark rather than beside it, while the wordmark and tagline are drawn either way; a party's contact info is drawn as the lines it was stored with, one detail line per line.
  * Payment details is {@link renderPaymentSection}, the section `ui/payment-section.ts` owns and the payee's create screen draws from the same function: the payee address, the amount, and the payment link, each in its own single-line copy field, beside the symbol of that same URI.
  * The actions around it (back to Create, Share, Save as PDF, Pay) are chrome, and the Pay control is the injected-wallet flow's alone: a Zcash or Monero invoice is paid by the payment link and QR code the document carries, so it is offered no control that would lead nowhere.
  */
@@ -22,9 +23,11 @@ const ACTION_ERROR_MAX = 300;
 /** Render the official invoice document. The invoice is validated; the DOM is built once, never from markup. */
 export function renderInvoiceView(invoice, options) {
     const view = buildInvoiceViewModel(invoice, options.today);
-    // The payee's own icon, when the invoice carries one: it is the leaf's data URL in an image context, never the document's markup, and it is left out entirely rather than rendered empty.
-    const letterheadIcon = view.iconDataUrl === null ? null : h("img", { class: "letterhead-icon", src: view.iconDataUrl, alt: "" });
-    const letterhead = h("header", { class: "invoice-letterhead" }, h("div", { class: "letterhead-brand" }, letterheadIcon, h("span", { class: "invoice-logo", role: "img", "aria-label": "Invoicing brand mark" }), h("div", { class: "letterhead-name" }, h("span", { class: "letterhead-title" }, view.labels.brand), h("span", { class: "letterhead-tagline" }, view.labels.tagline))), h("div", { class: "letterhead-meta" }, h("h1", { class: "document-kind" }, view.labels.kind), h("span", { class: "document-number" }, view.documentNumber), h("span", { class: `status-badge status-${view.status.tone}` }, view.status.label)));
+    // A supplied icon replaces the default brand mark rather than accompanying it, so the letterhead draws exactly one of the two; the icon is the leaf's data URL in an image context, never the document's markup.
+    const letterheadMark = view.iconDataUrl === null
+        ? h("span", { class: "invoice-logo", role: "img", "aria-label": "Invoicing brand mark" })
+        : h("img", { class: "letterhead-icon", src: view.iconDataUrl, alt: "" });
+    const letterhead = h("header", { class: "invoice-letterhead" }, h("div", { class: "letterhead-brand" }, letterheadMark, h("div", { class: "letterhead-name" }, h("span", { class: "letterhead-title" }, view.labels.brand), h("span", { class: "letterhead-tagline" }, view.labels.tagline))), h("div", { class: "letterhead-meta" }, h("h1", { class: "document-kind" }, view.labels.kind), h("span", { class: "document-number" }, view.documentNumber), h("span", { class: `status-badge status-${view.status.tone}` }, view.status.label)));
     const parties = h("section", { class: "invoice-parties" }, partyBlock(view.from, "party-payee"), view.billTo === null ? null : partyBlock(view.billTo, "party-payer"), h("div", { class: "party party-dates" }, h("span", { class: "party-role" }, view.labels.dates), ...view.dates.map((date) => metaField(date.label, date.value))));
     const itemsTable = h("table", { class: "invoice-items" }, h("thead", {}, h("tr", {}, h("th", { scope: "col", class: "col-description" }, view.labels.description), h("th", { scope: "col", class: "col-qty num" }, view.labels.quantity), h("th", { scope: "col", class: "col-price num" }, view.labels.unitPrice), h("th", { scope: "col", class: "col-amount num" }, view.labels.amount))), h("tbody", {}, ...view.lines.map((line) => h("tr", { class: "invoice-item-row" }, h("td", { class: "item-description" }, line.description), h("td", { class: "item-qty num" }, line.quantity), h("td", { class: "item-price num" }, line.unitPrice), h("td", { class: "item-amount num" }, line.amount)))));
     const totalRows = [
@@ -109,7 +112,7 @@ function exportPdf(invoice, options) {
     return options.exportPdf(invoice);
 }
 function partyBlock(party, extraClass) {
-    return h("div", { class: `party ${extraClass}` }, h("span", { class: "party-role" }, party.role), h("span", { class: "party-name" }, party.name), party.email === undefined ? null : h("span", { class: "party-detail" }, party.email));
+    return h("div", { class: `party ${extraClass}` }, h("span", { class: "party-role" }, party.role), h("span", { class: "party-name" }, party.name), ...(party.email === undefined ? [] : party.email.map((line) => h("span", { class: "party-detail" }, line))));
 }
 function metaField(label, value) {
     return h("span", { class: "meta-field" }, h("span", { class: "meta-label" }, label), h("span", { class: "meta-value" }, value));

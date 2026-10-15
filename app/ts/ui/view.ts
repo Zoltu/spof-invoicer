@@ -6,6 +6,7 @@
  * No number is trusted from the share string: the view model recomputes the money from the invoice's own line items.
  *
  * The document is a letterhead, the parties and dates, an itemized table, a prominent total-due block, notes/terms, and payment details.
+ * The letterhead's mark is the payee's own icon when the invoice carries one, in the place of the default brand mark rather than beside it, while the wordmark and tagline are drawn either way; a party's contact info is drawn as the lines it was stored with, one detail line per line.
  * Payment details is {@link renderPaymentSection}, the section `ui/payment-section.ts` owns and the payee's create screen draws from the same function: the payee address, the amount, and the payment link, each in its own single-line copy field, beside the symbol of that same URI.
  * The actions around it (back to Create, Share, Save as PDF, Pay) are chrome, and the Pay control is the injected-wallet flow's alone: a Zcash or Monero invoice is paid by the payment link and QR code the document carries, so it is offered no control that would lead nowhere.
  */
@@ -45,16 +46,17 @@ export interface ViewOptions {
 export function renderInvoiceView(invoice: Invoice, options: ViewOptions): HTMLElement {
 	const view = buildInvoiceViewModel(invoice, options.today);
 
-	// The payee's own icon, when the invoice carries one: it is the leaf's data URL in an image context, never the document's markup, and it is left out entirely rather than rendered empty.
-	const letterheadIcon = view.iconDataUrl === null ? null : h("img", { class: "letterhead-icon", src: view.iconDataUrl, alt: "" });
+	// A supplied icon replaces the default brand mark rather than accompanying it, so the letterhead draws exactly one of the two; the icon is the leaf's data URL in an image context, never the document's markup.
+	const letterheadMark = view.iconDataUrl === null
+		? h("span", { class: "invoice-logo", role: "img", "aria-label": "Invoicing brand mark" })
+		: h("img", { class: "letterhead-icon", src: view.iconDataUrl, alt: "" });
 	const letterhead = h(
 		"header",
 		{ class: "invoice-letterhead" },
 		h(
 			"div",
 			{ class: "letterhead-brand" },
-			letterheadIcon,
-			h("span", { class: "invoice-logo", role: "img", "aria-label": "Invoicing brand mark" }),
+			letterheadMark,
 			h(
 				"div",
 				{ class: "letterhead-name" },
@@ -274,7 +276,7 @@ function partyBlock(party: InvoicePartyView, extraClass: string): HTMLElement {
 		{ class: `party ${extraClass}` },
 		h("span", { class: "party-role" }, party.role),
 		h("span", { class: "party-name" }, party.name),
-		party.email === undefined ? null : h("span", { class: "party-detail" }, party.email),
+		...(party.email === undefined ? [] : party.email.map((line) => h("span", { class: "party-detail" }, line))),
 	);
 }
 

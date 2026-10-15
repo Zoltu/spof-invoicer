@@ -166,9 +166,9 @@ test("the view model passes every clipped field through the display strip", () =
 	const model = buildInvoiceViewModel(invoice, "2026-10-03");
 	assert.equal(model.documentNumber, "#INV1");
 	assert.equal(model.from.name, "AnaExample");
-	assert.equal(model.from.email, "billing@example.com", "the payee email is stripped too");
+	assert.deepEqual(model.from.email, ["billing@example.com"], "the payee's contact line is stripped whole");
 	assert.equal(model.billTo.name, "Client Co", "the payer name is stripped too");
-	assert.equal(model.billTo.email, "payer@example.com", "the payer email is stripped too");
+	assert.deepEqual(model.billTo.email, ["payer@example.com"], "the payer's contact line is stripped whole");
 	assert.equal(model.tax.label, "VAT 19%", "the tax label is stripped too");
 	assert.equal(model.lines[0].description, "Design");
 	assert.deepEqual(model.notes, ["first line", "second line"], "the note's line structure survives the strip");

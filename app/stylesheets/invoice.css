@@ -90,7 +90,7 @@
 	background-size: contain;
 }
 
-/* The payee's own icon is drawn at the brand mark's own size, so one of any intrinsic size lines up with the logo beside it. */
+/* The payee's own icon is drawn at the brand mark's own size, so an icon of any intrinsic size stands where the default mark would have. */
 .letterhead-icon {
 	display: inline-block;
 	width: var(--letterhead-mark);
@@ -203,6 +203,7 @@
 	overflow-wrap: anywhere;
 }
 
+/* A party's contact lines are one child each of the `.party` grid, so they stack as detail rows without a layout rule of their own here. */
 .party-detail {
 	font-family: var(--inv-sans);
 	font-size: 0.875rem;

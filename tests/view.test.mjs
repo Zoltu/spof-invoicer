@@ -13,7 +13,7 @@ import { findAll, hasClass, inputValues, walk, textOf } from "./helpers/tree.mjs
 import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 import { SUPPORTED_CHAIN_IDS } from "../app/js/assets/registry.js";
 import { encodeInvoice } from "../app/js/invoice/codec.js";
-import { createInvoice } from "../app/js/invoice/model.js";
+import { MAX_EMAIL_CHARS, createInvoice } from "../app/js/invoice/model.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
@@ -204,7 +204,7 @@ test("the presentation module derives the shared view model both renderers consu
 	assert.equal(model.subtotal, "300 USDC");
 	assert.equal(model.tax.value, "57 USDC");
 	assert.equal(model.total, "357 USDC");
-	assert.equal(model.from.email, "billing@example.com");
+	assert.deepEqual(model.from.email, ["billing@example.com"], "the party's contact info is exposed as the lines the party block draws, one per line");
 	assert.deepEqual(model.dates, [
 		{ label: "Issued", value: "3 Oct 2026" },
 		{ label: "Due", value: "2 Nov 2026" },
@@ -1213,7 +1213,99 @@ test("the letterhead draws the invoice's own icon, and draws none when it carrie
 
 		const bare = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
 		assert.deepEqual(findAll(bare, (node) => hasClass(node, "letterhead-icon")), [], "an icon-less invoice draws none");
+		// The icon replaces the default mark rather than accompanying it, so the letterhead draws exactly one of the two, and the wordmark is drawn beside whichever it is.
+		assert.deepEqual(findAll(view, (node) => hasClass(node, "invoice-logo")), [], "a supplied icon leaves the default brand mark out of the letterhead");
+		assert.equal(
+			findAll(brand, (node) => hasClass(node, "letterhead-title")).map((node) => textOf(node))[0],
+			"Invoicing",
+			"the wordmark is drawn beside the icon",
+		);
+		const marks = findAll(bare, (node) => hasClass(node, "invoice-logo"));
+		assert.equal(marks.length, 1, "an icon-less invoice draws the default brand mark");
+		assert.equal(marks[0].tagName, "span", "as the background-image span rather than an image element");
+		assert.equal(marks[0].attributes.role, "img");
+		assert.equal(marks[0].attributes["aria-label"], "Invoicing brand mark", "and it keeps its accessible name");
 		assert.equal(buildInvoiceViewModel(invoiceFor(), VIEW_OPTIONS.today).iconDataUrl, null, "and its view model carries none");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a party's contact info draws one detail line per line, under the party it belongs to", () => {
+	const payeeContact = "Studio Example Ltd\n12 Example Street\n+44 20 7946 0000\nbilling@example.com";
+	const payerContact = "Accounts\nap@client.example";
+	const invoice = invoiceFor({
+		payee: { name: "Studio Example", address: PAYEE, email: payeeContact },
+		payer: { name: "Client Co", email: payerContact },
+	});
+	const model = buildInvoiceViewModel(invoice, VIEW_OPTIONS.today);
+	assert.deepEqual(model.from.email, payeeContact.split("\n"), "the view model states the payee's contact info as the lines the block draws");
+	assert.deepEqual(model.billTo.email, payerContact.split("\n"), "and the bill-to party's the same way");
+
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const payee = findAll(view, (node) => hasClass(node, "party-payee"))[0];
+		assert.deepEqual(
+			findAll(payee, (node) => hasClass(node, "party-detail")).map((node) => textOf(node)),
+			payeeContact.split("\n"),
+			"each line is its own detail line rather than one run carrying the line breaks inside it",
+		);
+		const payer = findAll(view, (node) => hasClass(node, "party-payer"))[0];
+		assert.deepEqual(
+			findAll(payer, (node) => hasClass(node, "party-detail")).map((node) => textOf(node)),
+			payerContact.split("\n"),
+			"and the bill-to party's contact lines draw under it",
+		);
+	} finally {
+		fake.restore();
+	}
+
+	// The party block is a grid, so each contact line takes a row of its own and the lines stack without a layout rule here; the print path inks them like the rest of the party text.
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const party = /^\.party \{([^}]*)\}/m.exec(invoiceCss)?.[1];
+	assert.ok(party !== undefined, "invoice.css declares the party block");
+	assert.match(party, /display:\s*grid;/, "the party block lays its children out as grid rows, which is what stacks the contact lines");
+	assert.match(
+		readFileSync(join(root, "app/stylesheets/print.css"), "utf8"),
+		/^\t\.party-detail,$/m,
+		"print.css forces the contact lines to the same black ink as the rest of the party text",
+	);
+});
+
+test("a contact line is displayed whole at its widest legal spelling, and the display strip runs line by line", () => {
+	// The legacy email spelling is a legal form of the same field, so a line is bounded by that spelling's own cap rather than by the narrower per-line contact bound: a stored address at the cap reaches the document whole.
+	const legacy = `${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length)}@example.com`;
+	assert.equal(legacy.length, MAX_EMAIL_CHARS);
+	const atCap = buildInvoiceViewModel(
+		invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: legacy } }),
+		VIEW_OPTIONS.today,
+	);
+	assert.deepEqual(atCap.from.email, [legacy], "a stored email at the legacy cap is one line, displayed whole");
+
+	// The split comes before the strip, so a format character the validator leaves unrefused is removed from the line that carries it while the line breaks between lines survive.
+	const stripped = buildInvoiceViewModel(
+		invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: "Studio \uFFF9Example\nbilling@example.com" } }),
+		VIEW_OPTIONS.today,
+	);
+	assert.deepEqual(
+		stripped.from.email,
+		["Studio Example", "billing@example.com"],
+		"the interlinear-annotation character the validator admits is stripped from its own line",
+	);
+
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(
+			invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: legacy } }),
+			{ ...VIEW_OPTIONS, notice: noticeRecorder() },
+		);
+		const payee = findAll(view, (node) => hasClass(node, "party-payee"))[0];
+		assert.deepEqual(
+			findAll(payee, (node) => hasClass(node, "party-detail")).map((node) => textOf(node)),
+			[legacy],
+			"and the document draws that whole line, with no clip annotation appended to it",
+		);
 	} finally {
 		fake.restore();
 	}
