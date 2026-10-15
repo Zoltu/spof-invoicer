@@ -3,7 +3,7 @@
  *
  * This is the payer's document in a portable, printable form: the same {@link InvoiceViewModel} the on-screen view draws (`ui/presentation.ts`), laid out on US Letter with pdf-lib's base-14 fonts — a serif voice for the document, a sans voice for its tabular data, a monospace voice for addresses.
  * Everything is vector.
- * pdf-lib cannot embed SVG and the export must make no network request for an image, so the letterhead is a drawn wordmark and rules rather than the on-screen logo file.
+ * pdf-lib cannot embed SVG and the export makes no network request of its own, so the letterhead's own mark is drawn rather than loaded: an accent square beside a wordmark and rules, or the payee's own icon in the square's place, rasterized from its data URL by the browser's canvas.
  *
  * The module is three layers:
  * - {@link buildInvoicePages} is the pure layout: the view model and a {@link FontMetrics} become one {@link PdfPageLayout} of {@link DrawOp}s per page with pagination already resolved.
@@ -219,7 +219,7 @@ const GAP = Object.freeze({
 	termsToSymbol: 18,
 });
 
-/** The gap between the letterhead icon's box and the brand mark the icon stands beside, so the payee's icon reads as its own element rather than as part of the wordmark. */
+/** The gap between the letterhead icon's box and the wordmark that starts past it, so the payee's icon reads as its own element rather than as part of the wordmark. */
 const LETTERHEAD_ICON_GAP = 12;
 
 /** The type scale, in points; every run of text names one of these. */
@@ -678,6 +678,8 @@ interface PartyLine {
 	readonly size: number;
 	readonly font: PdfFontRole;
 	readonly color: PdfColor;
+	/** True for a contact line, which is drawn as one run held to its column by a horizontal scale, and false for a name or a date, which wraps at the column's edge as the on-screen block wraps it. */
+	readonly singleRun: boolean;
 }
 
 interface PartyBlock {
@@ -686,27 +688,30 @@ interface PartyBlock {
 }
 
 /**
- * The letterhead: the payee's own icon when the invoice carries one, the brand mark, the wordmark and tagline, the document kind and number, and the status badge, closed by the heavy rule.
+ * The letterhead: the payee's own icon when the invoice carries one and the default accent mark when it does not, the wordmark and tagline, the document kind and number, and the status badge, closed by the heavy rule.
  *
- * The icon takes the letterhead's left edge and everything the brand draws shifts right past it, mirroring the on-screen letterhead's own order; its box is the wordmark block's height, so the icon stands as tall as the name beside it and the block grows no taller.
- * An invoice with no icon draws exactly what it drew before: no box is reserved, and the brand starts at the content edge.
+ * The icon takes the accent mark's place at the letterhead's left edge and the wordmark starts past its box, mirroring the on-screen letterhead's own order: a supplied icon replaces the default mark rather than standing beside it, and the wordmark and tagline are drawn either way.
+ * Its box is the wordmark block's height, so the icon stands as tall as the name beside it and the block grows no taller.
+ * An invoice with no icon draws exactly what it drew before: no box is reserved, and the accent mark and wordmark start at the content edge.
  */
 function drawLetterhead(flow: Flow, view: InvoiceViewModel, icon: IconRaster | null): void {
 	const top = flow.top;
 	const brandHeight = leading(SIZE.brand) + leading(SIZE.tagline);
 	const metaHeight = leading(SIZE.kind) + leading(SIZE.documentNumber) + 3 + 16;
 
-	let markLeft = CONTENT_LEFT;
-	if (icon !== null) {
+	// The wordmark's left edge sits 18 points past the accent mark's own edge — the mark's 11 points and the 7-point gap to the wordmark — and past the icon's box instead when the icon takes the mark's place.
+	let markLeft = CONTENT_LEFT + 18;
+	if (icon === null) {
+		flow.fill(CONTENT_LEFT, top + 1, 11, 11, PALETTE.accent);
+	} else {
 		const box = fitIconBox(icon, brandHeight);
 		flow.image(CONTENT_LEFT, top + (brandHeight - box.height) / 2, box.width, box.height, icon.bytes);
-		markLeft += box.width + LETTERHEAD_ICON_GAP;
+		markLeft = CONTENT_LEFT + box.width + LETTERHEAD_ICON_GAP;
 	}
 
-	flow.fill(markLeft, top + 1, 11, 11, PALETTE.accent);
-	flow.text(markLeft + 18, top, view.labels.brand, SIZE.brand, "sansBold", PALETTE.ink);
+	flow.text(markLeft, top, view.labels.brand, SIZE.brand, "sansBold", PALETTE.ink);
 	flow.text(
-		markLeft + 18,
+		markLeft,
 		top + leading(SIZE.brand),
 		view.labels.tagline.toUpperCase(),
 		SIZE.tagline,
@@ -751,7 +756,16 @@ function fitIconBox(icon: IconRaster, side: number): { readonly width: number; r
 
 /** A party's contact lines as the document's own line records, one record per line the party's contact info carries, and none for a party that carries none. */
 function partyDetailLines(contact: readonly string[] | undefined): readonly PartyLine[] {
-	return contact === undefined ? [] : contact.map((line) => ({ text: line, size: SIZE.partyDetail, font: "sans", color: PALETTE.inkSoft }));
+	return contact === undefined ? [] : contact.map((line) => ({ text: line, size: SIZE.partyDetail, font: "sans", color: PALETTE.inkSoft, singleRun: true }));
+}
+
+/**
+ * The horizontal scale that holds one party contact line to `maxWidth`: 1 when the line measures inside it, and otherwise the fraction of its natural width the width leaves.
+ * A contact line is drawn as the single run this holds inside the column, so the value reaches whoever reads or selects the document with no break inside it, however wide its glyphs measure.
+ */
+function fitRunScale(text: string, maxWidth: number, size: number, font: PdfFontRole, metrics: FontMetrics): number {
+	const measured = metrics.widthOfText(toPdfText(text), size, font);
+	return measured <= maxWidth ? 1 : maxWidth / measured;
 }
 
 function drawParties(flow: Flow, view: InvoiceViewModel): void {
@@ -759,7 +773,7 @@ function drawParties(flow: Flow, view: InvoiceViewModel): void {
 		{
 			label: view.from.role,
 			lines: [
-				{ text: view.from.name, size: SIZE.partyName, font: "serifBold", color: PALETTE.ink },
+				{ text: view.from.name, size: SIZE.partyName, font: "serifBold", color: PALETTE.ink, singleRun: false },
 				...partyDetailLines(view.from.email),
 			],
 		},
@@ -768,7 +782,7 @@ function drawParties(flow: Flow, view: InvoiceViewModel): void {
 		blocks.push({
 			label: view.billTo.role,
 			lines: [
-				{ text: view.billTo.name, size: SIZE.partyName, font: "serifBold", color: PALETTE.ink },
+				{ text: view.billTo.name, size: SIZE.partyName, font: "serifBold", color: PALETTE.ink, singleRun: false },
 				...partyDetailLines(view.billTo.email),
 			],
 		});
@@ -776,8 +790,8 @@ function drawParties(flow: Flow, view: InvoiceViewModel): void {
 	blocks.push({
 		label: view.labels.dates,
 		lines: view.dates.flatMap((date) => [
-			{ text: date.label.toUpperCase(), size: SIZE.dateLabel, font: "sansBold", color: PALETTE.muted },
-			{ text: date.value, size: SIZE.dateValue, font: "sans", color: PALETTE.ink },
+			{ text: date.label.toUpperCase(), size: SIZE.dateLabel, font: "sansBold", color: PALETTE.muted, singleRun: false },
+			{ text: date.value, size: SIZE.dateValue, font: "sans", color: PALETTE.ink, singleRun: false },
 		]),
 	});
 
@@ -791,8 +805,10 @@ function drawParties(flow: Flow, view: InvoiceViewModel): void {
 		flow.text(x, y, block.label.toUpperCase(), SIZE.roleLabel, "sansBold", PALETTE.muted);
 		y += leading(SIZE.roleLabel) + 3;
 		for (const line of block.lines) {
-			for (const wrapped of wrapText(line.text, columnWidth - 2, line.size, line.font, flow.metrics)) {
-				flow.text(x, y, wrapped, line.size, line.font, line.color);
+			const runs = line.singleRun ? [line.text] : wrapText(line.text, columnWidth - 2, line.size, line.font, flow.metrics);
+			for (const run of runs) {
+				const xScale = line.singleRun ? fitRunScale(run, columnWidth - 2, line.size, line.font, flow.metrics) : 1;
+				flow.text(x, y, run, line.size, line.font, line.color, xScale);
 				y += leading(line.size);
 			}
 			y += 1;

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { encodeInvoice } from "../app/js/invoice/codec.js";
 import { MAX_ICON_DIMENSION } from "../app/js/invoice/icon.js";
-import { InvalidInvoiceError, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ID_CHARS, MAX_NAME_CHARS, createInvoice } from "../app/js/invoice/model.js";
+import { InvalidInvoiceError, MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_DESCRIPTION_CHARS, MAX_ID_CHARS, MAX_NAME_CHARS, createInvoice } from "../app/js/invoice/model.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
@@ -501,29 +501,45 @@ function cappedName(length) {
 }
 
 /**
- * The tallest head a validated invoice can draw: a name and an email at the model's own caps, in the narrowest column the party grid gives, with both party columns filled at once — the payee, the bill-to and the dates make three blocks, so each column is a third of the content width rather than a half.
+ * A contact value of exactly `length` characters in the shape the model's caps leave as the tallest one a party can carry: as many per-line-cap lines as the total cap holds, the last of them short by the newlines the total counts between them.
  */
-function capMaxInvoice({ nameLength = MAX_NAME_CHARS, emailLength = MAX_EMAIL_CHARS } = {}) {
+function cappedContact(length) {
+	const lines = [];
+	let left = length;
+	while (left > 0 && lines.length < MAX_CONTACT_LINES) {
+		const size = Math.min(MAX_CONTACT_LINE_CHARS, left);
+		lines.push("m".repeat(size));
+		left -= size;
+		// Each line after the first carries the newline that separates it, which the value's own total cap counts too.
+		if (left > 0) left -= 1;
+	}
+	return lines.join("\n");
+}
+
+/**
+ * The tallest head a validated invoice can draw: a name and a contact value at the model's own caps, in the narrowest column the party grid gives, with both party columns filled at once — the payee, the bill-to and the dates make three blocks, so each column is a third of the content width rather than a half.
+ */
+function capMaxInvoice({ nameLength = MAX_NAME_CHARS, contactLength = MAX_CONTACT_CHARS } = {}) {
 	const name = cappedName(nameLength);
-	const email = `${"m".repeat(emailLength - "@example.com".length)}@example.com`;
+	const contact = cappedContact(contactLength);
 	assert.equal(name.length, nameLength);
-	assert.equal(email.length, emailLength);
+	assert.equal(contact.length, contactLength);
 	return invoiceFor({
 		due: "2026-11-02",
-		payee: { name, address: PAYEE, email },
-		payer: { name, email },
+		payee: { name, address: PAYEE, email: contact },
+		payer: { name, email: contact },
 		notes: "Thanks for your business.",
 	});
 }
 
 test("the blocks the layout draws without a fit check stay above the content floor at the invoice's field caps", async () => {
-	// The head blocks carry no fit check because the model's own field caps bound them, so what the bound rests on is the cap-max head — the longest name and email a validated invoice can carry, in the narrowest column three parties give — and a short fixture stands far clear of the floor without saying anything about it.
+	// The head blocks carry no fit check because the model's own field caps bound them, so what the bound rests on is the cap-max head — the longest name and contact value a validated invoice can carry, in the narrowest column three parties give — and a short fixture stands far clear of the floor without saying anything about it.
 	const plain = buildInvoicePages(
 		buildInvoiceViewModel(invoiceFor({ due: "2026-11-02", notes: "Thanks for your business." }), "2026-10-03"),
 		METRICS,
 	);
 	const capped = buildInvoicePages(buildInvoiceViewModel(capMaxInvoice(), "2026-10-03"), METRICS);
-	// The stand-in measures a half em per glyph, while the faces the export embeds measure wider — Helvetica `m` is 0.833 em and Times `n` 0.556 em — so the cap-max head sits higher above the floor here than the head drawn in the exported file; the same invoice is laid out again with the export's own metric source.
+	// The stand-in measures a half em per glyph while the faces the export embeds measure wider — Helvetica `m` is 0.833 em and Times `n` 0.556 em — so the same invoice is laid out with each metric source: the cap-max name wraps at each one's own column width, and a contact line is one run either way.
 	const exported = buildInvoicePages(buildInvoiceViewModel(capMaxInvoice(), "2026-10-03"), await exportFontMetrics());
 	assert.equal(plain.length, 1);
 	const lowest = (page) => Math.max(...headBlocks(page).flatMap(([, block]) => block.map(drawnBottomTop)));
@@ -532,9 +548,51 @@ test("the blocks the layout draws without a fit check stay above the content flo
 		assertHeadsAboveFloor(fixture, pages);
 	}
 	assert.ok(lowest(capped[0]) > lowest(plain[0]), "the cap-max head is the taller of the two, so it is the case the unchecked head blocks have to survive");
-	// The caps are what keeps the bound true, so the fixture pins the relationship rather than a figure: a name or an email one character past them is refused where the invoice is created.
+	// The caps are what keeps the bound true, so the fixture pins the relationship rather than a figure: a name or a contact value one character past them is refused where the invoice is created.
 	assert.throws(() => capMaxInvoice({ nameLength: MAX_NAME_CHARS + 1 }), InvalidInvoiceError, "a name past the cap is refused");
-	assert.throws(() => capMaxInvoice({ emailLength: MAX_EMAIL_CHARS + 1 }), InvalidInvoiceError, "an email past the cap is refused");
+	assert.throws(() => capMaxInvoice({ contactLength: MAX_CONTACT_CHARS + 1 }), InvalidInvoiceError, "a contact value past the cap is refused");
+});
+
+/** The text draws of a page's own parties block: the ops the layout emits between the letterhead's closing rule and the parties' own. */
+function partyTextOps(page) {
+	return headBlocks(page)[1][1].filter((op) => op.kind === "text");
+}
+
+test("a party's contact line is one unbroken run held inside the narrowest column the party grid gives", async () => {
+	const contact = cappedContact(MAX_CONTACT_CHARS);
+	const lines = contact.split("\n");
+	assert.equal(lines.length, MAX_CONTACT_LINES, "the fixture carries the most lines a contact value may hold");
+	assert.equal(lines[0].length, MAX_CONTACT_LINE_CHARS, "and its first line is the widest one a contact line may be");
+	const view = buildInvoiceViewModel(
+		invoiceFor({
+			due: "2026-11-02",
+			payee: { name: "Studio Example", address: PAYEE, email: contact },
+			payer: { name: "Client Co", email: contact },
+		}),
+		"2026-10-03",
+	);
+
+	// The stand-in measures every glyph at half an em and the export's faces measure wider, so the same run is checked against two measured widths.
+	for (const [fixture, metrics] of [["the half-em stand-in", METRICS], ["the export's own metrics", await exportFontMetrics()]]) {
+		const party = partyTextOps(buildInvoicePages(view, metrics)[0]);
+		// The dates' role label opens the third block, so the width between it and the content edge is exactly the column width the three blocks share.
+		const datesLabel = party.find((op) => op.text === view.labels.dates.toUpperCase());
+		assert.ok(datesLabel !== undefined, `${fixture}: the layout draws the role label that opens the third column`);
+		const columnWidth = CONTENT_RIGHT - datesLabel.x;
+
+		const runs = party.filter((op) => lines.includes(op.text));
+		assert.equal(runs.length, 2 * MAX_CONTACT_LINES, `${fixture}: every contact line of both parties is drawn as one run`);
+		for (const op of runs) {
+			const drawnWidth = metrics.widthOfText(op.text, op.size, op.font) * op.xScale;
+			assert.ok(op.xScale > 0 && op.xScale <= 1, `${fixture}: a contact run is drawn at a fraction of its natural width, never stretched`);
+			assert.ok(drawnWidth <= columnWidth + 0.01, `${fixture}: a contact run reaches ${drawnWidth} points, past its ${columnWidth}-point column`);
+		}
+		assert.ok(runs.some((op) => op.xScale < 1), `${fixture}: the widest contact line is compressed rather than wrapped`);
+
+		// Nothing in the block is a piece of a contact line, so no line was broken into fragments.
+		const fragments = party.filter((op) => op.text !== "" && contact.includes(op.text) && !lines.includes(op.text));
+		assert.deepEqual(fragments, [], `${fixture}: a contact line is drawn whole rather than as fragments`);
+	}
 });
 
 test("the totals block stays whole on one page", () => {
@@ -1349,6 +1407,36 @@ test("an icon invoice embeds one image XObject at the letterhead, and an icon-le
 	};
 	// Byte stability is asserted for the icon-less case alone: an icon invoice embeds the browser canvas encoder's PNG bytes, which two encoders need not produce identically.
 	assert.deepEqual(await renderInvoicePdf(invoiceFor(), "2026-10-03", unused), plain, "an icon-less export never reaches the rasterizer, and it is the case whose bytes are stable, so they are the ones it always produced");
+});
+
+/** The accent mark the letterhead draws as the default brand mark: the 11-by-11 fill it reserves for it. */
+function accentMarks(page) {
+	return headBlocks(page)[0][1].filter((op) => op.kind === "fill" && op.width === 11 && op.height === 11);
+}
+
+/** The wordmark a page's letterhead draws. */
+function wordmark(page) {
+	return headBlocks(page)[0][1].find((op) => op.kind === "text" && op.text === "Invoicing");
+}
+
+test("the letterhead draws the payee's icon in place of the default accent mark, and the mark alone when there is no icon", () => {
+	const raster = { bytes: ICON_PNG, width: 64, height: 32 };
+	const withIcon = buildInvoicePages(buildInvoiceViewModel(invoiceFor({ icon: ICON_SVG }), "2026-10-03"), METRICS, raster)[0];
+	const plain = buildInvoicePages(buildInvoiceViewModel(invoiceFor(), "2026-10-03"), METRICS)[0];
+
+	const icon = withIcon.ops.find((op) => op.kind === "image");
+	assert.ok(icon !== undefined, "the icon letterhead draws the icon's box");
+	assert.deepEqual(accentMarks(withIcon), [], "the icon stands in the mark's place, so the letterhead draws no accent mark beside it");
+	const marks = accentMarks(plain);
+	assert.equal(marks.length, 1, "an invoice with no icon still draws the one default accent mark");
+
+	const iconWordmark = wordmark(withIcon);
+	const plainWordmark = wordmark(plain);
+	assert.ok(iconWordmark !== undefined && plainWordmark !== undefined, "both letterheads draw the wordmark");
+	assertClose(icon.x, marks[0].x, "the icon takes the accent mark's own left edge");
+	assertClose(plainWordmark.y, iconWordmark.y, "the wordmark sits on the same line either way");
+	assert.ok(iconWordmark.x >= icon.x + icon.width, "the wordmark starts past the icon's box");
+	assert.ok(plainWordmark.x >= marks[0].x + marks[0].width, "as it starts past the accent mark on an invoice that has none");
 });
 
 test("the embedded-image count covers every page, not the first one", async () => {
