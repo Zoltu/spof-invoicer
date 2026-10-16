@@ -1,4 +1,4 @@
-/** The vendored ES-module bundles, derived from `scripts/fetch-vendor.mjs` SOURCES so the per-bundle scans in tests/vendor.test.mjs and tests/acceptance.test.mjs and the smoke test that imports every bundle walk the same list. */
+/** The vendored ES-module bundles, derived from `scripts/fetch-vendor.mjs` SOURCES so the per-bundle scans in tests/slow/vendor.test.mjs and tests/slow/acceptance.test.mjs and the smoke test that imports every bundle walk the same list. */
 
 import { SOURCES } from "../../scripts/fetch-vendor.mjs";
 

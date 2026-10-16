@@ -1,5 +1,5 @@
 /**
- * Fabricated gzip+tar archives for `tests/vendor-integrity.test.mjs`, this module's only importer: real ustar headers and a real gzip stream, so a test exercises the reader `scripts/vendor-tarball.mjs` uses rather than a stand-in.
+ * Fabricated gzip+tar archives for `tests/slow/vendor-integrity.test.mjs`, this module's only importer: real ustar headers and a real gzip stream, so a test exercises the reader `scripts/vendor-tarball.mjs` uses rather than a stand-in.
  */
 
 import { gzipSync } from "node:zlib";

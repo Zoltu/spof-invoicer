@@ -1,4 +1,4 @@
-/** The suite for the invoice icon validator, the `data:` URL leaf, and the icon canonicalization (`util/icon-canonical-text.ts` and `util/icon-byte-length.ts`): the round trip through `svgDataUrl`/`isSvgDataUrl`, the canonical text and its byte length, the accept/refuse boundary of `validateIcon`, and the compile-time refusal of a raw spelling at `iconByteLength`. */
+/** The suite for the invoice icon validator, the `data:` URL leaf, and the icon canonicalization (`util/icon-canonical-text.ts` and `util/icon-byte-length.ts`): the round trip through `svgDataUrl`/`isSvgDataUrl`, the canonical text and its byte length, the accept/refuse boundary of `validateIcon`. The compile-time refusal of a raw spelling at `iconByteLength` is asserted in `tests/slow/icon-type.test.mjs`. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";

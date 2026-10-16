@@ -1,4 +1,4 @@
-/** The suite for the util modules: decimal and base-unit conversion, the encoding primitives (hex, base58/base58xmr/base58check, bech32/bech32m, sha-256), the DOM helpers, error descriptions, text bounding, and the compile-time refusal of an `src` on a widened tag. */
+/** The suite for the util modules: decimal and base-unit conversion, the encoding primitives (hex, base58/base58xmr/base58check, bech32/bech32m, sha-256), the DOM helpers, error descriptions, text bounding. The compile-time refusal of an `src` on a widened tag is asserted in `tests/slow/util-type.test.mjs`. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";

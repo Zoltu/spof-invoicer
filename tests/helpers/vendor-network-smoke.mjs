@@ -1,6 +1,6 @@
 /**
  * Runs the page entry and every vendored bundle in a fresh module registry with all network APIs stubbed, then exits non-zero if any of them was touched.
- * Spawned by tests/vendor.test.mjs: Bun caches in-process module instances, so the entry only genuinely executes under the stubs here.
+ * Spawned by tests/slow/vendor.test.mjs: Bun caches in-process module instances, so the entry only genuinely executes under the stubs here.
  */
 
 import assert from "node:assert/strict";

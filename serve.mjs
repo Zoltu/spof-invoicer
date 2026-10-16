@@ -103,7 +103,7 @@ export function hostCaution(hostname) {
  * The caution to print when the server starts, naming what it serves.
  *
  * Every file under `app/` is served as-is and `ipfs add -r app` pins that same whole tree, so a file dropped under `app/` that should stay private — `app/wallet.json`, a key, a local note — is served and published.
- * The server deliberately performs no `.gitignore` filtering of the served tree; the repo's own acceptance gate (`tests/acceptance.test.mjs`) is what catches a stray file under `app/`, by requiring every committed file there to be a build output or an authored source.
+ * The server deliberately performs no `.gitignore` filtering of the served tree; the repo's own acceptance gate (`tests/slow/acceptance.test.mjs`) is what catches a stray file under `app/`, by requiring every committed file there to be a build output or an authored source.
  */
 export function serveCaution() {
 	return "serve: caution — every file under app/ is served as-is and `ipfs add -r app` pins the whole tree, so keep secrets out of app/; the acceptance gate's stray-file check is what flags an unexpected file there";

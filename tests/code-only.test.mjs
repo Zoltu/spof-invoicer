@@ -1,7 +1,7 @@
 /**
  * Focused tests for the comment/regex state machine in `tests/helpers/code-only.mjs`.
  *
- * The machine gates three consumers: `tests/acceptance.test.mjs` masks comments before it looks for network APIs and markup sinks, the style guard exempts comment-continuation lines from the indent rule with the same scan, and `tests/helpers/static-imports.mjs` reads the scan's per-character kinds to find the string spans a module's imports sit in, so a mis-read here hides real code, hides a violation, or reads an import out of a doc comment.
+ * The machine gates three consumers: `tests/slow/acceptance.test.mjs` masks comments before it looks for network APIs and markup sinks, the style guard exempts comment-continuation lines from the indent rule with the same scan, and `tests/helpers/static-imports.mjs` reads the scan's per-character kinds to find the string spans a module's imports sit in, so a mis-read here hides real code, hides a violation, or reads an import out of a doc comment.
  * Each case pins the behavior those consumers depend on: comments are masked, the mask preserves length and line count, only continuation lines are exempt, and `scanKinds` reports the same scan character by character — a string literal's characters are the `"string"` kind, which `codeOnly` keeps in its mask rather than blanking, while every other character is `"code"` or the comment kind it belongs to.
  */
 

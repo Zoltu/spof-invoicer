@@ -15,7 +15,7 @@ import { pinFor } from "../../scripts/vendor-pins.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 // The fixture must copy every scripts/ module the vendoring entry point imports, transitively, so a new helper module cannot be silently absent from fixture repos; deriving the list from the imports rather than restating it keeps the two in step.
-// The regex reads `from "./x.mjs"` specifiers only, so `tests/vendor.test.mjs` additionally checks the set against a broader scan of the scripts, catching a side-effect or dynamic import this narrower walk would miss.
+// The regex reads `from "./x.mjs"` specifiers only, so `tests/slow/vendor.test.mjs` additionally checks the set against a broader scan of the scripts, catching a side-effect or dynamic import this narrower walk would miss.
 function scriptImports(name) {
 	const source = readFileSync(join(root, "scripts", name), "utf8");
 	return [...source.matchAll(/from\s+"(\.\/[\w.-]+\.mjs)"/g)].map(([, specifier]) => specifier.slice(2));

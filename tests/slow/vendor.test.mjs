@@ -1,4 +1,4 @@
-/** The suite for the vendored tree and the spawned `bun run vendor` guards: that `vendor-src/` matches its SHA256 manifest, that the build copies the served files byte for byte, that every bundle is self-contained and network-free, and — through subprocess runs in a fixture repo — that the run's manifest, overwrite, stray, and acquisition guards each refuse what they must. Direct-call unit tests of the vendoring functions live in `tests/vendor-integrity.test.mjs`. */
+/** The suite for the vendored tree and the spawned `bun run vendor` guards: that `vendor-src/` matches its SHA256 manifest, that the build copies the served files byte for byte, that every bundle is self-contained and network-free, and — through subprocess runs in a fixture repo — that the run's manifest, overwrite, stray, and acquisition guards each refuse what they must. Direct-call unit tests of the vendoring functions live in `tests/slow/vendor-integrity.test.mjs`. */
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

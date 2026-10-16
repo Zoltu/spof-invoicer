@@ -1,7 +1,7 @@
 /**
  * The compile-probe harness the type-level suites share: a probe's source is written into a throwaway directory and compiled by the project's own `tsc` under the project's own tsconfig.
  *
- * `tests/icon.test.mjs` and `tests/util.test.mjs` each assert a type contract with one probe, so the temp directory, the generated `package.json` and `tsconfig.json`, and the `tsc` invocation live here rather than being copied into both suites.
+ * `tests/slow/clipboard-type.test.mjs`, `tests/slow/icon-type.test.mjs`, and `tests/slow/util-type.test.mjs` each assert a type contract with one probe, so the temp directory, the generated `package.json` and `tsconfig.json`, and the `tsc` invocation live here rather than being copied into each suite.
  * The probe source is generated at run time from a string committed in the calling suite, so no untracked path is required for a clean checkout to run either suite; the generated `package.json` makes the probe an ES module and the generated tsconfig extends the root one, so the probe is checked under the project's own configuration — `verbatimModuleSyntax`, `isolatedModules`, `moduleDetection`, `noImplicitOverride`, `noFallthroughCasesInSwitch` and the rest — rather than a hand-copied flag list that can drift.
  */
 

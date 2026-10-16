@@ -1,4 +1,4 @@
-/** The suite for the clipboard module: that `app/js/ui/clipboard.js` stays a neutral helper the share panel re-exports, that a copy hands over the value byte for byte, that the fallback selects a value the user can copy by hand whichever element holds it, and that the status the seam reports in is declared as the members it reads rather than as an element. */
+/** The suite for the clipboard module: that `app/js/ui/clipboard.js` stays a neutral helper the share panel re-exports, that a copy hands over the value byte for byte, that the fallback selects a value the user can copy by hand whichever element holds it, and that the status the seam reports in is declared as the members it reads rather than as an element. The compile-time half of that contract is asserted in `tests/slow/clipboard-type.test.mjs`. */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
