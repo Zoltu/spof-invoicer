@@ -7,7 +7,8 @@
 	"scripts": {
 		"build": "bun build.mjs",
 		"typecheck": "bun scripts/ensure-app-js.mjs && tsc -p tsconfig.json --noEmit",
-		"test": "bun test tests/",
+		"test": "bun test tests/ --path-ignore-patterns '**/slow/**'",
+		"test:all": "bun test tests/",
 		"serve": "bun serve.mjs",
 		"vendor": "bun scripts/fetch-vendor.mjs"
 	},

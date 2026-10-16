@@ -36,9 +36,10 @@ app/                        deployable root (the only thing served or pinned)
 build.mjs                   copy vendor .js -> copy images -> tsc
 serve.mjs                   dependency-free static server for app/, bound to loopback (127.0.0.1:80) by default
 tsconfig.json               ES2022 / NodeNext resolution, strict, source maps, inline sources
-tests/                      bun test (node:test API) suites, including the acceptance gate
-tests/acceptance.test.mjs   the repo's own end-to-end acceptance gate (see "Verifying the guarantees")
+tests/                      the fast in-memory `bun test` (node:test API) suites
 tests/style.test.mjs        the repo's own style gate, derived from `.editorconfig` (see "Verifying the guarantees")
+tests/slow/                 the slow suites (spawned builds and `tsc`, gzip/tar/sha512); run only by `bun run test:all`
+tests/slow/acceptance.test.mjs  the repo's own end-to-end acceptance gate (see "Verifying the guarantees")
 vendor-src/                 vendored third-party JS, licenses, and hand-written .d.ts shims
 vendor-src/SHA256SUMS       pinned versions + SHA256 of every vendor-src/ file except itself (refreshed by `bun run vendor`)
 scripts/fetch-vendor.mjs    re-acquire vendor-src/ (refuses drift; the result is committed)
@@ -60,7 +61,8 @@ The image input stays optional: `build.mjs` detects the absence of `assets-src/`
 | `bun run vendor`    | re-copy the pinned libraries, refresh `SHA256SUMS`; refuses a drifted tree |
 | `bun run build`     | copy vendor + images, then compile `app/ts/**/*.ts` → `app/js/**/*.js`     |
 | `bun run typecheck` | `tsc -p tsconfig.json --noEmit`; builds the tree first when absent         |
-| `bun test tests/`   | run the test suites (the acceptance gate included)                         |
+| `bun run test`      | run the fast in-memory suites (`tests/slow/` excluded)                     |
+| `bun run test:all`  | run every suite, `tests/slow/` included (the last step before commit/publish/deploy) |
 | `bun run serve`     | serve `app/` on <http://127.0.0.1:80> (loopback only; `--host` widens it)   |
 
 `bun run vendor` is guarded rather than a blind re-copy, and it runs several gates that each abort on a divergence: an upstream cross-check byte-compares each file the vendor script's `SOURCES` table vendors — the bundles, their source maps, and their license files — against its trusted copy, which is the pin-verified tarball where the run resolved one (an explicit `--tarball` path, or the cache tarball a first-time acquisition reads) and the installed file otherwise, a per-file overwrite guard overwrites a vendored file only while its trusted source's bytes — the pin-verified tarball where the run resolved one, the installed `node_modules` file otherwise — still match the blessed `SHA256SUMS`, a manifest re-bless guard rewrites `SHA256SUMS` only while the hashed tree still matches the committed manifest, and a stray-file gate refuses a `vendor-src/` that holds a file no `SOURCES` entry or hand-written file accounts for.
@@ -119,8 +121,8 @@ The runtime is [Bun](https://bun.sh): in this environment `node` is a shim for `
 - Build order is deliberate: vendor files and their hand-written `.d.ts` shims are copied into `app/js/vendor/` **before** `tsc` runs, so relative `.js` imports typecheck against the shims beside them.
   `allowJs` stays `false`, so `tsc` never emits or rewrites anything under `app/js/vendor/`.
 - Source maps are always on and inline the TypeScript source, so `app/js/main.js.map` carries `sources: ["../ts/main.ts"]` plus `sourcesContent`; the acceptance gate checks every emitted map for that, and for the embedded source still matching `app/ts/`.
-- `app/js/` is generated output and is not committed: `bun run build` reproduces it from `app/ts/**` and `vendor-src/**`, and both `bun test` and `bun run typecheck` build it once before reading it when it is absent (see `scripts/ensure-app-js.mjs`), so the suites can import it and `tsc` can resolve the vendored `.d.ts` shims on a fresh checkout.
-  `tests/acceptance.test.mjs` builds into a scratch directory and compares the whole served tree byte for byte, so a working-tree `app/js/**` cannot silently drift from `app/ts/**`.
+- `app/js/` is generated output and is not committed: `bun run build` reproduces it from `app/ts/**` and `vendor-src/**`, and both the test suites and `bun run typecheck` build it once before reading it when it is absent (see `scripts/ensure-app-js.mjs`), so the suites can import it and `tsc` can resolve the vendored `.d.ts` shims on a fresh checkout.
+  `tests/slow/acceptance.test.mjs` builds into a scratch directory and compares the whole served tree byte for byte, so a working-tree `app/js/**` cannot silently drift from `app/ts/**`.
 - The pdf-lib bundle (~1.4 MB) is imported lazily on the first PDF export, so it stays out of first load.
 
 ## Style and conventions
@@ -242,7 +244,7 @@ zec: {
 Each entry also carries a `family` that selects which address rules the address dispatcher (`app/ts/wallet/payout-address.ts`) applies to a payee address, and an entry that states no family is taken as the default EVM family; the dispatcher applies that module's own single statement of those rules — `assetShapeFault`, the same function the load-time gate applies, over the fields the asset states — so a caller-built asset fails closed on every shape the loader refuses, and an asset either reader admits for its shape is not one the other refuses: a non-EVM asset that states a contract token's kind, carries a contract address, or names a network other than its family's slug is refused before those rules run, an EVM asset must state a `kind` of `native` or `erc20` (a contract address is never inferred to be a token from its presence), an `erc20` contract address must be EIP-55 checksummed, and a stated `decimals` must be 0–255.
 It does not restate what describes a registry entry rather than an asset being paid from — the `id`, `symbol`, and `name` fields, the requirement that a `kind` and a `decimals` be present, and the registry-wide `(chainId, address)` uniqueness check — so a partial asset that states only what the dispatcher reads still validates for its grammar (a minimal `{ family }` privacy-chain asset, or an EVM `{ family, kind }` coin), which is the one place the dispatcher is laxer than the loader — a presence requirement the two readers state once, in `COMPLETE_ASSET_SHAPE` and `STATED_ASSET_SHAPE`, rather than each in its own checks.
 A new network needs at least one asset and a `CHAIN_NAMES` entry in `app/ts/ui/network-labels.ts`, which `requireNamedNetworks` holds at module load to the registry's own network set — the app refuses to run while a supported network has no human name there, so a network cannot ship rendering as its raw id; `DEFAULT_CHAIN_ID` and `SUPPORTED_CHAIN_IDS` then include it automatically, and the injected-wallet flow narrows to the EVM ids through `SUPPORTED_EVM_CHAIN_IDS` and `requireEvmChain` before it asks the wallet to `wallet_switchEthereumChain`.
-After editing the registry run `bun run build && bun test tests/` — `tests/assets.test.mjs` checks the invariants, and the acceptance gate checks the built tree is fresh.
+After editing the registry run `bun run build && bun run test:all` — `tests/assets.test.mjs` checks the invariants, and the acceptance gate checks the built tree is fresh.
 
 An invoice names its asset by id and its chain, but neither is trusted at payment time: `buildPaymentPlan` re-derives the asset from the registry, requires the chain to match it, re-checks that the payee address is payable (not the zero address, not the token contract itself), and recomputes the amount from the line items.
 A payload cannot introduce an asset, a token address, or a total the registry does not know.
@@ -294,7 +296,7 @@ The QR symbol drawn for an invoice is that same URI: the link text and the code 
 - **No auto-connect.** Importing the wallet modules touches no provider.
   Providers are discovered, `eth_requestAccounts` is sent, and the chain is read only from the payer's own click on "Connect wallet & pay"; the balance read is advisory and the transaction is built immediately before it is sent.
   The app re-reads the wallet's chain (`eth_chainId`) immediately before it builds the transaction (`app/ts/wallet/payment.ts`), so a wallet that switches networks after the earlier check refuses the transfer instead of broadcasting it on the wrong chain; the transaction object also names the invoice's own `chainId`, but that field is not part of EIP-1474's `eth_sendTransaction` params and some wallets ignore it, so the app's own pre-send re-read — not the field — is the guarantee.
-  `tests/acceptance.test.mjs` asserts zero provider calls during load, render, and panel open.
+  `tests/slow/acceptance.test.mjs` asserts zero provider calls during load, render, and panel open.
 - **Nothing transported is trusted.** The invoice is validated field by field with size caps and character checks (its text fields are refused control characters and the invisible-formatting class, Unicode's `Default_Ignorable_Code_Point`, which deliberately leaves the interlinear-annotation and Egyptian hieroglyph format controls, U+FFF9–FFFB and U+13430–1343F, unrefused), the payload must be canonical JSON at the current version, and the amount, recipient, asset, and chain are re-derived at payment time. A wallet's own announced label is display text rather than a stored field, so control, invisible, and bidi characters are stripped from it by the display-stripping pass before it can become a payer's picker entry, keeping one wallet from presenting itself as another.
   A hostile payload becomes a bounded notice whose control, invisible, and bidi characters are stripped before display — the same treatment a wallet's own label gets — never markup, never a transaction.
 - **Everything served is local.** No remote fonts (the stacks are system fonts), no remote images — both SVGs are local (`images/logo.svg` from the letterhead's stylesheet rule, `images/favicon.svg` from the shell's `link`) — and every `src`/`href`/`url()` the shell and the stylesheets name is relative to `app/`, with one exception that fetches nothing: the optional invoice icon reaches its `<img>` as the `data:image/svg+xml;base64,…` URL the page builds from the payload's own text, an inline value the browser decodes in place, so no reference of any kind resolves to an origin but the app's own.
@@ -317,10 +319,16 @@ And `require-trusted-types-for` is only enforced by Chromium; the innerHTML-free
 bun install
 bun run build          # vendor + images + tsc into app/
 bun run typecheck      # tsc --noEmit, strict (builds app/js/ first when it is absent)
-bun test tests/        # every suite, acceptance gate included
+bun run test           # the fast in-memory suites (`tests/slow/` excluded)
+bun run test:all       # every suite, acceptance and vendor gates included — the last step before commit/publish/deploy
 ```
 
-`tests/acceptance.test.mjs` is the repo's own acceptance gate.
+The suites split on cost, not on module: `bun run test` runs only the fast in-memory suites, and the ones that leave the process live under `tests/slow/` and run only in `bun run test:all`, the last step before commit, publish, or deploy.
+`tests/slow/acceptance.test.mjs` spawns `build.mjs` into a scratch root and byte-compares the whole `app/` tree (dominated by a `tsc` build per run), and `tests/slow/vendor.test.mjs`, `tests/slow/vendor-integrity.test.mjs`, and `tests/slow/vendor-path-guards.test.mjs` spawn `scripts/fetch-vendor.mjs` (or a network-smoke child) against scratch repositories and do real gzip, tar, and sha512 work.
+Three otherwise-fast suites — `clipboard`, `util`, and `icon` — keep their in-memory cases in `bun run test`; the one case each runs that spawns `tsc -p <probe> --noEmit` through `tests/helpers/type-probe.mjs` is the only part moved out, into `tests/slow/clipboard-type.test.mjs`, `tests/slow/util-type.test.mjs`, and `tests/slow/icon-type.test.mjs`.
+`bun run test` excludes `tests/slow/` through `bun test`'s own `--path-ignore-patterns '**/slow/**'`, so no test file is renamed or left undiscovered; `bun run test:all` is `bun test tests/` with no exclusion.
+
+`tests/slow/acceptance.test.mjs` is the repo's own acceptance gate.
 It composes one invoice at the module level — `createInvoice` → `encodeShare` → the base32 blob → decode — and then drives the payer's half through the real seams: the fragment is rendered in the real shell and router, "Save as PDF" is clicked and the downloaded bytes are reopened with pdf-lib (one US Letter page, the project's own metadata, and a layout carrying every figure the document shows), and "Pay" runs against a mock EIP-1193 wallet (asserting the exact `eth_sendTransaction` params and the returned hash).
 A privacy-chain invoice goes through the same shared link: its rendered document must carry the payment link and the symbol of that same URI, one element per module, with no injected-wallet control offered for it, and a mainnet unified (`u1`) Zcash payee is covered the same way.
 A payee address on another network is refused there by name: a testnet unified `utest1` container never renders a document, and the notice the payer sees names the network that refused it.
@@ -337,7 +345,7 @@ Its scope is the whole tree minus what `.gitignore` excludes, which is why `.orc
 It reads only the root `.editorconfig` (and reports a missing `root = true` there), so a nested `.editorconfig` anywhere in the swept tree is reported as a problem rather than silently ignored: the gate never reports green against rules an editor would not use.
 It reports each violation as `path:line — reason`.
 
-The other suites cover their modules: `codec`, `icon`, `util`, `qr`, `assets`, `address`, `zcash-address`, `monero-address`, `payout-address`, `erc20`, `wallet`, `wallet-bounds`, `pay-flow`, `payment-link`, `pdf`, `view`, `ui`, `clipboard`, `display-hygiene`, `security`, `serve`, `build`, `style`, `code-only`, `static-imports`, and the three vendor suites (`vendor`, `vendor-integrity`, `vendor-path-guards`).
+The other suites cover their modules: `codec`, `icon`, `util`, `qr`, `assets`, `address`, `zcash-address`, `monero-address`, `payout-address`, `erc20`, `wallet`, `wallet-bounds`, `pay-flow`, `payment-link`, `pdf`, `view`, `ui`, `clipboard`, `display-hygiene`, `security`, `serve`, `build`, `style`, `code-only`, `static-imports`, and the three vendor suites (`tests/slow/vendor`, `tests/slow/vendor-integrity`, `tests/slow/vendor-path-guards`, run only by `bun run test:all`).
 
 ## Testing with a real wallet
 
@@ -374,7 +382,7 @@ No Node test can exercise it — it is Firefox's own CSP decision about an eleme
 This check is an unmet release gate too: the optional invoice icon's entire containment rests on the premise that a browser renders an SVG document loaded as an image — an `HTMLImageElement`'s `src`, or a `<canvas>` drawn from one — in secure animated image mode, where the document's own script does not run and the resources it references are not fetched while its animation is permitted and runs, so the icon gate's construct refusals are defense-in-depth and that image context is the boundary — with one refusal the boundary does not supply, because the mode permits animation: the SMIL and SVG animation elements the gate refuses by local name are what keeps an accepted icon from animating in the payer's page.
 
 No Node test can exercise it: the premise is the engine's own image-context restriction, and the suites' document stub is a minimal DOM with no SVG renderer, so what a browser does with the bytes an image sink is handed is observed nowhere in this repository.
-The source-level half is enforced by `tests/acceptance.test.mjs` — the icon text reaches no markup sink, no `DOMParser`, no `createElementNS`, and no second `data:` URL, and `h()`'s `src` allow-list admits only the leaf's branded data URL — and the icon suite asserts the gate's own refusals, but neither observes the engine's behavior, which is what the containment actually rests on.
+The source-level half is enforced by `tests/slow/acceptance.test.mjs` — the icon text reaches no markup sink, no `DOMParser`, no `createElementNS`, and no second `data:` URL, and `h()`'s `src` allow-list admits only the leaf's branded data URL — and the icon suite asserts the gate's own refusals, but neither observes the engine's behavior, which is what the containment actually rests on.
 `app/index.html` ships `img-src 'self' data:` and the icon's three image sinks on that premise, so no release should go out until it has been confirmed in a real browser and its result recorded here.
 
 1. `bun run build && bun run serve`, then open <http://127.0.0.1:80> in Chromium and in Firefox.
@@ -396,7 +404,7 @@ ipfs add -r app          # or an equivalent pinning service / `ipfs-cli`
 ```
 
 `ipfs add -r app` pins the entire `app/` tree with no filtering, so anything dropped under `app/` — a key, a note, `app/wallet.json` — is published along with the app.
-The build and the server do not gate that: the repo's acceptance gate (`tests/acceptance.test.mjs`) is what catches a stray file, by requiring every file under `app/` to be a build output or an authored source, so keep secrets out of `app/` and let the gate's stray-file check keep it that way.
+The build and the server do not gate that: the repo's acceptance gate (`tests/slow/acceptance.test.mjs`) is what catches a stray file, by requiring every file under `app/` to be a build output or an authored source, so keep secrets out of `app/` and let the gate's stray-file check keep it that way.
 
 Then pin the returned directory CID, and serve it from an origin that holds nothing but this app: a per-CID subdomain gateway (`https://<cid>.ipfs.<gateway>/`), or a domain that serves only this directory.
 A path-style gateway (`https://<gateway>/ipfs/<cid>/index.html`) serves every other CID from this app's own origin, so a sibling page's script can frame this app and read its fragment; the fragment-privacy guarantee above holds only on a per-CID or otherwise dedicated origin, where no other page shares the app's origin.

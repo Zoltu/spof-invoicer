@@ -10,7 +10,6 @@ import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { boundRaw } from "../app/js/util/text.js";
 import { installFakeDocument } from "./helpers/dom.mjs";
 import { readEmittedModule, repoRelativeTarget, staticImportReach } from "./helpers/static-imports.mjs";
-import { runTypeProbe } from "./helpers/type-probe.mjs";
 
 const EIGHTEEN = 10n ** 18n;
 
@@ -414,30 +413,6 @@ test("preview reads a value's toStringTag under a guard", () => {
 	assert.equal(preview(new Date(0)), "[object Date]");
 	assert.equal(preview(new Map()), "[object Map]");
 	assert.equal(preview(Object.create(null)), "[object Object]", "an object with no prototype still renders through the engine");
-});
-
-test("DomAttributes refuses an src on a widened or union-typed tag at compile time, and admits it on an img", () => {
-	// The probe carries a `@ts-expect-error` on the union-typed tag and on a spread that smuggles a plain string into `src`, so a `tsc` run exits zero only while both lines are compile errors and the `<img>` call site still compiles.
-	runTypeProbe({
-		prefix: "invoice-type-probe-",
-		fileName: "dom-src.ts",
-		failureMessage: "the type probe must compile cleanly under the project's own configuration, so an src is a compile error on a union-typed tag and on a spread, and still admitted on an img",
-		source: (specifier) => `/** The compile-time probe for the DomAttributes src sink, compiled by tests/util.test.mjs under the project's own tsconfig. */
-import { h } from "${specifier("app/ts/util/dom.js")}";
-import { svgDataUrl } from "${specifier("app/ts/util/svg-data-url.js")}";
-
-const url = svgDataUrl(\`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"></svg>\`);
-
-declare const widenedTag: keyof HTMLElementTagNameMap;
-// @ts-expect-error an src on a union-typed tag is a compile error, not only a runtime refusal
-h(widenedTag, { src: url });
-
-h("img", { src: url, alt: "" });
-
-// @ts-expect-error a spread that smuggles a plain string into src is a compile error, so the brand holds at the spread too
-h("img", { ...{ src: "logo.svg" } });
-`,
-	});
 });
 
 test("the emitted markup builder's static graph reaches no encoding or vendored module", () => {

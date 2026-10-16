@@ -13,23 +13,23 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { codeOnly, languageFor } from "./helpers/code-only.mjs";
-import { installInteractiveDocument } from "./helpers/dom.mjs";
-import { blockNetwork } from "./helpers/network-block.mjs";
-import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_UNIFIED_PAYEE } from "./helpers/payee-vectors.mjs";
-import { imageXObjects } from "./helpers/pdf-images.mjs";
-import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
-import { assertSymbolCells } from "./helpers/qr-symbol.mjs";
-import { refusalError, refusalMessage } from "./helpers/refusals.mjs";
-import { servedTreeProblems } from "./helpers/served-drift.mjs";
-import { USDC_LOWER } from "./helpers/tokens.mjs";
-import { findAll, findButton, hasClass, paymentValues, textOf } from "./helpers/tree.mjs";
-import { SERVED_BUNDLES } from "./helpers/vendor-bundles.mjs";
-import { nextTask, waitFor } from "./helpers/wait.mjs";
-import { ACCOUNT, TX_HASH, installWindow, mockProvider } from "./helpers/wallet-mock.mjs";
-import { listFiles } from "../scripts/vendor-manifest.mjs";
-import { parseHash } from "../app/js/app/router.js";
-import { bootApp, mountShell, renderRoute } from "../app/js/app/shell.js";
+import { codeOnly, languageFor } from "../helpers/code-only.mjs";
+import { installInteractiveDocument } from "../helpers/dom.mjs";
+import { blockNetwork } from "../helpers/network-block.mjs";
+import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_UNIFIED_PAYEE } from "../helpers/payee-vectors.mjs";
+import { imageXObjects } from "../helpers/pdf-images.mjs";
+import { assertSymbolCellsInDom } from "../helpers/qr-dom.mjs";
+import { assertSymbolCells } from "../helpers/qr-symbol.mjs";
+import { refusalError, refusalMessage } from "../helpers/refusals.mjs";
+import { servedTreeProblems } from "../helpers/served-drift.mjs";
+import { USDC_LOWER } from "../helpers/tokens.mjs";
+import { findAll, findButton, hasClass, paymentValues, textOf } from "../helpers/tree.mjs";
+import { SERVED_BUNDLES } from "../helpers/vendor-bundles.mjs";
+import { nextTask, waitFor } from "../helpers/wait.mjs";
+import { ACCOUNT, TX_HASH, installWindow, mockProvider } from "../helpers/wallet-mock.mjs";
+import { listFiles } from "../../scripts/vendor-manifest.mjs";
+import { parseHash } from "../../app/js/app/router.js";
+import { bootApp, mountShell, renderRoute } from "../../app/js/app/shell.js";
 import {
 	MAX_JSON_BYTES,
 	MAX_PAYLOAD_CHARS,
@@ -40,8 +40,8 @@ import {
 	encodeInvoice,
 	encodeInvoiceBlob,
 	serializeInvoice,
-} from "../app/js/invoice/codec.js";
-import { MAX_ICON_DIMENSION, MAX_ICON_SVG_BYTES } from "../app/js/invoice/icon.js";
+} from "../../app/js/invoice/codec.js";
+import { MAX_ICON_DIMENSION, MAX_ICON_SVG_BYTES } from "../../app/js/invoice/icon.js";
 import {
 	InvalidInvoiceError,
 	UnsupportedInvoiceVersionError,
@@ -51,20 +51,20 @@ import {
 	MAX_EMAIL_CHARS,
 	computeTotals,
 	createInvoice,
-} from "../app/js/invoice/model.js";
-import { SHARE_FRAGMENT_PREFIX, buildShareUrl, decodeShare, encodeShare } from "../app/js/invoice/share.js";
-import { buildPaymentLink } from "../app/js/payment/links.js";
-import { QR_SYMBOL, buildInvoicePages, downloadPdf, invoiceFileName, renderInvoicePdf } from "../app/js/pdf/renderer.js";
-import { renderCreateView } from "../app/js/ui/create.js";
-import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
-import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
-import { base32nopad, bech32m, utf8 } from "../app/js/util/encoding.js";
-import { encodeQr } from "../app/js/util/qr.js";
-import { svgDataUrl } from "../app/js/util/svg-data-url.js";
-import { PDFDocument } from "../app/js/vendor/pdf-lib/pdf-lib.esm.js";
-import { WalletClient, toHexQuantity } from "../app/js/wallet/eip1193.js";
-import { TestnetUnifiedAddressError } from "../app/js/wallet/zcash-address.js";
-import { encodeBalanceOf, encodeTransfer } from "../app/js/wallet/erc20.js";
+} from "../../app/js/invoice/model.js";
+import { SHARE_FRAGMENT_PREFIX, buildShareUrl, decodeShare, encodeShare } from "../../app/js/invoice/share.js";
+import { buildPaymentLink } from "../../app/js/payment/links.js";
+import { QR_SYMBOL, buildInvoicePages, downloadPdf, invoiceFileName, renderInvoicePdf } from "../../app/js/pdf/renderer.js";
+import { renderCreateView } from "../../app/js/ui/create.js";
+import { UNSUPPORTED_WALLET_MESSAGE } from "../../app/js/ui/pay.js";
+import { buildInvoiceViewModel } from "../../app/js/ui/presentation.js";
+import { base32nopad, bech32m, utf8 } from "../../app/js/util/encoding.js";
+import { encodeQr } from "../../app/js/util/qr.js";
+import { svgDataUrl } from "../../app/js/util/svg-data-url.js";
+import { PDFDocument } from "../../app/js/vendor/pdf-lib/pdf-lib.esm.js";
+import { WalletClient, toHexQuantity } from "../../app/js/wallet/eip1193.js";
+import { TestnetUnifiedAddressError } from "../../app/js/wallet/zcash-address.js";
+import { encodeBalanceOf, encodeTransfer } from "../../app/js/wallet/erc20.js";
 import {
 	WrongChainError,
 	buildPaymentPlan,
@@ -72,9 +72,9 @@ import {
 	ensureWalletChain,
 	readBalance,
 	sendPayment,
-} from "../app/js/wallet/payment.js";
+} from "../../app/js/wallet/payment.js";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const appDir = join(root, "app");
 const jsDir = join(appDir, "js");
 const vendorDir = join(jsDir, "vendor");

@@ -8,14 +8,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { servedVendorFile } from "../build.mjs";
-import { HAND_WRITTEN_FILES, SOURCES, blessManifest, expectedVendorFiles } from "../scripts/fetch-vendor.mjs";
-import { MANIFEST_FILE, listFiles, parseManifest, sha256, verifyTree } from "../scripts/vendor-manifest.mjs";
-import { TARBALL_BYTE_CAP } from "../scripts/vendor-tarball.mjs";
-import { SERVED_BUNDLES } from "./helpers/vendor-bundles.mjs";
-import { VENDOR_SCRIPTS, copyVendorScripts, runVendor, seedSources, unlistManifestLine } from "./helpers/vendor-repo.mjs";
+import { servedVendorFile } from "../../build.mjs";
+import { HAND_WRITTEN_FILES, SOURCES, blessManifest, expectedVendorFiles } from "../../scripts/fetch-vendor.mjs";
+import { MANIFEST_FILE, listFiles, parseManifest, sha256, verifyTree } from "../../scripts/vendor-manifest.mjs";
+import { TARBALL_BYTE_CAP } from "../../scripts/vendor-tarball.mjs";
+import { SERVED_BUNDLES } from "../helpers/vendor-bundles.mjs";
+import { VENDOR_SCRIPTS, copyVendorScripts, runVendor, seedSources, unlistManifestLine } from "../helpers/vendor-repo.mjs";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const sources = join(root, "vendor-src");
 const copied = join(root, "app", "js", "vendor");
 

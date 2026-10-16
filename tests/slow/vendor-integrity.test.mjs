@@ -19,15 +19,15 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import { resolveOutRoot, vendorTreeProblems } from "../build.mjs";
-import { SOURCES, blessManifest, copyRefusal, hasNoVendoredCopy, parseVendorOptions, planCopies, requiresVerifiedTarball, resolveTrustedSources, upstreamProblems } from "../scripts/fetch-vendor.mjs";
-import { MANIFEST_FILE, hashTree, parseManifest, sha256 } from "../scripts/vendor-manifest.mjs";
-import { VENDOR_PINS, checkLockPins, pinFor } from "../scripts/vendor-pins.mjs";
-import { DECOMPRESSED_BYTE_CAP, TARBALL_BYTE_CAP, cachedTarballCandidates, extractTarball, extractTarballBytes, integrityOf, resolveVerifiedTarball } from "../scripts/vendor-tarball.mjs";
-import { buildRawTarball, buildTarball, paxData, rawTarBytes } from "./helpers/tarball-fixtures.mjs";
-import { copyVendorScripts, emptyCacheDir, runVendor, seedSources, unlistManifestLine } from "./helpers/vendor-repo.mjs";
+import { resolveOutRoot, vendorTreeProblems } from "../../build.mjs";
+import { SOURCES, blessManifest, copyRefusal, hasNoVendoredCopy, parseVendorOptions, planCopies, requiresVerifiedTarball, resolveTrustedSources, upstreamProblems } from "../../scripts/fetch-vendor.mjs";
+import { MANIFEST_FILE, hashTree, parseManifest, sha256 } from "../../scripts/vendor-manifest.mjs";
+import { VENDOR_PINS, checkLockPins, pinFor } from "../../scripts/vendor-pins.mjs";
+import { DECOMPRESSED_BYTE_CAP, TARBALL_BYTE_CAP, cachedTarballCandidates, extractTarball, extractTarballBytes, integrityOf, resolveVerifiedTarball } from "../../scripts/vendor-tarball.mjs";
+import { buildRawTarball, buildTarball, paxData, rawTarBytes } from "../helpers/tarball-fixtures.mjs";
+import { copyVendorScripts, emptyCacheDir, runVendor, seedSources, unlistManifestLine } from "../helpers/vendor-repo.mjs";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const lockText = readFileSync(join(root, "bun.lock"), "utf8");
 
 /** Drop `target` from the fixture's manifest and delete its vendored copy, leaving a first-time acquisition for the tests to run. */

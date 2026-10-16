@@ -11,14 +11,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { vendorTreeProblems } from "../build.mjs";
-import { SOURCE_FILE_BYTE_CAP, blessManifest } from "../scripts/fetch-vendor.mjs";
-import { MANIFEST_FILE, readManifest } from "../scripts/vendor-manifest.mjs";
-import { extractTarball } from "../scripts/vendor-tarball.mjs";
-import { buildTarball } from "./helpers/tarball-fixtures.mjs";
-import { copyVendorScripts, emptyCacheDir, runVendor, seedSources } from "./helpers/vendor-repo.mjs";
+import { vendorTreeProblems } from "../../build.mjs";
+import { SOURCE_FILE_BYTE_CAP, blessManifest } from "../../scripts/fetch-vendor.mjs";
+import { MANIFEST_FILE, readManifest } from "../../scripts/vendor-manifest.mjs";
+import { extractTarball } from "../../scripts/vendor-tarball.mjs";
+import { buildTarball } from "../helpers/tarball-fixtures.mjs";
+import { copyVendorScripts, emptyCacheDir, runVendor, seedSources } from "../helpers/vendor-repo.mjs";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 // A repo whose installed and vendored bytes agree and whose committed manifest lists them, so a plain run has nothing to report and only the path guard under test can stop it.
 async function seedRepo(prefix) {
