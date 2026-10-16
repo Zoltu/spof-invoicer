@@ -45,6 +45,7 @@ scripts/fetch-vendor.mjs    re-acquire vendor-src/ (refuses drift; the result is
 scripts/vendor-tarball.mjs  resolve/verify a pinned package tarball and read its files (offline)
 scripts/vendor-manifest.mjs render/verify SHA256SUMS; imported by build.mjs and the tests
 scripts/vendor-pins.mjs     pin each package's version + lockfile integrity, checked by `bun run vendor`
+scripts/ensure-app-js.mjs   build the generated app/js/ tree once when it is absent
 assets-src/                 image sources (copied to app/images by the build)
 ```
 
@@ -58,7 +59,7 @@ The image input stays optional: `build.mjs` detects the absence of `assets-src/`
 | `bun install`       | install dev dependencies (TypeScript + the libraries vendored below)       |
 | `bun run vendor`    | re-copy the pinned libraries, refresh `SHA256SUMS`; refuses a drifted tree |
 | `bun run build`     | copy vendor + images, then compile `app/ts/**/*.ts` → `app/js/**/*.js`     |
-| `bun run typecheck` | `tsc -p tsconfig.json --noEmit`                                            |
+| `bun run typecheck` | `tsc -p tsconfig.json --noEmit`; builds the tree first when absent         |
 | `bun test tests/`   | run the test suites (the acceptance gate included)                         |
 | `bun run serve`     | serve `app/` on <http://127.0.0.1:80> (loopback only; `--host` widens it)   |
 
@@ -118,7 +119,7 @@ The runtime is [Bun](https://bun.sh): in this environment `node` is a shim for `
 - Build order is deliberate: vendor files and their hand-written `.d.ts` shims are copied into `app/js/vendor/` **before** `tsc` runs, so relative `.js` imports typecheck against the shims beside them.
   `allowJs` stays `false`, so `tsc` never emits or rewrites anything under `app/js/vendor/`.
 - Source maps are always on and inline the TypeScript source, so `app/js/main.js.map` carries `sources: ["../ts/main.ts"]` plus `sourcesContent`; the acceptance gate checks every emitted map for that, and for the embedded source still matching `app/ts/`.
-- `app/js/` is generated output and is not committed: `bun run build` reproduces it from `app/ts/**` and `vendor-src/**`, and `bun test` builds it once before the suites import it when it is absent (see `bunfig.toml`).
+- `app/js/` is generated output and is not committed: `bun run build` reproduces it from `app/ts/**` and `vendor-src/**`, and both `bun test` and `bun run typecheck` build it once before reading it when it is absent (see `scripts/ensure-app-js.mjs`), so the suites can import it and `tsc` can resolve the vendored `.d.ts` shims on a fresh checkout.
   `tests/acceptance.test.mjs` builds into a scratch directory and compares the whole served tree byte for byte, so a working-tree `app/js/**` cannot silently drift from `app/ts/**`.
 - The pdf-lib bundle (~1.4 MB) is imported lazily on the first PDF export, so it stays out of first load.
 
@@ -314,8 +315,8 @@ And `require-trusted-types-for` is only enforced by Chromium; the innerHTML-free
 
 ```sh
 bun install
-bun run typecheck      # tsc --noEmit, strict
 bun run build          # vendor + images + tsc into app/
+bun run typecheck      # tsc --noEmit, strict (builds app/js/ first when it is absent)
 bun test tests/        # every suite, acceptance gate included
 ```
 
