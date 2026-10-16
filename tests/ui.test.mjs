@@ -13,7 +13,7 @@ import { refusalMessage } from "./helpers/refusals.mjs";
 import { findAll, findButton, hasClass, paymentValues, textOf } from "./helpers/tree.mjs";
 import { nextTask } from "./helpers/wait.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
-import { MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
+import { MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_EMAIL_CHARS, MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
 import { MAX_JSON_BYTES, encodeInvoice } from "../app/js/invoice/codec.js";
 import { MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { decodeShare } from "../app/js/invoice/share.js";
@@ -209,11 +209,29 @@ test("a contact the model refuses is reported under the party's own contact fiel
 	assert.match(payer.errors[0].message, new RegExp(`at most ${MAX_CONTACT_LINES} lines`));
 });
 
+test("the create form accepts the widest contact value its hint holds out", () => {
+	const widest = Array.from({ length: MAX_CONTACT_LINES }, () => "m".repeat(MAX_CONTACT_LINE_CHARS)).join("\n");
+	const outcome = parseFormState(formState({ payeeContact: widest }));
+	assert.equal(outcome.ok, true, "the shape the hint names is one the form accepts");
+	assert.equal(outcome.invoice?.payee.email, widest, "and it reaches the model as written");
+});
+
+test("the contact hint names the cap the email-shaped exception is held to", () => {
+	const widestEmail = `${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length)}@example.com`;
+	assert.equal(widestEmail.length, MAX_EMAIL_CHARS, "the fixture is the longest single-line email the legacy branch admits");
+	const accepted = parseFormState(formState({ payeeContact: widestEmail }));
+	assert.equal(accepted.ok, true, "the email bound the hint names is one the form accepts");
+	assert.equal(accepted.invoice?.payee.email, widestEmail, "and it reaches the model as written");
+	const refused = parseFormState(formState({ payeeContact: `${widestEmail}m` }));
+	assert.equal(refused.ok, false, "one character past the email cap is refused");
+	assert.equal(refused.errors[0].field, "payeeContact", "and the refusal lands in the payee's contact field");
+});
+
 test("the create form carries a contact info field for each party", () => {
 	const fake = installInteractiveDocument();
 	try {
 		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
-		const limits = new RegExp(`Up to ${MAX_CONTACT_LINES} lines of ${MAX_CONTACT_LINE_CHARS} characters each`);
+		const limits = new RegExp(`Up to ${MAX_CONTACT_LINES} lines, each of at most ${MAX_CONTACT_LINE_CHARS} characters, ${MAX_CONTACT_CHARS} characters in total counting the line breaks; a single-line email address of up to ${MAX_EMAIL_CHARS} characters is accepted as it is`);
 		for (const [name, id] of [["payeeContact", "payee-contact"], ["payerContact", "payer-contact"]]) {
 			const control = controlNamed(view, name);
 			assert.equal(control.tagName, "textarea", `${name} takes more than one line`);
@@ -222,6 +240,15 @@ test("the create form carries a contact info field for each party", () => {
 			assert.equal(textOf(label), "Contact info (optional)", `${name} is labelled as contact info`);
 			assert.match(textOf(label.parentNode), limits, `${name} names the limits it is held to`);
 			assert.equal(findAll(view, (node) => node.attributes?.id === `${id}-error`).length, 1, `${name} carries the error slot its refusals land in`);
+			// The hint is part of the field's description too, so the bound the field is held to is announced with the field rather than left beside it.
+			assert.deepEqual(
+				String(control.attributes["aria-describedby"]).split(" "),
+				[`${id}-error`, `${id}-hint`],
+				`${name} names its error slot and its limit hint together as the field's description`,
+			);
+			const hint = findAll(view, (node) => node.attributes?.id === `${id}-hint`)[0];
+			assert.ok(hint, `${name} carries the hint element its description names`);
+			assert.match(textOf(hint), limits, `${name}'s described hint states the bound the field is held to`);
 		}
 	} finally {
 		fake.restore();
@@ -272,6 +299,36 @@ test("a bill-to contact without a client name is refused under the client-name f
 		assert.ok(error, "the client-name field carries an error slot");
 		assert.match(textOf(error), /Client name is required when contact info is given/);
 		assert.equal(error.attributes.hidden, undefined, "and the message is shown under that field");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the client-name field states that the name is required once the bill-to block carries anything", () => {
+	// The block is optional as a whole while its name is not, so a field that called the name optional told a payee who filled the client's contact info the opposite of what the validator holds and left them to meet the requirement as a post-submit error.
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const name = controlNamed(view, "payerName");
+		const label = findAll(view, (node) => node.tagName === "label" && node.attributes?.for === "payer-name")[0];
+		assert.ok(label, "the client-name field carries its own label");
+		assert.equal(textOf(label), "Client name", "and the label names the field rather than what is optional about it");
+		assert.doesNotMatch(
+			`${String(name.attributes.placeholder)} ${textOf(label)}`,
+			/optional/i,
+			"neither the placeholder nor the label calls the client's name optional",
+		);
+		const hint = findAll(view, (node) => node.attributes?.id === "payer-name-hint")[0];
+		assert.ok(hint, "the field carries the hint that states its requirement");
+		assert.match(textOf(hint), /required/, "the hint states the requirement the validator holds");
+		assert.match(textOf(hint), /optional/, "and keeps the bill-to block itself optional");
+		assert.deepEqual(
+			String(name.attributes["aria-describedby"]).split(" "),
+			["payer-name-error", "payer-name-hint"],
+			"the hint is part of the field's own description, so the requirement is announced with the field rather than left for a reader to find beside it",
+		);
+		const legend = findAll(view, (node) => node.tagName === "legend" && textOf(node) === "Bill to (optional)")[0];
+		assert.ok(legend, "and the block the field belongs to still states that the block itself is optional");
 	} finally {
 		fake.restore();
 	}

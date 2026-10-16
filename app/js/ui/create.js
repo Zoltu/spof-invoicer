@@ -9,7 +9,7 @@
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset } from "../assets/registry.js";
 import { MAX_JSON_BYTES, encodedJsonBytes } from "../invoice/codec.js";
 import { validateIcon } from "../invoice/icon.js";
-import { InvalidInvoiceError, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_ITEMS, computeTotalsFor, createInvoice, } from "../invoice/model.js";
+import { InvalidInvoiceError, MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_EMAIL_CHARS, MAX_ITEMS, computeTotalsFor, createInvoice, } from "../invoice/model.js";
 import { PaymentLinkBudgetError, requireLinkBudget } from "../payment/links.js";
 import { toBaseUnits } from "../util/decimal.js";
 import { h } from "../util/dom.js";
@@ -32,8 +32,17 @@ const FIELD_MESSAGE_MAX = 300;
  * The hint both contact fields carry.
  *
  * It is composed from the model's own limit constants, so the hint cannot name a bound the validator does not hold, and it names the legacy email spelling because a party with one line to give is not asked for several.
+ * It states the total that counts the line breaks as well as the per-line bound, and that total is derived to admit the widest shape the per-line bounds hold out: {@link MAX_CONTACT_LINES} lines at {@link MAX_CONTACT_LINE_CHARS} characters each, the breaks between them counted, so the bound the hint names is one the validator holds.
+ * The legacy email spelling's own cap is named too, from {@link MAX_EMAIL_CHARS}, so the one exception to the per-line bound carries the bound it is held to rather than reading as unbounded.
  */
-const CONTACT_HINT = `Up to ${MAX_CONTACT_LINES} lines of ${MAX_CONTACT_LINE_CHARS} characters each; a single-line email address is accepted as it is.`;
+const CONTACT_HINT = `Up to ${MAX_CONTACT_LINES} lines, each of at most ${MAX_CONTACT_LINE_CHARS} characters, ${MAX_CONTACT_CHARS} characters in total counting the line breaks; a single-line email address of up to ${MAX_EMAIL_CHARS} characters is accepted as it is.`;
+/**
+ * The hint the bill-to name field carries.
+ *
+ * The bill-to block is optional as a whole — an invoice with no payor stays valid — while the payor's name is required as soon as the block carries anything else.
+ * That is the requirement {@link requiredFieldErrors} holds, and it is what this hint states: a field whose placeholder called the name optional left a payee who filled the client's contact info to meet the requirement as a post-submit error instead.
+ */
+const PAYER_NAME_HINT = "The bill-to block is optional as a whole, but the client name is required as soon as the block carries anything, such as the client's contact info.";
 /** A fresh, empty line with a sensible starting quantity. */
 export function emptyItem() {
     return { description: "", quantity: "1", unitPrice: "" };
@@ -488,7 +497,7 @@ export function renderCreateView(options) {
     const invoiceId = h("input", { type: "text", name: "invoiceId", value: state.invoiceId, placeholder: "INV-0001" });
     const issued = h("input", { type: "text", name: "issued", value: state.issued, placeholder: "YYYY-MM-DD" });
     const due = h("input", { type: "text", name: "due", value: state.due, placeholder: "YYYY-MM-DD (optional)" });
-    const payerName = h("input", { type: "text", name: "payerName", value: state.payerName, placeholder: "Client name (optional)" });
+    const payerName = h("input", { type: "text", name: "payerName", value: state.payerName, placeholder: "Acme Client" });
     const payerContact = h("textarea", { name: "payerContact", placeholder: "Email, phone, or address" }, state.payerContact);
     const assetSelect = h("select", { name: "asset" }, ...ASSETS.map((asset) => h("option", { value: asset.id, selected: asset.id === state.assetId }, `${asset.symbol} — ${asset.name}`)));
     const notes = h("textarea", { name: "notes", placeholder: "Payment terms, thank you note…" }, state.notes);
@@ -785,7 +794,7 @@ export function renderCreateView(options) {
     addButton.addEventListener("click", () => {
         replaceItems(addItem(state));
     });
-    const form = h("form", { class: "create-form" }, h("fieldset", { class: "form-section" }, h("legend", {}, "Your details and asset"), fieldGroup("payee-name", "Payee name", payeeName, errorsByKey, "payeeName"), fieldGroup("asset", "Asset", assetSelect, errorsByKey, "asset"), fieldGroup("payee-address", "Payout address", payeeAddress, errorsByKey, "payeeAddress", "The address this invoice pays to."), payoutWarning, fieldGroup("payee-contact", "Contact info (optional)", payeeContact, errorsByKey, "payeeContact", CONTACT_HINT)), h("fieldset", { class: "form-section" }, h("legend", {}, "Brand icon (optional)"), fieldGroup("icon", "Icon", iconInput, errorsByKey, "icon", `An SVG up to ${MAX_ICON_SVG_BYTES} bytes and ${MAX_ICON_DIMENSION}×${MAX_ICON_DIMENSION} pixels. It is carried in the share link and never fetched.`), iconPreview, iconRemove), h("fieldset", { class: "form-section" }, h("legend", {}, "Invoice details"), fieldGroup("invoice-id", "Invoice number", invoiceId, errorsByKey, "invoiceId"), fieldGroup("issued", "Issue date", issued, errorsByKey, "issued", "YYYY-MM-DD"), fieldGroup("due", "Due date (optional)", due, errorsByKey, "due", "YYYY-MM-DD")), h("fieldset", { class: "form-section" }, h("legend", {}, "Bill to (optional)"), fieldGroup("payer-name", "Client name", payerName, errorsByKey, "payerName"), fieldGroup("payer-contact", "Contact info (optional)", payerContact, errorsByKey, "payerContact", CONTACT_HINT)), h("fieldset", { class: "form-section" }, h("legend", {}, "Line items"), h("table", { class: "items-table" }, h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Description"), h("th", { scope: "col" }, "Qty"), h("th", { scope: "col" }, "Unit price"), h("th", { scope: "col" }, "Amount"), h("th", { scope: "col" }, ""))), tbody), addButton, h("p", { class: "field-hint" }, `Up to ${MAX_ITEMS} lines; the encoded invoice must fit the ${MAX_JSON_BYTES / 1024} KiB share limit.`)), h("fieldset", { class: "form-section" }, h("legend", {}, "Tax and notes"), h("div", { class: "field field-inline" }, taxToggle, h("label", { for: "tax-enabled" }, "Add tax")), taxFields, fieldGroup("notes", "Notes and terms (optional)", notes, errorsByKey, "notes")), errorSummary, h("div", { class: "totals" }, h("table", { class: "totals-table" }, h("tbody", {}, h("tr", { class: "totals-row" }, h("th", { scope: "row" }, "Subtotal"), h("td", {}, subtotalText)), taxRow, h("tr", { class: "totals-row totals-total" }, h("th", { scope: "row" }, "Total"), h("td", {}, totalText))))), shareSizeNote, h("div", { class: "form-actions" }, h("button", { type: "submit", class: "btn btn-primary" }, "Create share link")));
+    const form = h("form", { class: "create-form" }, h("fieldset", { class: "form-section" }, h("legend", {}, "Your details and asset"), fieldGroup("payee-name", "Payee name", payeeName, errorsByKey, "payeeName"), fieldGroup("asset", "Asset", assetSelect, errorsByKey, "asset"), fieldGroup("payee-address", "Payout address", payeeAddress, errorsByKey, "payeeAddress", "The address this invoice pays to."), payoutWarning, fieldGroup("payee-contact", "Contact info (optional)", payeeContact, errorsByKey, "payeeContact", CONTACT_HINT)), h("fieldset", { class: "form-section" }, h("legend", {}, "Brand icon (optional)"), fieldGroup("icon", "Icon", iconInput, errorsByKey, "icon", `An SVG up to ${MAX_ICON_SVG_BYTES} bytes and ${MAX_ICON_DIMENSION}×${MAX_ICON_DIMENSION} pixels. It is carried in the share link and never fetched.`), iconPreview, iconRemove), h("fieldset", { class: "form-section" }, h("legend", {}, "Invoice details"), fieldGroup("invoice-id", "Invoice number", invoiceId, errorsByKey, "invoiceId"), fieldGroup("issued", "Issue date", issued, errorsByKey, "issued", "YYYY-MM-DD"), fieldGroup("due", "Due date (optional)", due, errorsByKey, "due", "YYYY-MM-DD")), h("fieldset", { class: "form-section" }, h("legend", {}, "Bill to (optional)"), fieldGroup("payer-name", "Client name", payerName, errorsByKey, "payerName", PAYER_NAME_HINT), fieldGroup("payer-contact", "Contact info (optional)", payerContact, errorsByKey, "payerContact", CONTACT_HINT)), h("fieldset", { class: "form-section" }, h("legend", {}, "Line items"), h("table", { class: "items-table" }, h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Description"), h("th", { scope: "col" }, "Qty"), h("th", { scope: "col" }, "Unit price"), h("th", { scope: "col" }, "Amount"), h("th", { scope: "col" }, ""))), tbody), addButton, h("p", { class: "field-hint" }, `Up to ${MAX_ITEMS} lines; the encoded invoice must fit the ${MAX_JSON_BYTES / 1024} KiB share limit.`)), h("fieldset", { class: "form-section" }, h("legend", {}, "Tax and notes"), h("div", { class: "field field-inline" }, taxToggle, h("label", { for: "tax-enabled" }, "Add tax")), taxFields, fieldGroup("notes", "Notes and terms (optional)", notes, errorsByKey, "notes")), errorSummary, h("div", { class: "totals" }, h("table", { class: "totals-table" }, h("tbody", {}, h("tr", { class: "totals-row" }, h("th", { scope: "row" }, "Subtotal"), h("td", {}, subtotalText)), taxRow, h("tr", { class: "totals-row totals-total" }, h("th", { scope: "row" }, "Total"), h("td", {}, totalText))))), shareSizeNote, h("div", { class: "form-actions" }, h("button", { type: "submit", class: "btn btn-primary" }, "Create share link")));
     form.addEventListener("submit", (event) => {
         event.preventDefault();
         const plan = planShare(state, options.baseUrl);
@@ -846,10 +855,12 @@ function buildItemRow(item, index, errors, sync, onRemove, onUp, onDown) {
 }
 function fieldGroup(id, labelText, control, errors, key, hint) {
     control.setAttribute("id", id);
-    control.setAttribute("aria-describedby", `${id}-error`);
+    // The hint a field carries is part of the field's description, so a bound it states — the contact field's line and character limits, say — is announced with the field rather than left for a reader to find beside it.
+    const hintId = `${id}-hint`;
+    control.setAttribute("aria-describedby", hint === undefined ? `${id}-error` : `${id}-error ${hintId}`);
     const error = h("p", { class: "field-error", id: `${id}-error`, role: "alert", hidden: true });
     errors.set(key, error);
-    return h("div", { class: "field" }, h("label", { for: id }, labelText), control, hint === undefined ? null : h("p", { class: "field-hint" }, hint), error);
+    return h("div", { class: "field" }, h("label", { for: id }, labelText), control, hint === undefined ? null : h("p", { class: "field-hint", id: hintId }, hint), error);
 }
 function bind(control, onChange) {
     control.addEventListener("input", onChange);

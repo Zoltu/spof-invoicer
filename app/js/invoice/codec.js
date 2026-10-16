@@ -28,6 +28,7 @@
  */
 import { base32nopad, utf8 } from "../util/encoding.js";
 import { boundMessage, describe, messageOf, preview } from "../util/errors.js";
+import { canonicalContactText } from "./contact-canonical-text.js";
 import { validateInvoice } from "./model.js";
 /** The container version written into every blob prefix. */
 export const SHARE_VERSION = 1;
@@ -219,7 +220,7 @@ function decodePayload(payload) {
     catch (error) {
         throw new ShareFormatError(`the payload is not JSON: ${boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX)}`);
     }
-    // This byte-for-byte comparison, not `validateInvoice`, is what holds the wire format to one spelling per value: validation repairs the icon through the same canonicalization the encoder applies, and it repairs a contact value's CRLF or lone-CR line endings to LF, so a payload whose icon or contact value is a second encoding of the same text parses into a valid invoice and the comparison is what refuses it.
+    // This byte-for-byte comparison, not `validateInvoice`, is what holds the wire format to one spelling per value: validation repairs the icon through the same canonicalization the encoder applies, and it runs a contact value through the same `canonicalContactText` the encoder wrote, so a payload whose icon or contact value is a second encoding of the same text parses into a valid invoice and the comparison is what refuses it.
     const invoice = validateInvoice(parsed);
     if (serializeInvoice(invoice) !== json) {
         throw new ShareFormatError(nonCanonicalReason(parsed, invoice));
@@ -231,10 +232,10 @@ function decodePayload(payload) {
  *
  * Validation re-encodes the payee address to the one canonical spelling its family stores it in — the EIP-55 checksummed form for an EVM payee, the lower-case Bech32 spelling for a Zcash one — so a payload that names a payable address in another case that spells the same address parses into a valid invoice yet is not the canonical text — naming that divergence is the point, because the generic message would otherwise blame a key order or a number the payload spelled correctly.
  * Validation likewise repairs the icon with `util/icon-canonical-text.ts`'s `canonicalIconText`, the one definition of canonical icon text, so a payload that spells the icon with any fault that canonicalization repairs is one the model admits and this byte-for-byte comparison is what refuses.
- * It also normalizes a party contact value's line endings to LF, so a contact value spelled with CRLF or a lone CR is another repair this comparison, and no other check, refuses.
+ * It also runs a party contact value through the canonicalization `invoice/contact-canonical-text.ts` states — composing it to NFC, normalizing its line endings to LF, and replacing its tabs with single spaces — so a value spelled with an uncomposed character, with CRLF or a lone CR, or with a tab is another repair this comparison, and no other check, refuses.
  * That makes this comparison, not {@link validateInvoice}, the guard on the icon's single wire spelling: a decode path that validated a transported icon without it would admit a second encoding of one icon.
  * The reason below paraphrases that same rule, so a change to `canonicalIconText` has to update this reason rather than leave it naming a fault the canonicalization no longer covers.
- * Every other divergence is the JSON spelling itself.
+ * Each repair a payload could be carrying — the address's case, the icon's text, and a contact value's line endings, composition, or tabs — gets a reason of its own, so the user is told the actual fault rather than a generic key order or number; every other divergence is the JSON spelling itself.
  */
 function nonCanonicalReason(parsed, invoice) {
     const spelled = payeeAddressOf(parsed);
@@ -244,6 +245,10 @@ function nonCanonicalReason(parsed, invoice) {
     const icon = iconTextOf(parsed);
     if (icon !== undefined && icon !== invoice.icon) {
         return "the payload spells the icon with surrounding whitespace, a byte-order mark at either end, a CRLF or lone-CR line ending, or an uncomposed spelling, but the icon gate stores the line-ending-normalized, trimmed, NFC-composed text — the payload is not in the canonical form this encoder writes";
+    }
+    const contact = contactRepairOf(parsed, invoice);
+    if (contact !== null) {
+        return `the payload spells the ${contact} contact value with CRLF or a lone CR, or in an uncomposed spelling, or with a tab in place of a stored space, but a party's contact info is stored with its line endings normalized to LF, its tabs replaced with single spaces, and its text composed to NFC — the payload is not in the canonical form this encoder writes`;
     }
     return "the payload is not in the canonical form this encoder writes — it repeats a key, reorders keys, adds whitespace, or spells a number non-canonically";
 }
@@ -263,5 +268,30 @@ function iconTextOf(parsed) {
         return undefined;
     const icon = parsed.icon;
     return typeof icon === "string" ? icon : undefined;
+}
+/**
+ * The party whose contact value the payload spells as a repaired form of the stored one, or `null` when no party carries such a respelling.
+ *
+ * The repair is the canonicalization `invoice/contact-canonical-text.ts` states — the text composed to NFC, its CRLF or lone-CR line endings normalized to LF, and its tabs replaced with single spaces — read from that one statement rather than respelled here, so a change to the model cannot leave this reason naming a fault the model no longer covers while the decode still fails closed on the comparison above.
+ */
+function contactRepairOf(parsed, invoice) {
+    for (const party of ["payee", "payer"]) {
+        const spelled = partyEmailOf(parsed, party);
+        const stored = party === "payee" ? invoice.payee.email : invoice.payer?.email;
+        if (spelled !== undefined && stored !== undefined && spelled !== stored && canonicalContactText(spelled) === stored) {
+            return party;
+        }
+    }
+    return null;
+}
+/** The `email` value a party in the parsed JSON spells, or `undefined` when the shape does not carry one. */
+function partyEmailOf(parsed, party) {
+    if (typeof parsed !== "object" || parsed === null)
+        return undefined;
+    const record = parsed[party];
+    if (typeof record !== "object" || record === null)
+        return undefined;
+    const email = record.email;
+    return typeof email === "string" ? email : undefined;
 }
 //# sourceMappingURL=codec.js.map

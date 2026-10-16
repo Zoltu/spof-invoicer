@@ -12,8 +12,10 @@ import { MAX_JSON_BYTES, encodedJsonBytes } from "../invoice/codec.js";
 import { validateIcon } from "../invoice/icon.js";
 import {
 	InvalidInvoiceError,
+	MAX_CONTACT_CHARS,
 	MAX_CONTACT_LINE_CHARS,
 	MAX_CONTACT_LINES,
+	MAX_EMAIL_CHARS,
 	MAX_ITEMS,
 	computeTotalsFor,
 	createInvoice,
@@ -48,8 +50,18 @@ const FIELD_MESSAGE_MAX = 300;
  * The hint both contact fields carry.
  *
  * It is composed from the model's own limit constants, so the hint cannot name a bound the validator does not hold, and it names the legacy email spelling because a party with one line to give is not asked for several.
+ * It states the total that counts the line breaks as well as the per-line bound, and that total is derived to admit the widest shape the per-line bounds hold out: {@link MAX_CONTACT_LINES} lines at {@link MAX_CONTACT_LINE_CHARS} characters each, the breaks between them counted, so the bound the hint names is one the validator holds.
+ * The legacy email spelling's own cap is named too, from {@link MAX_EMAIL_CHARS}, so the one exception to the per-line bound carries the bound it is held to rather than reading as unbounded.
  */
-const CONTACT_HINT = `Up to ${MAX_CONTACT_LINES} lines of ${MAX_CONTACT_LINE_CHARS} characters each; a single-line email address is accepted as it is.`;
+const CONTACT_HINT = `Up to ${MAX_CONTACT_LINES} lines, each of at most ${MAX_CONTACT_LINE_CHARS} characters, ${MAX_CONTACT_CHARS} characters in total counting the line breaks; a single-line email address of up to ${MAX_EMAIL_CHARS} characters is accepted as it is.`;
+
+/**
+ * The hint the bill-to name field carries.
+ *
+ * The bill-to block is optional as a whole — an invoice with no payor stays valid — while the payor's name is required as soon as the block carries anything else.
+ * That is the requirement {@link requiredFieldErrors} holds, and it is what this hint states: a field whose placeholder called the name optional left a payee who filled the client's contact info to meet the requirement as a post-submit error instead.
+ */
+const PAYER_NAME_HINT = "The bill-to block is optional as a whole, but the client name is required as soon as the block carries anything, such as the client's contact info.";
 
 /**
  * One editable line, as typed.
@@ -608,7 +620,7 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	const invoiceId = h("input", { type: "text", name: "invoiceId", value: state.invoiceId, placeholder: "INV-0001" });
 	const issued = h("input", { type: "text", name: "issued", value: state.issued, placeholder: "YYYY-MM-DD" });
 	const due = h("input", { type: "text", name: "due", value: state.due, placeholder: "YYYY-MM-DD (optional)" });
-	const payerName = h("input", { type: "text", name: "payerName", value: state.payerName, placeholder: "Client name (optional)" });
+	const payerName = h("input", { type: "text", name: "payerName", value: state.payerName, placeholder: "Acme Client" });
 	const payerContact = h("textarea", { name: "payerContact", placeholder: "Email, phone, or address" }, state.payerContact);
 	const assetSelect = h(
 		"select",
@@ -954,7 +966,7 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 			"fieldset",
 			{ class: "form-section" },
 			h("legend", {}, "Bill to (optional)"),
-			fieldGroup("payer-name", "Client name", payerName, errorsByKey, "payerName"),
+			fieldGroup("payer-name", "Client name", payerName, errorsByKey, "payerName", PAYER_NAME_HINT),
 			fieldGroup("payer-contact", "Contact info (optional)", payerContact, errorsByKey, "payerContact", CONTACT_HINT),
 		),
 		h(
@@ -1112,7 +1124,9 @@ function fieldGroup(
 	hint?: string,
 ): HTMLElement {
 	control.setAttribute("id", id);
-	control.setAttribute("aria-describedby", `${id}-error`);
+	// The hint a field carries is part of the field's description, so a bound it states — the contact field's line and character limits, say — is announced with the field rather than left for a reader to find beside it.
+	const hintId = `${id}-hint`;
+	control.setAttribute("aria-describedby", hint === undefined ? `${id}-error` : `${id}-error ${hintId}`);
 	const error = h("p", { class: "field-error", id: `${id}-error`, role: "alert", hidden: true });
 	errors.set(key, error);
 	return h(
@@ -1120,7 +1134,7 @@ function fieldGroup(
 		{ class: "field" },
 		h("label", { for: id }, labelText),
 		control,
-		hint === undefined ? null : h("p", { class: "field-hint" }, hint),
+		hint === undefined ? null : h("p", { class: "field-hint", id: hintId }, hint),
 		error,
 	);
 }

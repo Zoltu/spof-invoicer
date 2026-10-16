@@ -61,7 +61,7 @@ function selectorMatches(element, selector) {
  * It stays deliberately small — the DOM surface those modules actually use, nothing more.
  *
  * Unlike {@link installFakeDocument}'s plain object nodes, `createElement` returns an instance of the class exposed as `globalThis.HTMLElement`, so `ui/overlay.ts`'s `instanceof HTMLElement` checks behave as they do in a page.
- * `document.body` exists for overlay mounting; `append`/`replaceChildren` track each child's `parentNode` so `remove()` can detach it; `focus()` records `document.activeElement`; `querySelector` matches a comma-separated list of tag names or class selectors; and `dispatch` supplies no-op `preventDefault`/`stopPropagation` so a handler can call them on a plain event object.
+ * `document.body` exists for overlay mounting; `append`/`replaceChildren` track each child's `parentNode` so `remove()` can detach it; `isConnected` reports whether a node still hangs under `document.body`, so a subtree `replaceChildren` dropped reads as detached; `focus()` records `document.activeElement`; `querySelector` matches a comma-separated list of tag names or class selectors; and `dispatch` supplies no-op `preventDefault`/`stopPropagation` so a handler can call them on a plain event object.
  */
 export function installInteractiveDocument() {
 	const previousDocument = globalThis.document;
@@ -107,6 +107,12 @@ export function installInteractiveDocument() {
 			if (!(parent instanceof FakeElement)) return;
 			parent.children = parent.children.filter((child) => child !== this);
 			this.parentNode = null;
+		}
+
+		get isConnected() {
+			let node = this;
+			while (node.parentNode instanceof FakeElement) node = node.parentNode;
+			return node === document.body;
 		}
 		addEventListener(type, listener) {
 			(this.listeners[type] ??= []).push(listener);

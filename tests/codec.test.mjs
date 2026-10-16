@@ -276,23 +276,35 @@ test("a party's contact info is bounded by line count, line length, and total le
 		"a legacy email spelling is accepted at the legacy cap, past the contact cap",
 	);
 
+	// The widest shape the create form's hint holds out — every line at the per-line cap — is one the validator admits, because the total counts the line breaks between the lines as well as their characters.
+	const widest = Array.from({ length: MAX_CONTACT_LINES }, () => "m".repeat(MAX_CONTACT_LINE_CHARS)).join("\n");
+	assert.equal(widest.length, MAX_CONTACT_CHARS, "the total cap is the per-line caps plus the breaks between them");
+	assert.equal(contact(widest), widest, "the widest shape the hint holds out is accepted as written");
+
 	rejects(
 		"a line past the line cap",
 		() => make({ payee: { name: "X", address: PAYEE, email: "x".repeat(MAX_CONTACT_LINE_CHARS + 1) } }),
 		InvalidInvoiceError,
-		/payee\.email: must hold lines of at most 40 characters, got 41/,
+		new RegExp(`payee\\.email: must hold lines of at most ${MAX_CONTACT_LINE_CHARS} characters, got ${MAX_CONTACT_LINE_CHARS + 1} — shorten the line to ${MAX_CONTACT_LINE_CHARS} characters or fewer, or break it across lines`),
 	);
 	rejects(
 		"more lines than the line cap",
 		() => make({ payee: { name: "X", address: PAYEE, email: "a\nb\nc\nd\ne" } }),
 		InvalidInvoiceError,
-		/payee\.email: must hold at most 4 lines, got 5/,
+		new RegExp(`payee\\.email: must hold at most ${MAX_CONTACT_LINES} lines, got ${MAX_CONTACT_LINES + 1} — put the contact info on ${MAX_CONTACT_LINES} lines or fewer`),
 	);
+	// The total is derived from the two bounds above, so a value past it is past one of them: it earns that bound's own refusal rather than the coarse total-length message such a value would also earn.
 	rejects(
-		"a value past the total cap",
+		"a single line past the derived total cap",
 		() => make({ payee: { name: "X", address: PAYEE, email: "x".repeat(MAX_CONTACT_CHARS + 1) } }),
 		InvalidInvoiceError,
-		/payee\.email: must be 1 to 160 characters long, got 161/,
+		new RegExp(`payee\\.email: must hold lines of at most ${MAX_CONTACT_LINE_CHARS} characters, got ${MAX_CONTACT_CHARS + 1} — shorten the line`),
+	);
+	rejects(
+		"a long multi-line paste past the derived total cap",
+		() => make({ payee: { name: "X", address: PAYEE, email: [...Array.from({ length: MAX_CONTACT_LINES }, () => "x".repeat(MAX_CONTACT_LINE_CHARS)), "x"].join("\n") } }),
+		InvalidInvoiceError,
+		new RegExp(`payee\\.email: must hold at most ${MAX_CONTACT_LINES} lines, got ${MAX_CONTACT_LINES + 1} — put the contact info on ${MAX_CONTACT_LINES} lines or fewer`),
 	);
 	rejects(
 		"a legacy email past the legacy cap",
@@ -305,6 +317,14 @@ test("a party's contact info is bounded by line count, line length, and total le
 		() => make({ payee: { name: "X", address: PAYEE, email: " line\nline " } }),
 		InvalidInvoiceError,
 		/payee\.email: must not start or end with whitespace/,
+	);
+	// The ends are checked before the line count, so a value whose only fault is the break it ends with is refused for its padding: the four lines it would carry without that break are within the cap, and a refusal counting the split's trailing empty line would name a bound the value never tripped.
+	assert.equal(contact("a\nb\nc\nd"), "a\nb\nc\nd", "the value the padded one would have without its trailing break is within the line cap");
+	rejects(
+		"a contact value padded with a trailing line break",
+		() => make({ payee: { name: "X", address: PAYEE, email: "a\nb\nc\nd\n" } }),
+		InvalidInvoiceError,
+		/payee\.email: must not start or end with whitespace$/,
 	);
 	rejects(
 		"a contact value carrying a control character",
@@ -1301,14 +1321,101 @@ test("a contact value respelled with CRLF or a lone CR is refused as non-canonic
 		const respelled = json.replace(JSON.stringify(contact), JSON.stringify(contact.replace(/\n/g, ending)));
 		assert.notEqual(respelled, json, `${label}: the fixture really respells the contact value with that ending`);
 		assert.equal(validateInvoice(JSON.parse(respelled)).payee.email, contact, `${label}: validation repairs the ending to one LF`);
-		rejects(`${label}-spelled payee contact value`, () => decodeInvoice(b32(respelled)), ShareFormatError, /not in the canonical form/);
+		rejects(`${label}-spelled payee contact value`, () => decodeInvoice(b32(respelled)), ShareFormatError, /spells the payee contact value with CRLF or a lone CR/);
 	}
 
 	const payerContact = "Acme GmbH\nap@acme.example";
 	const payerJson = serializeInvoice(make({ payer: { name: "Acme GmbH", email: payerContact } }));
 	const payerCrlf = payerJson.replace(JSON.stringify(payerContact), JSON.stringify(payerContact.replace(/\n/g, "\r\n")));
 	assert.notEqual(payerCrlf, payerJson, "the fixture really respells the payer's contact value");
-	rejects("a CRLF-spelled payer contact value", () => decodeInvoice(b32(payerCrlf)), ShareFormatError, /not in the canonical form/);
+	rejects("a CRLF-spelled payer contact value", () => decodeInvoice(b32(payerCrlf)), ShareFormatError, /spells the payer contact value with CRLF or a lone CR/);
 	// The LF spelling of the same value decodes, so each refusal above is the respelling rather than the field.
 	assert.deepEqual(decodeInvoice(encodeInvoice(invoice)), invoice, "the LF spelling of the same value still decodes");
+});
+
+test("a line refused by the per-line contact cap names the bound, the remedy, and the email-shaped exception that accepts it alone", () => {
+	// The whole-value branch accepts an email-shaped value at the legacy cap, so the same address is accepted alone and refused as one line of a multi-line value; the per-line refusal has to say so rather than speak only of per-line limits.
+	const address = `${"x".repeat(45 - "@example.com".length)}@example.com`;
+	assert.equal(address.length, 45, "the fixture is the 45-character address the rules treat two ways");
+	assert.equal(address.length, MAX_CONTACT_LINE_CHARS + 5, "and it is past the per-line cap that refuses it as a line");
+	const contact = (email) => make({ payee: { name: "Studio Example", address: PAYEE, email } }).payee.email;
+	assert.equal(contact(address), address, "the email-shaped value is accepted as the whole field, past the per-line cap");
+	rejects(
+		"an email-shaped second line of a multi-line contact",
+		() => make({ payee: { name: "Studio Example", address: PAYEE, email: `Studio Example\n${address}` } }),
+		InvalidInvoiceError,
+		/must hold lines of at most 40 characters, got 45 — shorten the line to 40 characters or fewer, or break it across lines; only a whole value that is one email-shaped line is held to 320 instead/,
+	);
+});
+
+test("a contact value respelled in NFD earns the contact reason rather than the generic one", () => {
+	// The model composes a contact value to NFC, so an NFD spelling is a repair this byte-for-byte comparison refuses; it earns the contact reason that names the composition, not the generic key-order one.
+	const composed = "Caf\u00e9 Contact";
+	const uncomposed = "Cafe\u0301 Contact";
+	assert.notEqual(composed, uncomposed, "the fixture is one text in two compositions");
+	const invoice = make({ payee: { name: "Studio Example", address: PAYEE, email: composed } });
+	const json = serializeInvoice(invoice);
+	const respelled = json.replace(JSON.stringify(composed), JSON.stringify(uncomposed));
+	assert.notEqual(respelled, json, "the fixture really respells the contact value in NFD");
+	assert.equal(validateInvoice(JSON.parse(respelled)).payee.email, composed, "validation composes the respelled value");
+	let refusal = null;
+	try {
+		decodeInvoice(b32(respelled));
+	} catch (error) {
+		refusal = error;
+	}
+	assert.ok(refusal instanceof ShareFormatError, `expected a ShareFormatError, got ${refusal?.name}: ${refusal?.message}`);
+	assert.match(refusal.message, /spells the payee contact value with CRLF or a lone CR, or in an uncomposed spelling/, "the refusal names the composition the model repairs");
+	assert.doesNotMatch(refusal.message, /repeats a key/, "rather than falling through to the generic reason");
+});
+
+test("a contact value is stored as the canonical text the page and the share payload both carry", () => {
+	const contact = (email) => make({ payee: { name: "Studio Example", address: PAYEE, email } }).payee.email;
+	// The model stores the single space a tab stood for, since the display boundary would otherwise draw the tab as nothing and join the words it separated.
+	assert.equal(contact("Studio\tExample"), "Studio Example", "a tab is stored as a single space");
+	assert.equal(contact("Studio\t\tExample"), "Studio  Example", "each tab becomes one space");
+	assert.equal(
+		contact("Studio\tExample\n+44 20 7946 0000"),
+		"Studio Example\n+44 20 7946 0000",
+		"and the pass runs inside a multi-line value too",
+	);
+
+	// A character the display boundary removes and no surface can draw as itself is refused rather than stored, while the legacy email branch keeps the accepted set it always had.
+	rejects(
+		"a contact line carrying an interlinear-annotation character",
+		() => make({ payee: { name: "X", address: PAYEE, email: "line\uFFF9line" } }),
+		InvalidInvoiceError,
+		/payee\.email: must not contain U\+FFF9, an invisible formatting character no surface can show/,
+	);
+	rejects(
+		"a contact line carrying an Egyptian-hieroglyph format character",
+		() => make({ payee: { name: "X", address: PAYEE, email: "line\u{13430}line" } }),
+		InvalidInvoiceError,
+		/payee\.email: must not contain U\+13430/,
+	);
+	assert.equal(
+		contact("bill\uFFF9ing@example.com"),
+		"bill\uFFF9ing@example.com",
+		"the legacy email branch still admits the format character it always did",
+	);
+	const legacy = make({ payee: { name: "Studio Example", address: PAYEE, email: "bill\uFFF9ing@example.com" } });
+	const payload = encodeInvoice(legacy);
+	assert.equal(decodeInvoice(payload).payee.email, "bill\uFFF9ing@example.com", "and that value still travels through the container");
+	assert.equal(encodeInvoice(decodeInvoice(payload)), payload, "re-encoding byte for byte");
+});
+
+test("a contact value respelled with a tab earns the contact reason rather than the generic one", () => {
+	// The codec reads the model's own canonicalization, so a payload that spells a stored space as a tab is a repair the byte-for-byte comparison refuses, and the reason it earns names the contact field rather than a generic key order.
+	const contact = "Studio Example\nbilling@example.com";
+	const invoice = make({ payee: { name: "Studio Example", address: PAYEE, email: contact } });
+	const json = serializeInvoice(invoice);
+	const respelled = json.replace(JSON.stringify(contact), JSON.stringify(contact.replace(" ", "\t")));
+	assert.notEqual(respelled, json, "the fixture really respells a stored space as a tab");
+	assert.equal(validateInvoice(JSON.parse(respelled)).payee.email, contact, "validation repairs the tab to a single space");
+	rejects(
+		"a tab-spelled payee contact value",
+		() => decodeInvoice(b32(respelled)),
+		ShareFormatError,
+		/spells the payee contact value with CRLF or a lone CR, or in an uncomposed spelling, or with a tab in place of a stored space/,
+	);
 });

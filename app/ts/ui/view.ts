@@ -7,7 +7,7 @@
  *
  * The document is a letterhead, the parties and dates, an itemized table, a prominent total-due block, notes/terms, and payment details.
  * The letterhead's mark is the payee's own icon when the invoice carries one, in the place of the default brand mark rather than beside it, while the wordmark and tagline are drawn either way; a party's contact info is drawn as the lines it was stored with, one detail line per line.
- * Payment details is {@link renderPaymentSection}, the section `ui/payment-section.ts` owns and the payee's create screen draws from the same function: the payee address, the amount, and the payment link, each in its own single-line copy field, beside the symbol of that same URI.
+ * Payment details is {@link renderPaymentSection}, the section `ui/payment-section.ts` owns and the payee's create screen draws from the same function: the payee address, the amount, and the payment link, each a plain-text value with its own copy control, beside the symbol of that same URI.
  * The actions around it (back to Create, Share, Save as PDF, Pay) are chrome, and the Pay control is the injected-wallet flow's alone: a Zcash or Monero invoice is paid by the payment link and QR code the document carries, so it is offered no control that would lead nowhere.
  */
 

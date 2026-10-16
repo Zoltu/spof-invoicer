@@ -16,7 +16,7 @@
  * The exported members beside it ({@link money}, {@link formatInvoiceDate}, {@link invoiceStatus}) are the shared primitives the view model is assembled from, while the network label it shows is `ui/network-labels.ts`'s own — imported, not re-exported, so naming a network has one import path; {@link clip} is a helper internal to this module, not part of what it exports.
  */
 import { SUPPORTED_CHAIN_IDS } from "../assets/registry.js";
-import { MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ID_CHARS, MAX_INVOICE_NOTES_CHARS, MAX_NAME_CHARS, MAX_TAX_LABEL_CHARS, computeTotals, } from "../invoice/model.js";
+import { MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ID_CHARS, MAX_INVOICE_NOTES_CHARS, MAX_NAME_CHARS, MAX_TAX_LABEL_CHARS, computeTotals, } from "../invoice/model.js";
 import { MAX_PAYMENT_LINK_BYTES, PaymentLinkError, buildPaymentLink } from "../payment/links.js";
 import { utf8ToBytes } from "../util/encoding.js";
 import { boundMessage } from "../util/errors.js";
@@ -86,13 +86,21 @@ function noteLines(notes) {
     return boundMessage(notes, MAX_INVOICE_NOTES_CHARS).split("\n").map((line) => stripDisplayCharacters(line));
 }
 /**
+ * The widest contact value and the widest contact line the party block displays: each the wider of the two bounds the model applies to that shape, so neither falls below a line or a value the validator accepts.
+ *
+ * A contact value is free text the model bounds by lines and by {@link MAX_CONTACT_CHARS} characters in total, or the single-line email spelling the field admits at {@link MAX_EMAIL_CHARS}, and the model checks each line of the free-text shape against {@link MAX_CONTACT_LINE_CHARS} alone.
+ * Taking the wider of the two shapes' bounds is this module's rule for every clip cap — the cap is the widest legal form of the value it bounds — where the legacy cap alone would clip and annotate a line the validator accepts the moment the per-line or total cap outgrew it, on the page, in the print twin, and in the PDF alike.
+ */
+const MAX_PARTY_CONTACT_CHARS = Math.max(MAX_CONTACT_CHARS, MAX_EMAIL_CHARS);
+const MAX_PARTY_CONTACT_LINE_CHARS = Math.max(MAX_CONTACT_LINE_CHARS, MAX_EMAIL_CHARS);
+/**
  * A party's contact info split into the lines the party block renders one detail row per.
  *
  * The split comes before the strip for the reason {@link noteLines} gives, so each line loses its own format characters and the contact keeps the lines it was stored with.
- * Each line is bounded by {@link MAX_EMAIL_CHARS} — the widest of the field's legal forms, the legacy email spelling's own cap, which is wider than the per-line bound the model does not apply to that shape — so a stored email address is displayed whole rather than cut against a narrower cap.
+ * The value and each line are bounded by {@link MAX_PARTY_CONTACT_CHARS} and {@link MAX_PARTY_CONTACT_LINE_CHARS} — never by less than the bound the model itself applies — so a stored legacy email address is displayed whole rather than cut against the narrower per-line cap that shape is not held to.
  */
 function contactLines(contact) {
-    return boundMessage(contact, MAX_EMAIL_CHARS).split("\n").map((line) => clip(line, MAX_EMAIL_CHARS));
+    return boundMessage(contact, MAX_PARTY_CONTACT_CHARS).split("\n").map((line) => clip(line, MAX_PARTY_CONTACT_LINE_CHARS));
 }
 /** A money figure with the asset's symbol, e.g. `357.000001 USDC`. */
 export function money(amount, symbol) {
@@ -153,7 +161,7 @@ export const INVOICE_LABELS = Object.freeze({
  * The total the document draws and the Amount term a payer copies are the one amount the built link carries — `payment/links.ts`'s {@link PaymentLink.amount}, whose decimal text is the bare decimal a wallet's amount field takes, with no ticker — so the figure a wallet is asked for, the figure printed beside it, and the figure copied out of it are one value rather than two recomputations that happen to agree today.
  * The payment terms' network label is clipped like the free-text fields, under the longest label this app's networks spell, while the payee address and the URI are held fail closed instead: the address under {@link MAX_PAYMENT_ADDRESS_CHARS} and the URI under the link layer's own byte budget, so a value that cannot be shown whole is a refused build rather than a displayed prefix with the clip's annotation on it.
  * The payee term draws the address the link itself carries — the payout-address dispatcher's own return, which `payment/links.ts` exposes as the built link's `payee` — rather than the invoice's raw field, so an `Invoice` a caller assembled by hand cannot display one spelling of a payee beside a URI that encodes another.
- * The amount, the address, and the link terms carry `verbatim`, the one thing that marks a value a wallet takes verbatim: the on-screen view draws each of those in a single-line field with a copy control, so the value a payer clicks to copy is the same string the URI and the symbol carry rather than whatever their text selection spanned, and the print path and the PDF draw the same string whole rather than the field's own clipped overflow.
+ * The amount, the address, and the link terms carry `verbatim`, the one thing that marks a value a wallet takes verbatim: the on-screen view draws each of those as plain text with a copy control, so the value a payer copies is the same string the URI and the symbol carry rather than whatever their text selection spanned, and the print path and the PDF draw the same string whole rather than the on-screen run's clipped overflow.
  * The payment link is built once, checked to survive that boundary unchanged, exposed by name, and its symbol is encoded from that one value, so the view model's own {@link InvoiceViewModel.paymentLink}, the term that displays it, and the encoded payload are one string rather than three spellings that happen to agree: a legal invoice's link always fits the encoder's widest symbol, so the two throws those boundaries can raise (`PaymentLinkError`, `RangeError`) are unreachable from a validated invoice and surface only for one a caller assembled by hand.
  * The optional icon is armed here, once, by the icon leaf's `svgDataUrl`: the value is the leaf's own data URL, which is the type every image sink accepts, so the on-screen document and the PDF read one prepared value rather than each building a URL of its own; that call runs the icon gate itself, so it throws the gate's own `TypeError` or `InvalidIconError` for a value the gate refuses, none of which is reachable from a validated invoice — whose `icon` the model already gated to an accepted canonical document — so, like the link boundary's throws above, they surface only for an invoice a caller assembled by hand.
  * The result is frozen; a renderer reads it and draws, it does not re-derive.

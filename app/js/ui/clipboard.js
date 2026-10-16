@@ -6,6 +6,7 @@
  *
  * {@link copyText} wraps the one method this app uses (`writeText`).
  * {@link copyWithFallback} is the copy control's own click handler built on top: it writes, confirms the write in the control's status line, and when the clipboard is unavailable or refuses, selects the value and tells the user to copy by hand.
+ * The write is issued synchronously, so it stays inside the click's own gesture; `schedule` runs the reporting of its outcome, defaulting to the write's own resolution — the microtask the promise settles on — while a caller that blanks its status first can move the report to a later task, so the blank and the confirmation are two mutations an assistive technology observes as two changes.
  * Both confirmations are spelled here once, so the surfaces cannot drift.
  */
 /** What a copy control's status reads once the text is on the clipboard. */
@@ -48,15 +49,20 @@ function selectContents(element) {
 }
 /**
  * Wire a copy click: copy `text`, report the outcome in `status`, and fall back to selecting `element` for a manual copy when the clipboard is unavailable or refuses the write.
+ *
+ * The write is issued before anything is deferred, so it stays inside the click's own gesture; `schedule` runs the report instead of the write's own resolution, so a caller that blanked `status` first can have the confirmation land on a later task rather than in the same one as the blank.
  */
-export function copyWithFallback(text, clipboard, element, status) {
+export function copyWithFallback(text, clipboard, element, status, schedule = (report) => report()) {
+    // The write is issued now, still inside the click's own gesture; only the reporting of its outcome may be moved to another task.
     void copyText(text, clipboard).then((copied) => {
-        if (copied) {
-            status.textContent = COPIED;
-            return;
-        }
-        selectContents(element);
-        status.textContent = COPY_BY_HAND;
+        schedule(() => {
+            if (copied) {
+                status.textContent = COPIED;
+                return;
+            }
+            selectContents(element);
+            status.textContent = COPY_BY_HAND;
+        });
     });
 }
 //# sourceMappingURL=clipboard.js.map

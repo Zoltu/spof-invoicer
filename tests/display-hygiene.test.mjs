@@ -1,10 +1,16 @@
-/** The suite for display hygiene: the stripping pass across the view model, document, panel, and PDF, and the bound each payment-details value is clipped to — the validator's refusals of control, line-separator, and direction-formatting code points included. */
+/** The suite for display hygiene: the stripping pass across the view model, document, panel, and PDF, and the bound each displayed value — a payment-details term or a party's contact lines — is clipped to, the validator's refusals of control, line-separator, and direction-formatting code points included. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SUPPORTED_CHAIN_IDS, isCanonicalEvmChainId } from "../app/js/assets/registry.js";
 import { decodeInvoice } from "../app/js/invoice/codec.js";
-import { createInvoice } from "../app/js/invoice/model.js";
+import {
+	MAX_CONTACT_CHARS,
+	MAX_CONTACT_LINE_CHARS,
+	MAX_CONTACT_LINES,
+	MAX_EMAIL_CHARS,
+	createInvoice,
+} from "../app/js/invoice/model.js";
 import { MAX_PAYMENT_LINK_BYTES, buildPaymentLink } from "../app/js/payment/links.js";
 import { buildInvoicePages } from "../app/js/pdf/renderer.js";
 import { chainName, networkLabel } from "../app/js/ui/network-labels.js";
@@ -354,4 +360,75 @@ test("the PDF text path draws the stripped invoice text", () => {
 	}
 	// The payment link carries the query separator `?` of its own scheme, so exactly that many question marks are expected: any other would be a code point folded into a replacement glyph.
 	assert.equal(text.split("?").length - 1, 1, "no stripped code point was left to fold into a replacement glyph");
+});
+
+test("the PDF draws a stored contact line exactly as the model stored it", () => {
+	// The page and the PDF both draw the view model's contact lines, and the validator stores the canonical contact text, so the PDF's fitted run carries the stored value rather than a stripped second spelling of it.
+	const contact = "Stüdió — Café\n+44 20 7946 0000\n12 Rue de l'Exemple, Paris";
+	const invoice = invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: contact } });
+	assert.equal(invoice.payee.email, contact, "the stored contact value is the one the form submitted");
+	const drawn = pdfTextOf(buildInvoiceViewModel(invoice, "2026-10-03"));
+	for (const line of invoice.payee.email.split("\n")) {
+		assert.ok(drawn.includes(line), `the PDF loses the stored contact line ${JSON.stringify(line)}`);
+	}
+});
+
+test("a contact value's own spacing is drawn the same by the document and by the export", () => {
+	// The page and the print twin are one element under `invoice.css`'s own declaration for the contact lines (asserted in the view suite), and the export draws each stored line literally, so a run of spaces and the space a line opens with have to reach both surfaces as the characters the model stored rather than as a collapsed rendering of them.
+	const contact = "12  Example  Street\n  Accounts\n+44 20 7946 0000";
+	const invoice = invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: contact } });
+	const model = buildInvoiceViewModel(invoice, VIEW_OPTIONS.today);
+	const lines = model.from.email;
+	assert.deepEqual(lines, contact.split("\n"), "the view model holds the stored lines");
+	assert.ok(lines.some((line) => line.includes("  ")), "the fixture carries a run of spaces for the assertions below to be about");
+	assert.ok(lines.some((line) => line.startsWith(" ")), "and a line a space opens");
+
+	const drawn = buildInvoicePages(model, METRICS).flatMap((page) => page.ops.filter((op) => op.kind === "text").map((op) => op.text));
+	for (const line of lines) {
+		assert.ok(drawn.includes(line), `the export draws ${JSON.stringify(line)} as one run of the line's own characters`);
+	}
+
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		assert.deepEqual(
+			findAll(view, (node) => hasClass(node, "party-detail")).map((node) => textOf(node)),
+			lines,
+			"and the document hands the block that preserves those characters the same lines",
+		);
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a contact value the validator accepts is displayed whole, at the widest bound the field's shapes admit", () => {
+	// The module's rule for every clip cap: it is the widest legal form of the value it bounds. A contact value is free text the model bounds by lines and by a total, or the single-line legacy email spelling, so the two fixtures below fill each shape to its own bound, and every line of them has to reach the view model as the validator stored it — the bound the page, the print twin, and the PDF all draw through.
+	const legacyEmail = `${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length)}@example.com`;
+	const freeText = Array.from({ length: MAX_CONTACT_LINES }, () => "m".repeat(MAX_CONTACT_LINE_CHARS)).join("\n");
+	assert.equal(legacyEmail.length, MAX_EMAIL_CHARS, "the legacy fixture is a single-line address at exactly the legacy cap");
+	assert.equal(freeText.length, MAX_CONTACT_CHARS, "the free-text fixture fills every line the model allows, its line breaks counted");
+
+	for (const contact of [legacyEmail, freeText]) {
+		const invoice = invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: contact } });
+		assert.equal(invoice.payee.email, contact, "the validator accepts the fixture as one of the field's widest legal shapes");
+		const lines = contact.split("\n");
+		assert.deepEqual(
+			buildInvoiceViewModel(invoice, VIEW_OPTIONS.today).from.email,
+			lines,
+			"every stored line reaches the view model whole, with nothing cut and no clip annotation on it",
+		);
+
+		const fake = installInteractiveDocument();
+		try {
+			const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+			const payee = findAll(view, (node) => hasClass(node, "party-payee"))[0];
+			assert.deepEqual(
+				findAll(payee, (node) => hasClass(node, "party-detail")).map((node) => textOf(node)),
+				lines,
+				"and the document, the print twin with it, draws those same lines rather than a clipped prefix",
+			);
+		} finally {
+			fake.restore();
+		}
+	}
 });

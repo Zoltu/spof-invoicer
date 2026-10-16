@@ -6,6 +6,7 @@
  *
  * The amount, the address, and the link are values a wallet takes verbatim, so each is drawn as ordinary text with an exact-copy control beside it: a payer selects and copies the value the way they would any other text on the page — one term per block, so selecting the whole section yields a label and a value per line — while one click on the control hands the clipboard that string itself rather than whatever a selection happened to span.
  * The stylesheet holds each value on one run, so neither the layout nor a text selection can put a line break inside a value that has none.
+ * The control's confirmation is a status line with a lifecycle: it is cleared after a pause so the section returns to its uniform resting height, and a repeated copy of the same value blanks the line first and re-sets it, so the change is one an assistive technology announces rather than an identical rewrite it may pass over.
  *
  * The print path is given a second presentation of the same string.
  * A print engine cannot be trusted with the on-screen run — it is not allowed to wrap, and the copy control beside it is chrome the print path hides — so each copyable term also carries a print-only twin of its value: the same string as a text node, which `print.css` swaps in for the value and lets wrap, so a printed invoice carries the complete amount, payee address, and payment link of every legal invoice.
@@ -14,6 +15,61 @@
  */
 import { h } from "../util/dom.js";
 import { copyWithFallback } from "./clipboard.js";
+/**
+ * The pause a copy confirmation stays up before its status clears, so a copied term's row returns to the height of the plain rows beside it rather than keeping the confirmation's line for the rest of the session.
+ */
+const CONFIRMATION_MS = 4000;
+/** The confirmation timer a rendered section uses: the wall clock's own pause, cancelled when a new copy replaces the confirmation. */
+const wallClockTimer = {
+    after(clear) {
+        const handle = setTimeout(clear, CONFIRMATION_MS);
+        return () => clearTimeout(handle);
+    },
+};
+/**
+ * Run a copy's confirmation on a task of its own.
+ *
+ * A live region records a change it observes between tasks, so the blank this control writes and the confirmation that follows must not land in one task: a repeated copy of the same value would re-set the text a screen reader already holds and could go unannounced, which is the case the blanking exists for.
+ * The clipboard write itself stays in the click's own task — deferring it would drop the gesture some browsers require — so only the confirmation's reporting moves here.
+ */
+const laterTask = (report) => {
+    setTimeout(report, 0);
+};
+/**
+ * Whether `status` is still part of the document the section was rendered into.
+ *
+ * The browser keeps a rendered element's `isConnected` current: it is `false` once `ui/create.ts` rebuilds the payment section with `replaceChildren` and drops the subtree that held the status, so a write after that would land in a detached node the payee never sees.
+ * A caller that drives the control directly passes a plain object whose `isConnected` is `undefined`, which is not `false`, so the control writes as it does for a mounted status.
+ */
+function stillMounted(status) {
+    return status.isConnected !== false;
+}
+/**
+ * Wire a copy control's click: copy the term's value, confirm the write in `status`, and clear the confirmation after its pause so the section returns to its uniform resting state.
+ *
+ * The status is blanked synchronously before each copy and any pending clear is cancelled first, and the confirmation is reported on a later task rather than the click's own, so a repeated copy of the same value still changes the live region's text — the blank and the set are two mutations an assistive technology announces — and the term's row carries the confirmation's height only while the confirmation stands.
+ * Every write is guarded by {@link stillMounted}, so a confirmation or a pending clear left running when `ui/create.ts` rebuilds the section with `replaceChildren` does not land in the detached status it would otherwise write into.
+ */
+export function copyControlClick(text, clipboard, value, status, timer) {
+    let cancel = () => { };
+    return () => {
+        cancel();
+        if (stillMounted(status))
+            status.textContent = "";
+        cancel = timer.after(() => {
+            if (!stillMounted(status))
+                return;
+            status.textContent = "";
+            cancel = () => { };
+        });
+        copyWithFallback(text, clipboard, value, status, (report) => {
+            laterTask(() => {
+                if (stillMounted(status))
+                    report();
+            });
+        });
+    };
+}
 /**
  * The section the view model describes: its payment title, one term per entry in the model's own list, and the symbol of the link those terms state.
  *
@@ -30,7 +86,9 @@ function paymentTerm(term, clipboard) {
  * A term's value: the term's own text with an exact-copy control when it is one a wallet takes verbatim, and plain text when it is not.
  *
  * The value is a text node rather than a form control, so a payer reads, selects, and copies it as they would any other text on the page, and a selection that spans the whole section yields one label and value per line rather than a control's value.
- * The copy control still hands over the term's own string rather than the span of that selection, and the run the stylesheet draws the value in does not wrap, so the layout cannot break a value that breaks nowhere either.
+ * The copy control hands over the term's own string rather than the span of that selection, and the run the stylesheet draws the value in does not wrap, so the layout cannot break a value that breaks nowhere either.
+ * A verbatim value is a keyboard-focusable scroll container: a value wider than its column overflows it, and focusing the value is what lets a keyboard-only user arrow along it to the tail the copy control also hands over whole.
+ * Being focusable and a scroll container of its own, the value is a named `group`: ARIA 1.2 does not let an author name a bare generic element, and the role is what lets `aria-label` tell a screen-reader user which value the focus stop holds, while `invoice.css` rings the stop where `app.css` would leave a span unringed.
  * The print-only twin is that same term as the printed page presents it: the on-screen run does not wrap, a print engine would lay it out on one line and clip it at the column's edge, and the copy control — the one complete-copy affordance — is hidden in print, so a value longer than the column, a Zcash unified address of up to 311 characters or the payment link carrying it, would otherwise reach paper as the prefix that fitted.
  * The twin is a text node rather than a control's value, which is what lets `print.css` wrap it; on screen it is hidden and the value with its copy control is the presentation.
  * The verbatim value carries its own class because the print swap drops that value alone: the terms no wallet takes verbatim have no twin, and their text stays in the printed document.
@@ -42,13 +100,12 @@ function paymentValue(term, clipboard) {
     if (term.verbatim !== true) {
         return [h("span", { class: "payment-value" }, term.value)];
     }
-    const value = h("span", { class: "payment-value payment-value-verbatim", "aria-label": term.label }, term.value);
+    const value = h("span", { class: "payment-value payment-value-verbatim", role: "group", "aria-label": term.label, tabindex: "0" }, term.value);
     const printed = h("span", { class: "payment-value-print" }, term.value);
-    const status = h("span", { class: "payment-status no-print", role: "status" }, "");
+    // The status is built with no children at all rather than an empty string: `h()` turns a string child into a text node, and the stylesheet's `:empty` rule — what takes the status's reserved full-width row out of flow while it is silent — need not match an element holding one.
+    const status = h("span", { class: "payment-status no-print", role: "status" });
     const copy = h("button", { type: "button", class: "btn btn-secondary payment-copy no-print", "aria-label": `Copy ${term.label}` }, "Copy");
-    copy.addEventListener("click", () => {
-        copyWithFallback(term.value, clipboard, value, status);
-    });
+    copy.addEventListener("click", copyControlClick(term.value, clipboard, value, status, wallClockTimer));
     return [value, printed, copy, status];
 }
 /**

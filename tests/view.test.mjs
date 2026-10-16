@@ -5,22 +5,23 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { installInteractiveDocument } from "./helpers/dom.mjs";
+import { installDocument, installInteractiveDocument } from "./helpers/dom.mjs";
 import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TRANSPARENT_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
 import { readSymbol } from "./helpers/qr-reader.mjs";
 import { findAll, hasClass, inputValues, paymentValues, walk, textOf } from "./helpers/tree.mjs";
 import { unifiedOfBytes } from "./helpers/unified-address.mjs";
-import { SUPPORTED_CHAIN_IDS } from "../app/js/assets/registry.js";
+import { ASSETS, SUPPORTED_CHAIN_IDS } from "../app/js/assets/registry.js";
 import { encodeInvoice } from "../app/js/invoice/codec.js";
 import { MAX_EMAIL_CHARS, createInvoice } from "../app/js/invoice/model.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
+import { copyControlClick, renderPaymentSection } from "../app/js/ui/payment-section.js";
 import { buildInvoiceViewModel, formatInvoiceDate, invoiceStatus, money } from "../app/js/ui/presentation.js";
 import { buildShareBundle, createShareDialog, openShareDialog } from "../app/js/ui/share.js";
 import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES } from "../app/js/ui/messages.js";
-import { CHAIN_NAMES, chainName, requireNamedNetworks } from "../app/js/ui/network-labels.js";
+import { CHAIN_NAMES, chainName, networkLabel, requireNamedNetworks } from "../app/js/ui/network-labels.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
@@ -696,6 +697,35 @@ test("a printed payment value is the whole value, wrapped rather than clipped", 
 	}
 });
 
+test("no non-verbatim payment value can outgrow its column, so none needs a print twin", () => {
+	// The printed page drops only the verbatim values and swaps in a twin; a plain value that fits its column is safe to print as it stands. Verify that the only plain values are the registry's own Asset and Network labels, and that the widest one fits the narrowest value column at the viewport the page is laid out for.
+	const hostile = invoiceFor({
+		id: "I".repeat(64),
+		payee: { name: "N".repeat(200), address: PAYEE },
+		notes: "x".repeat(400),
+	});
+	const model = buildInvoiceViewModel(hostile, VIEW_OPTIONS.today);
+	const plain = model.payment.filter((term) => term.verbatim !== true);
+	assert.deepEqual(plain.map((term) => term.label), ["Asset", "Network"], "the only values held on one non-wrapping run without a twin are the asset and network labels");
+	const assetLabels = new Set(ASSETS.map((asset) => `${asset.name} (${asset.symbol})`));
+	const networkLabels = new Set(SUPPORTED_CHAIN_IDS.map((chainId) => networkLabel(chainId)));
+	assert.ok(assetLabels.has(plain[0].value), "and the asset value is a registry label, not text an invoice can stretch");
+	assert.ok(networkLabels.has(plain[1].value), "as is the network value");
+
+	// The widest value either label can take, read from the registry rather than a transcript, so a new asset or network is held to the same bound.
+	const widest = Math.max(
+		...ASSETS.map((asset) => `${asset.name} (${asset.symbol})`.length),
+		...SUPPORTED_CHAIN_IDS.map((chainId) => networkLabel(chainId).length),
+	);
+	// The value column at the narrowest viewport the page is laid out for (320px): the document column less the ≤640px rule's 5.5rem label rail and 0.5rem gap. At the value face of 0.9375rem a UI sans averages well under half an em per character over these labels, so the column fits many more than the widest label's characters.
+	const valueColumnPx = 256 - 88 - 8;
+	const perCharPx = 0.9375 * ROOT_FONT_PX * 0.5;
+	assert.ok(
+		widest * perCharPx <= valueColumnPx,
+		`the widest non-verbatim value is ${widest} characters, which fits the ${valueColumnPx}px column at the value face's half-em average`,
+	);
+});
+
 /**
  * Every `.payment-qr` rule a stylesheet declares, labelled with the at-rule it sits inside and its own selector, so an invariant named for the symbol's card is checked everywhere the property could be written rather than only in the first matching block.
  */
@@ -1234,6 +1264,19 @@ test("the letterhead draws the invoice's own icon, and draws none when it carrie
 	}
 });
 
+test("the print path keeps the letterhead's supplied mark and never restores the default one", () => {
+	// The page draws exactly one of the two marks and the PDF draws the icon in the accent mark's place; the print path renders the page's own markup, so print.css must keep whichever mark the page drew — never hide the supplied icon, and never add a rule that would draw the built-in mark the page left out.
+	const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
+	for (const body of [...printCss.matchAll(/\.letterhead-icon[^{}]*\{([^{}]*)\}/g)].map((match) => match[1])) {
+		assert.doesNotMatch(body, /display:\s*none|visibility:\s*hidden/, `print.css must not hide the payee's own icon: ${body.trim()}`);
+	}
+	const markRules = [...printCss.matchAll(/\.invoice-logo[^{}]*\{([^{}]*)\}/g)].map((match) => match[1]);
+	assert.ok(markRules.length > 0, "print.css declares the default mark's own print treatment");
+	for (const body of markRules) {
+		assert.doesNotMatch(body, /display:|background-image:|content:|visibility:/, `print.css must not re-show the built-in brand mark the page leaves out when the invoice carries its own icon: ${body.trim()}`);
+	}
+});
+
 test("a party's contact info draws one detail line per line, under the party it belongs to", () => {
 	const payeeContact = "Studio Example Ltd\n12 Example Street\n+44 20 7946 0000\nbilling@example.com";
 	const payerContact = "Accounts\nap@client.example";
@@ -1266,48 +1309,91 @@ test("a party's contact info draws one detail line per line, under the party it 
 
 	// The party block is a grid, so each contact line takes a row of its own and the lines stack without a layout rule here; the print path inks them like the rest of the party text.
 	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
-	const party = /^\.party \{([^}]*)\}/m.exec(invoiceCss)?.[1];
-	assert.ok(party !== undefined, "invoice.css declares the party block");
-	assert.match(party, /display:\s*grid;/, "the party block lays its children out as grid rows, which is what stacks the contact lines");
-	assert.match(
-		readFileSync(join(root, "app/stylesheets/print.css"), "utf8"),
-		/^\t\.party-detail,$/m,
+	assert.equal(appliedDeclaration(invoiceCss, ".party", "display"), "grid", "the party block lays its children out as grid rows, which is what stacks the contact lines");
+	assert.equal(
+		appliedDeclaration(readFileSync(join(root, "app/stylesheets/print.css"), "utf8"), ".party-detail", "color"),
+		"#000 !important",
 		"print.css forces the contact lines to the same black ink as the rest of the party text",
 	);
 });
 
-test("a contact line is displayed whole at its widest legal spelling, and the display strip runs line by line", () => {
-	// The legacy email spelling is a legal form of the same field, so a line is bounded by that spelling's own cap rather than by the narrower per-line contact bound: a stored address at the cap reaches the document whole.
-	const legacy = `${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length)}@example.com`;
-	assert.equal(legacy.length, MAX_EMAIL_CHARS);
-	const atCap = buildInvoiceViewModel(
-		invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: legacy } }),
-		VIEW_OPTIONS.today,
-	);
-	assert.deepEqual(atCap.from.email, [legacy], "a stored email at the legacy cap is one line, displayed whole");
+test("a stored contact value is drawn line for line exactly as the validator stored it", () => {
+	// The model stores the canonical contact text, so a line the page draws is the line the payload carries rather than a stripped second spelling of it — the invariant the tab pass and the format-character refusal exist to hold.
+	const contact = "Stüdió — Café\n+44 20 7946 0000\n日本 🧾 𝒜";
+	const invoice = invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: contact } });
+	assert.equal(invoice.payee.email, contact, "the stored value is the value the form submitted");
+	const stored = invoice.payee.email.split("\n");
 
-	// The split comes before the strip, so a format character the validator leaves unrefused is removed from the line that carries it while the line breaks between lines survive.
-	const stripped = buildInvoiceViewModel(
-		invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: "Studio \uFFF9Example\nbilling@example.com" } }),
-		VIEW_OPTIONS.today,
-	);
+	const model = buildInvoiceViewModel(invoice, VIEW_OPTIONS.today);
+	assert.deepEqual(model.from.email, stored, "the view model draws the stored value's own lines");
+
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const payee = findAll(view, (node) => hasClass(node, "party-payee"))[0];
+		assert.deepEqual(
+			findAll(payee, (node) => hasClass(node, "party-detail")).map((node) => textOf(node)),
+			stored,
+			"the document draws each stored line whole, and the print path prints this same element",
+		);
+	} finally {
+		fake.restore();
+	}
+});
+test("a tab pasted into a contact value is stored as the space the page, the print twin, and the PDF all draw", () => {
+	// The model admits a tab inside a contact line while the display boundary removes it, so a stored tab would be drawn as nothing and would join the words it separated; the canonical contact text stores the single space the tab stood for instead.
+	const invoice = invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: "Studio\tExample\n+44 20 7946 0000" } });
+	assert.equal(invoice.payee.email, "Studio Example\n+44 20 7946 0000", "the stored value carries a single space where the tab stood");
+	const model = buildInvoiceViewModel(invoice, VIEW_OPTIONS.today);
 	assert.deepEqual(
-		stripped.from.email,
-		["Studio Example", "billing@example.com"],
-		"the interlinear-annotation character the validator admits is stripped from its own line",
+		model.from.email,
+		["Studio Example", "+44 20 7946 0000"],
+		"so the rendered lines are the stored lines, with no control character left to strip",
 	);
 
 	const fake = installInteractiveDocument();
 	try {
-		const view = renderInvoiceView(
-			invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: legacy } }),
-			{ ...VIEW_OPTIONS, notice: noticeRecorder() },
-		);
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
 		const payee = findAll(view, (node) => hasClass(node, "party-payee"))[0];
 		assert.deepEqual(
 			findAll(payee, (node) => hasClass(node, "party-detail")).map((node) => textOf(node)),
-			[legacy],
-			"and the document draws that whole line, with no clip annotation appended to it",
+			model.from.email,
+			"and the document draws those same lines",
+		);
+	} finally {
+		fake.restore();
+	}
+});
+test("a contact value's own spacing is drawn as the payee typed it on the page and on paper", () => {
+	// The field is free text, so a run of spaces and the space a line opens with are part of the value; the block that draws it would collapse them under the default `white-space`, while the PDF draws the line's own characters, and the print path is that same element rather than a second copy of the markup.
+	const contact = "12  Example  Street\n  Accounts\n+44 20 7946 0000";
+	const invoice = invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: contact } });
+	assert.equal(invoice.payee.email, contact, "the stored value keeps the run of spaces and the space a line opens with");
+	const stored = invoice.payee.email.split("\n");
+	assert.ok(stored.some((line) => line.includes("  ")), "the fixture carries a run of spaces for the assertions below to be about");
+	assert.ok(stored.some((line) => line.startsWith(" ")), "and a line a space opens");
+
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	assert.equal(
+		declaration(ruleBody(invoiceCss, ".party-detail"), "white-space"),
+		"pre-wrap",
+		"the block that draws the contact lines preserves their whitespace, as the note lines' own block already does",
+	);
+	// The print stylesheet recolours the same element and is loaded instead of the screen's, so it is the one place a re-collapse could hide: it must declare no `white-space` for these lines or any other.
+	assert.doesNotMatch(
+		readFileSync(join(root, "app/stylesheets/print.css"), "utf8"),
+		/white-space/,
+		"the print path prints the contact lines under the document's own declaration rather than one that would collapse their spaces",
+	);
+
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const payee = findAll(view, (node) => hasClass(node, "party-payee"))[0];
+		assert.deepEqual(
+			findAll(payee, (node) => hasClass(node, "party-detail")).map((node) => textOf(node)),
+			stored,
+			"and the document hands the block that preserves them the same characters",
 		);
 	} finally {
 		fake.restore();
@@ -1319,7 +1405,7 @@ test("a verbatim payment row is no taller than the value it draws, and an empty 
 	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
 	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
 	const value = ruleBody(invoiceCss, ".payment-value");
-	const copy = ruleBody(invoiceCss, ".payment-copy");
+	const copy = ruleBody(invoiceCss, ".payment-term .payment-copy");
 	const status = ruleBody(invoiceCss, ".payment-status");
 	const button = ruleBody(appCss, ".btn");
 	assert.ok(
@@ -1332,38 +1418,255 @@ test("a verbatim payment row is no taller than the value it draws, and an empty 
 	assert.ok(String(line).endsWith("rem"), "the value's line box is stated in rem rather than left to each face's own size");
 	const linePx = pxLength(line, ".payment-value line-height");
 
-	// The tallest box on a row sets that row's height, so what has to fit inside the line is the control's whole border box: its face, its leading, its padding, and the border `.btn` declares.
+	// The rule that decides a flex line's height is the box of the tallest item on it, so a row is the value's line box exactly while every other item's own box fits inside that line — and only while the value is the line's one baseline-aligned item.
+	// The copy control is centred for that reason: left on the row's baseline instead, it takes part in the alignment, and the flex line is then the largest ascent above the baseline plus the largest descent below it, counted on each side of the control's face separately, so its ascent or its descent alone could hold the row a fraction of a line taller than its neighbours while its whole box still fitted inside the value's line.
+	assert.equal(declaration(copy, "align-self"), "center", "the copy control is centred rather than left on the row's baseline, so it contributes its whole box and no ascent or descent of its own can decide the row's height");
+	// The tallest box on a row sets that row's height, so what has to fit inside the line is the control's whole border box: its face, its leading, its padding on each edge, and the border `.btn` declares.
 	const face = pxLength(declaration(copy, "font-size"), ".payment-copy font-size");
 	const leading = Number(declaration(copy, "line-height"));
 	assert.ok(Number.isFinite(leading), "the control's leading is a multiple of its own face, so its box follows from that face");
-	const [padding] = String(declaration(copy, "padding")).split(/\s+/);
+	// The padding shorthand resolves the way the shorthand reads — one value for both edges, two for the vertical pair, three or four with the bottom edge of their own — so a padding that pads one edge more than the other cannot pass as a doubled first token.
+	const copyPadding = String(declaration(copy, "padding")).trim().split(/\s+/);
+	const paddingTop = copyPadding[0];
+	const paddingBottom = copyPadding.length >= 3 ? copyPadding[2] : copyPadding[0];
 	const [btnPadding] = String(declaration(button, "padding")).split(/\s+/);
-	const [border] = String(declaration(button, "border")).split(/\s+/);
-	const control = face * leading + 2 * pxLength(padding, ".payment-copy padding") + 2 * pxLength(border, ".btn border");
-	assert.ok(control <= linePx, `the copy control's ${control}px box fits inside the ${linePx}px line its value is drawn on, so it adds no height to its row`);
+	const [btnBorder] = String(declaration(button, "border")).split(/\s+/);
+	const control = face * leading + pxLength(paddingTop, ".payment-copy padding") + pxLength(paddingBottom, ".payment-copy padding") + 2 * pxLength(btnBorder, ".btn border");
+	assert.ok(control <= linePx, `the copy control's ${control}px box, read on the edges it pads, fits inside the ${linePx}px line its value is drawn on, so it adds no height to its row`);
 	assert.ok(
-		pxLength(padding, ".payment-copy padding") < pxLength(btnPadding, ".btn padding"),
+		pxLength(paddingTop, ".payment-copy padding") < pxLength(btnPadding, ".btn padding"),
 		"and the padding it is given is shorter than the .btn padding it overrides",
 	);
 
-	// The status keeps the full-width line a message needs and gives it up while it is empty, so nothing holds a verbatim row apart from its neighbour before the first copy.
-	assert.match(invoiceCss, /\.payment-status \{\n\tflex-basis: 100%;/, "a copied-message states itself on a line of its own rather than reflowing its row");
-	assert.match(invoiceCss, /\.payment-status:empty \{\n\tdisplay: none;\n\}/, "and an empty status takes no line at all");
+	// The status keeps the full-width line a message needs and reserves none while it is empty, so nothing holds a verbatim row apart from its neighbour before the first copy.
+	// It is the live region that announces the copy, so an empty one is taken out of flow and clipped rather than hidden with `display: none`, which would drop it from the accessibility tree and leave nothing to announce the text that later fills it.
+	assert.equal(declaration(status, "flex-basis"), "100%", "a copied-message states itself on a line of its own rather than reflowing its row, read from the status's own rule rather than the combined block that mentions it");
+	const empty = ruleBody(invoiceCss, ".payment-status:empty");
+	assert.ok(empty !== undefined, "invoice.css states what an empty status is");
+	assert.notEqual(declaration(empty, "display"), "none", "the empty status is not removed from the accessibility tree, so the live region can still announce the copy into it");
+	assert.equal(declaration(empty, "position"), "absolute", "taken out of flow instead, so it reserves neither the full-width line nor the list's row gap while it has nothing to say");
+	assert.notEqual(declaration(status, "display"), "none", "and the status's own rule hides nothing either");
 
-	// Neither affordance is part of the text a payer selects, which is what makes a select-all of the section read one label and one value per line.
-	assert.match(
-		invoiceCss,
-		/\.payment-copy,\n\.payment-status \{\n\tflex: 0 0 auto;\n\tuser-select: none;\n\}/,
-		"the copy control and the status are both outside a text selection of the section",
+	// That rule is in force only while the status holds no child: `:empty` need not match an element carrying one, and the builder appends none to this status — a `""` child would become a text node and bring the reserved full-width line back into flow.
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const statuses = findAll(view, (node) => hasClass(node, "payment-status"));
+		assert.ok(statuses.length > 0, "the rendered document carries one status per verbatim term");
+		for (const node of statuses) {
+			assert.deepEqual(node.children, [], "the rendered empty status holds no child node, so `:empty` necessarily matches it and the row it would reserve stays out of flow");
+		}
+	} finally {
+		fake.restore();
+	}
+
+	// The value is a scroll container, so the scrollbar its overflow would otherwise draw must carry no layout height: a classic scrollbar's height would make the one overflowing row — the 404-byte Zcash payment link — taller than its neighbours, which is the non-uniform rhythm this presentation exists to remove.
+	assert.equal(declaration(value, "scrollbar-width"), "none", "the value reserves no layout height for the classic scrollbar its overflow would otherwise draw");
+	const webkitScrollbar = ruleBody(invoiceCss, ".payment-value::-webkit-scrollbar");
+	assert.ok(webkitScrollbar !== undefined, "invoice.css hides the value's WebKit scrollbar too");
+	assert.equal(declaration(webkitScrollbar, "display"), "none", "and hides it, so neither engine adds a scrollbar's height to that row");
+
+	// Neither affordance is part of the text a payer selects, which is what makes a select-all of the section read one label and one value per line; both also keep their own width on the row rather than stretching.
+	for (const selector of [".payment-copy", ".payment-status"]) {
+		assert.equal(appliedDeclaration(invoiceCss, selector, "flex"), "0 0 auto", `${selector} keeps its own width on the payment row rather than stretching`);
+		assert.equal(appliedDeclaration(invoiceCss, selector, "user-select"), "none", `${selector} is outside a text selection of the section`);
+	}
+});
+
+test("the copy control's own metrics outrank the plain button's, whatever order the stylesheets load in", () => {
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
+	const button = ruleBody(appCss, ".btn");
+	const metrics = ruleBody(invoiceCss, ".payment-term .payment-copy");
+	assert.ok(button !== undefined, "app.css states the plain button the control is built on");
+	assert.ok(metrics !== undefined, "invoice.css states the control's metrics under a selector scoped to its term, not a lone .payment-copy at the button's own specificity");
+	assert.ok(
+		declaration(metrics, "padding") !== undefined && declaration(metrics, "font-size") !== undefined,
+		"the scoped rule is where the control's padding and face are set",
+	);
+	// .btn sets `font: inherit` and a taller padding at a single class's specificity, so metrics written under .payment-copy alone would win only while the payment stylesheet happened to load last; only a more specific selector keeps them no matter which stylesheet a reorder puts later.
+	assert.ok(
+		selectorWeight(".payment-term .payment-copy") > selectorWeight(".btn"),
+		"the control's scoped selector must outrank the plain .btn class, so no stylesheet order can hand the control the button's taller metrics",
 	);
 });
 
-/** The declarations of the one rule a stylesheet declares under `selector`, or `undefined` when it declares none: every stylesheet here writes one declaration per line, which is the shape this reads. */
+test("a copy confirmation clears after its pause and a repeated copy still announces", async () => {
+	// A confirmation that never clears leaves the term's row a line taller than its neighbours for the rest of the session, and a second copy that rewrites the same string may not be announced at all; this drives the control's lifecycle on a fake timer rather than a wall-clock sleep.
+	const pauses = [];
+	const cancelled = [];
+	const timer = {
+		after(clear) {
+			pauses.push(clear);
+			return () => cancelled.push(clear);
+		},
+	};
+	const status = { textContent: "" };
+	const value = { tagName: "span", textContent: "zcash:u1example" };
+	const written = [];
+	const click = copyControlClick(value.textContent, { writeText: async (text) => written.push(text) }, value, status, timer);
+
+	click();
+	await drain();
+	await drain();
+	assert.equal(status.textContent, "Copied", "the copy is confirmed in the live region");
+	assert.equal(pauses.length, 1, "the confirmation is given a pause to run on");
+	assert.deepEqual(written, ["zcash:u1example"], "the clipboard receives the value the control read");
+
+	click();
+	assert.equal(status.textContent, "", "a repeat copy clears the status before it re-confirms, so the live region's text really changes");
+	assert.deepEqual(cancelled, [pauses[0]], "and the pending clear is cancelled rather than left to fire against the new confirmation");
+	await drain();
+	await drain();
+	assert.equal(status.textContent, "Copied", "the repeated copy still confirms");
+	assert.equal(pauses.length, 2, "on a fresh pause of its own");
+
+	pauses[1]();
+	assert.equal(status.textContent, "", "the confirmation clears when its pause elapses, returning the row to its uniform height and the empty status to its layout-neutral state");
+});
+
+test("a repeated copy on the clipboard-less path still changes the live region on a later task", async () => {
+	// With no clipboard API the write resolves synchronously, so the confirmation would otherwise be set as a microtask of the click's own task: a repeated copy of the same value would rewrite the text the region already held and could go unannounced, which is the case the blanking exists for.
+	const fake = installDocument({ getSelection: () => null });
+	try {
+		const timer = { after() { return () => {}; } };
+		const status = { textContent: "" };
+		const value = { tagName: "span", textContent: "zcash:u1example" };
+		const click = copyControlClick(value.textContent, null, value, status, timer);
+
+		click();
+		assert.equal(status.textContent, "", "the blank lands synchronously, on the click's own task");
+		await Promise.resolve();
+		assert.equal(status.textContent, "", "and the confirmation does not land in a microtask of that same task");
+		await drain();
+		assert.equal(status.textContent, "Press Ctrl/Cmd+C to copy", "the fallback confirmation lands on a later task of its own");
+
+		click();
+		assert.equal(status.textContent, "", "the second copy blanks the line again");
+		await Promise.resolve();
+		assert.equal(status.textContent, "", "still no same-task rewrite");
+		await drain();
+		assert.equal(status.textContent, "Press Ctrl/Cmd+C to copy", "and the repeated copy re-sets it on a later task, so the change is observable");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("each copy status is a live region that stays in the document before it has anything to say", () => {
+	// A copy confirmation reaches a screen reader only if the region carrying it is in the accessibility tree when the text lands, so the empty status is present in the markup and taken out of layout rather than removed.
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const statuses = findAll(view, (node) => hasClass(node, "payment-status"));
+		const values = findAll(view, (node) => hasClass(node, "payment-value-verbatim"));
+		assert.equal(statuses.length, values.length, "each value a wallet takes verbatim carries the status that reports its copy");
+		for (const node of statuses) {
+			assert.equal(node.attributes.role, "status", "the status is a live region, so a confirmation is announced");
+			assert.equal(textOf(node), "", "and it is empty until a copy runs");
+		}
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a verbatim payment value is a named focus stop with its own ring and a layout-neutral clip cue", () => {
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
+	// A value wider than its column is a keyboard-reachable scroll container whose scrollbar is hidden, so it needs both the ring `app.css` gives only form controls and a name that tells a screen-reader user which value the stop holds.
+	const ring = declaration(ruleBody(invoiceCss, ".payment-value-verbatim:focus-visible"), "outline");
+	assert.ok(ring !== undefined, "a focusable value needs a visible focus indicator, the one `app.css` does not give a span");
+	// The payee's create screen draws this same section under `.created-payment`, with no `.view-invoice` ancestor to declare `--inv-accent`, so a bare `--inv-accent` would leave the outline's shorthand invalid there and the ring gone. The outline therefore carries a fallback to the root-scoped token `app.css`'s own ring uses.
+	assert.match(
+		ring,
+		/var\(--inv-accent, var\(--accent\)\)/,
+		"the ring's colour falls back to the root-scoped `--accent`, so it resolves on the create screen as well as the payer's document",
+	);
+	assert.match(appCss, /:root \{[^}]*--accent:/, "and that fallback is declared at the root, which every surface inherits");
+	// The cue that a value is clipped has to paint without reserving a box, so it is a mask rather than a property that would change the row's resting height.
+	const cue = ruleBody(invoiceCss, ".payment-term:hover .payment-value-verbatim");
+	assert.ok(cue !== undefined, "the stylesheet cues a clipped value while the row is pointed at");
+	for (const line of cue.split("\n").map((entry) => entry.trim()).filter((entry) => entry !== "")) {
+		assert.match(line, /^(-webkit-)?mask(?:-image)?:/, `the cue paints with a mask rather than reserving layout: ${line}`);
+	}
+
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const values = findAll(view, (node) => hasClass(node, "payment-value-verbatim"));
+		const model = buildInvoiceViewModel(invoiceFor(), VIEW_OPTIONS.today);
+		assert.deepEqual(
+			values.map((node) => textOf(node)),
+			model.payment.filter((term) => term.verbatim === true).map((term) => term.value),
+			"the amount, the address, and the link are the focusable values",
+		);
+		assert.deepEqual(
+			values.map((node) => node.attributes["aria-label"]),
+			["Pays to", "Amount", "Payment link"],
+			"each focus stop names the term whose value it holds",
+		);
+		for (const node of values) {
+			assert.equal(node.attributes.tabindex, "0", "each value is a keyboard stop");
+			assert.equal(node.attributes.role, "group", "and carries a role an author may name");
+		}
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a copy in flight does not write into a payment section the create screen has rebuilt", async () => {
+	// The create screen rebuilds the whole section with `replaceChildren` each time the form creates an invoice, so a confirmation or a pending clear left running in the discarded section must not write into its detached status.
+	const fake = installInteractiveDocument();
+	try {
+		const view = buildInvoiceViewModel(invoiceFor(), VIEW_OPTIONS.today);
+		const clipboard = { writeText: async () => {} };
+		const section = renderPaymentSection(view, clipboard);
+		document.body.append(section);
+		const status = findAll(section, (node) => hasClass(node, "payment-status"))[0];
+		const value = findAll(section, (node) => hasClass(node, "payment-value-verbatim"))[0];
+		const pauses = [];
+		const timer = {
+			after(clear) {
+				pauses.push(clear);
+				return () => {};
+			},
+		};
+		const click = copyControlClick(textOf(value), clipboard, value, status, timer);
+
+		click();
+		await drain();
+		await drain();
+		assert.equal(textOf(status), "Copied", "a copy on the mounted section confirms in its live region");
+
+		// The section is rebuilt while the second copy's confirmation is still in flight.
+		click();
+		document.body.replaceChildren(renderPaymentSection(view, clipboard));
+		await drain();
+		await drain();
+		assert.equal(textOf(status), "", "the detached status is not written once its section is gone");
+		pauses[1]();
+		assert.equal(textOf(status), "", "and the pending clear does not write into it either");
+	} finally {
+		fake.restore();
+	}
+});
+
+/** Every rule of a stylesheet, as the selector list its header names and the body its braces hold, with its comments dropped first because a rule's text reaches back to the previous closing brace and a comment above it carries commas of its own. */
+function cssRules(css) {
+	return [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((rule) => ({
+		selectors: rule[1].split(",").map((entry) => entry.trim()),
+		body: rule[2],
+	}));
+}
+
+/**
+ * The declarations of the one rule a stylesheet declares under `selector` alone, or `undefined` when it declares none.
+ *
+ * A rule's selector list is read entry by entry — split on its commas and trimmed — so the block this returns is the one whose whole list is that selector, and a combined block that lists it beside another selector is not mistaken for the sole-selector rule the way a search for the selector's own line would.
+ * Every stylesheet here writes one declaration per line, which is the shape this reads, and writes each selector this asks about as the sole selector of its rule.
+ */
 function ruleBody(css, selector) {
-	const start = css.indexOf("\n" + selector + " {");
-	if (start === -1) return undefined;
-	const open = css.indexOf("{", start);
-	return css.slice(open + 1, css.indexOf("}", open));
+	const rule = cssRules(css).find((candidate) => candidate.selectors.length === 1 && candidate.selectors[0] === selector);
+	return rule?.body;
 }
 
 /** The value of one `property` declaration in a rule body, or `undefined` when the rule declares none. */
@@ -1375,6 +1678,19 @@ function declaration(body, property) {
 	return line === undefined ? undefined : line.slice(property.length + 2, -1);
 }
 
+/**
+ * The value `property` resolves to for `selector`, or `undefined` when no rule naming it declares the property.
+ *
+ * A selector need not sit alone in a rule's list: `print.css`'s ink block names `.party-detail` beside a dozen others, and `.payment-status` is named by that shared affordance block and by its own full-width rule, so this reads every rule whose selector list names it rather than one literal block and takes the last declaration, the one the cascade applies at equal specificity within one stylesheet.
+ */
+function appliedDeclaration(css, selector, property) {
+	const values = cssRules(css)
+		.filter((rule) => rule.selectors.includes(selector))
+		.map((rule) => declaration(rule.body, property))
+		.filter((value) => value !== undefined);
+	return values.length === 0 ? undefined : values[values.length - 1];
+}
+
 /** The 16px root font size a rem resolves against, which the page declares no font size of its own to change. */
 const ROOT_FONT_PX = 16;
 
@@ -1384,4 +1700,11 @@ function pxLength(length, where) {
 	if (text.endsWith("rem")) return Number(text.slice(0, -3)) * ROOT_FONT_PX;
 	assert.ok(text.endsWith("px"), `${where} states its length in rem or px, not ${text}`);
 	return Number(text.slice(0, -2));
+}
+
+/** The specificity weight of a selector written with classes, attributes, pseudo-classes, and elements: enough to compare the single-class `.btn` with the scoped `.payment-term .payment-copy`, where a class-like token outweighs an element and no id is in play. */
+function selectorWeight(selector) {
+	const classLike = (selector.match(/\.[\w-]+|\[[^\]]*\]|::?[\w-]+(?:\([^)]*\))?/g) ?? []).length;
+	const elements = (selector.match(/(?:^|[\s>+~])[a-zA-Z][\w-]*/g) ?? []).length;
+	return classLike * 100 + elements;
 }

@@ -203,11 +203,16 @@
 	overflow-wrap: anywhere;
 }
 
-/* A party's contact lines are one child each of the `.party` grid, so they stack as detail rows without a layout rule of their own here. */
+/*
+ * A party's contact lines are one child each of the `.party` grid, so they stack as detail rows without a layout rule of their own here.
+ * The value is free text the payee typed, and the export draws every stored line as the payee's own characters: the spaces a line carries, a run of them included, are part of the value, so this block preserves them rather than letting the default `white-space` collapse them — the same treatment `.view-invoice .note-line` gives the invoice's other free-text field.
+ * A token with no space in it still wraps inside the column, because `overflow-wrap: anywhere` breaks one where the preserved spaces alone would not.
+ */
 .party-detail {
 	font-family: var(--inv-sans);
 	font-size: 0.875rem;
 	color: var(--inv-ink-soft);
+	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
 
@@ -432,8 +437,10 @@
 }
 
 /*
- * The term value: the text a copy control reads, or the plain text of a term no wallet takes verbatim; a click anywhere in either selects the whole of it rather than starting a character-at-a-time drag.
+ * The term value: the text a copy control reads, or the plain text of a term no wallet takes verbatim.
  * It is drawn as the text it is rather than as a form control, and it holds its characters on one run: the term is a flex container, so the value is a block box whose own overflow scrolls, and neither the layout nor a text selection can put a line break inside a value that has none.
+ * A copyable value is a keyboard-reachable scroll container of its own, so a keyboard-only user can arrow along a value wider than its column and reach the tail the copy control also hands over whole.
+ * The scrollbar its overflow would otherwise draw carries no layout height: `scrollbar-width: none` and the WebKit rule below hide it, so a row whose value overflows is exactly as tall as one whose value does not, rather than gaining a scrollbar's height on the one row that overflows.
  * One line box carries the value of every term, stated in an absolute length rather than left to each face's own size, so the mono face a verbatim term is set in draws no shorter a line than the plain Asset and Network terms above it and the terms keep the list's gap apart rather than a rhythm of their own.
  */
 .payment-value {
@@ -441,8 +448,32 @@
 	min-width: 0;
 	white-space: nowrap;
 	overflow-x: auto;
-	user-select: all;
+	scrollbar-width: none;
 	line-height: 1.4rem;
+}
+
+/* The WebKit double of the rule above: the classic scrollbar a value's overflow would otherwise reserve no height for is hidden on that engine too. */
+.payment-value::-webkit-scrollbar {
+	display: none;
+}
+
+/*
+ * The focusable verbatim value is a scroll container, so it needs the ring `app.css` gives only a/button/input/select/textarea — the same ring the itemized table's scroll box takes, both being focusable scroll regions this stylesheet draws.
+ * Its colour falls back to the root-scoped `--accent` because the payment section is drawn on two surfaces: the payer's document nests it under `.view-invoice`, which declares `--inv-accent`, while the create screen draws it under `.created-payment` with no such ancestor, so a bare `--inv-accent` would leave the outline's shorthand invalid there and the ring gone.
+ */
+.payment-value-verbatim:focus-visible {
+	outline: 2px solid var(--inv-accent, var(--accent));
+	outline-offset: 2px;
+}
+
+/*
+ * A value wider than its column is clipped at the right edge, and the scrollbar that would say so is hidden above so every row keeps one resting height; this mask is how the clip announces itself instead.
+ * A mask paints the element without reserving a box, so the row's height is untouched, and it fades the right edge only while the row is pointed at, so a value that fits — whose right edge is blank — shows nothing.
+ * The cue is a hover cue rather than a focus one because a mask's default `mask-clip: border-box` would clip the focus ring drawn outside the value, which is the keyboard user's own cue.
+ */
+.payment-term:hover .payment-value-verbatim {
+	-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent);
+	mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent);
 }
 
 /*
@@ -463,9 +494,13 @@
 }
 
 /*
- * The copy control sits inside the line box its value is drawn on rather than setting its row's height, which is what the `.btn` padding it inherits would do: the control is given a shorter padding and a smaller face on a leading of its own, so its border box stays under the mono value's line and a verbatim row is no taller than the plain rows beside it.
+ * The copy control sits inside the line box its value is drawn on rather than setting its row's height, which is what the `.btn` padding it inherits would do: the control is given a shorter padding and a smaller face on a leading of its own, so its border box stays under the mono value's line.
+ * The control is centred rather than left on the row's baseline, because a baseline-aligned item is what the flex line is sized around: the line is then the largest ascent above the baseline plus the largest descent below it, so the control's own padding, border, and half-leading, counted on each side of its face separately, could hold a verbatim row a fraction of a line taller than its neighbours while its whole box still fitted inside the value's line.
+ * Centred, the control contributes its border box alone, and the value's line box is the tallest box the line holds, so that line box and nothing else decides the row's height and every payment term keeps the list's own rhythm.
+ * The rule is scoped under the term rather than written as a lone `.payment-copy`, so its selector outranks the single-class `.btn` it is layered on: at the same specificity the control's own metrics would hold only while the payment stylesheet happens to load last, and a reorder would restore the taller `.btn` padding this rule exists to remove.
  */
-.payment-copy {
+.payment-term .payment-copy {
+	align-self: center;
 	padding: 0.2rem 0.6rem;
 	font-size: 0.75rem;
 	line-height: 1;
@@ -480,9 +515,21 @@
 	color: var(--success);
 }
 
-/* No copy has run yet, so the status carries nothing: an empty element must not keep the full-width line the rule above it reserves, which would hold every verbatim row apart from its neighbour before the first copy. */
+/*
+ * No copy has run yet, so the status carries nothing, and an empty flex item would still take the full-width line the rule above gives it plus the list's row gap — holding every verbatim row apart from its neighbour before the first copy.
+ * The empty status is taken out of flow and clipped to a single invisible pixel rather than hidden with `display: none`: it is the `role="status"` live region that announces the copy, and an element removed from the accessibility tree cannot announce the text that later fills it.
+ * The renderer builds that status with no children at all, because this rule matches no element holding a child — an appended empty string is a text node — and the full-width line the rule above reserves would come back with it.
+ */
 .payment-status:empty {
-	display: none;
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	border: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
 }
 
 /*

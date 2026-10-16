@@ -13,6 +13,8 @@
  * A lone surrogate code unit is refused as malformed text: it is not a code point any renderer can show as the byte it is, and neither the NFC composition above nor the codec's canonical re-serialization rejects one, so this validator is the boundary that must.
  *
  * A party's `email` field carries a second accepted shape: the wire key keeps its name and now carries free-text contact info — an email address, a phone number, a postal address — which a single-line legacy email spelling of up to {@link MAX_EMAIL_CHARS} characters satisfies unchanged, so a share link written before the field widened still validates.
+ * The text stored for a value that takes the free-text branch is the canonical contact text `invoice/contact-canonical-text.ts` states once — composed to NFC, its line endings LF, and a tab stored as the space it stood for — so the value the field holds and the spelling the payload carries are one text, and the page, the print twin, and the PDF draw that value rather than a stripped second spelling of it.
+ * The legacy email branch is the one exception, and it exists because the recorded byte-for-byte legacy decision leaves its accepted set exactly as the old rule left it: that set admits the interlinear-annotation format characters and the Egyptian hieroglyph format controls, which the display boundary strips from a value it shows, so a legacy value carrying one is stored as the payload spells it and drawn stripped.
  *
  * Money is integer base units and BigInt throughout — never a float — with these rules:
  * - `quantity` and `unitPrice` are plain decimal strings with at most the asset's `decimals` fractional digits, both greater than zero, stored in the shortest exact spelling so `"2"` and `"2.00"` are one payload rather than two;
@@ -24,8 +26,9 @@
 import { ASSET_REGISTRY, SUPPORTED_CHAIN_IDS, isAssetNetwork, isSupportedAsset, isSupportedChain, } from "../assets/registry.js";
 import { UINT256_MAX, canonicalAmount, fractionalDigits, fromBaseUnits, toBaseUnits } from "../util/decimal.js";
 import { boundMessage, describe, messageOf, preview } from "../util/errors.js";
-import { INVISIBLE_FORMATTING, LONE_SURROGATE, MULTI_LINE_CONTROL, SINGLE_LINE_CONTROL } from "../util/text.js";
+import { INVISIBLE_FORMATTING, LONE_SURROGATE, MULTI_LINE_CONTROL, SINGLE_LINE_CONTROL, stripDisplayCharacters } from "../util/text.js";
 import { requirePayoutAddress } from "../wallet/payout-address.js";
+import { canonicalContactText } from "./contact-canonical-text.js";
 import { validateIcon } from "./icon.js";
 /** The only invoice schema version this build writes and reads. */
 export const INVOICE_VERSION = 1;
@@ -43,8 +46,12 @@ export const MAX_EMAIL_CHARS = 320;
 export const MAX_CONTACT_LINES = 4;
 /** The most characters one line of a party's contact info may carry. */
 export const MAX_CONTACT_LINE_CHARS = 40;
-/** The most characters a party's contact info may carry in total: {@link MAX_CONTACT_LINES} lines of {@link MAX_CONTACT_LINE_CHARS} characters each. */
-export const MAX_CONTACT_CHARS = MAX_CONTACT_LINES * MAX_CONTACT_LINE_CHARS;
+/**
+ * The most characters a party's contact info may carry in total: {@link MAX_CONTACT_LINES} lines of {@link MAX_CONTACT_LINE_CHARS} characters each, plus the {@link MAX_CONTACT_LINES} minus one line breaks between them.
+ *
+ * The total is derived from the per-line bounds rather than stated beside them, so the widest shape those bounds hold out — every line at its own cap — is the shape this bound admits: a total that left the line breaks uncounted would refuse the very input the per-line caps accept.
+ */
+export const MAX_CONTACT_CHARS = MAX_CONTACT_LINES * MAX_CONTACT_LINE_CHARS + (MAX_CONTACT_LINES - 1);
 /** The most characters one line item's description may carry. */
 export const MAX_DESCRIPTION_CHARS = 500;
 /** The most characters a payee's free-text notes may carry. */
@@ -122,6 +129,12 @@ function assertKnownFields(value, path, allowed) {
         }
     }
 }
+/** Refuse text that starts or ends with whitespace: the create form trims each field before it is validated, so a stored value is never a padded one, and the one field that repairs surrounding whitespace rather than refusing it is the icon gate (`invoice/icon.ts`). */
+function assertUnpadded(value, path) {
+    if (value.trim() !== value) {
+        throw new InvalidInvoiceError(path, "must not start or end with whitespace");
+    }
+}
 function text(value, path, { max, multiline = false }) {
     if (typeof value !== "string") {
         throw new InvalidInvoiceError(path, `must be a string, got ${preview(value)}`);
@@ -130,9 +143,7 @@ function text(value, path, { max, multiline = false }) {
     if (normalized.length === 0 || normalized.length > max) {
         throw new InvalidInvoiceError(path, `must be 1 to ${max} characters long, got ${normalized.length}`);
     }
-    if (normalized.trim() !== normalized) {
-        throw new InvalidInvoiceError(path, "must not start or end with whitespace");
-    }
+    assertUnpadded(normalized, path);
     if ((multiline ? MULTI_LINE_CONTROL : SINGLE_LINE_CONTROL).test(normalized)) {
         const reason = multiline
             ? "must not contain control characters other than newlines and tabs"
@@ -150,29 +161,65 @@ function text(value, path, { max, multiline = false }) {
 /**
  * A party's contact info, which the wire format still spells `email` on both parties.
  *
- * The value is free text — an email address, a phone number, a postal address — so it is held to the contact limits rather than to an address pattern: at most {@link MAX_CONTACT_LINES} lines of at most {@link MAX_CONTACT_LINE_CHARS} characters, {@link MAX_CONTACT_CHARS} in total, trimmed at the ends, with control characters limited to newlines and tabs.
- * The line endings are normalized first, CRLF and a lone CR to LF, so a contact value pasted from an editor that writes Windows endings is stored, and re-serialized, in the one spelling the wire format carries.
+ * The value is free text — an email address, a phone number, a postal address — so it is held to the contact limits rather than to an address pattern: at most {@link MAX_CONTACT_LINES} lines of at most {@link MAX_CONTACT_LINE_CHARS} characters, {@link MAX_CONTACT_CHARS} in total, and free of control characters beside the newlines the limits themselves split on.
+ * Its ends are refused rather than trimmed, the rule {@link assertUnpadded} holds for every text field here, so a value pasted with a stray leading or trailing space is refused by name; the spaces a line carries inside the value — a run of them, or the one a line opens with — are stored as the payee typed them.
+ * The stored text is the one `invoice/contact-canonical-text.ts`'s `canonicalContactText` returns — composed to NFC, its line endings LF, and every tab replaced with the single space it stood for — and every surface draws its spacing as it stands.
+ * The page and the print twin draw a run of spaces, and the space a line opens with, as the characters they are: `app/stylesheets/invoice.css` declares `white-space: pre-wrap` for `.party-detail`, the treatment it already gives the invoice's other free-text field, and the print path is that same element under that same declaration.
+ * The PDF draws each contact line literally too — in the fitted run where the line fits, and in the runs `pdf/renderer.ts`'s `wrapContactText` wraps a line into below its scale floor, which keeps every space rather than collapsing or dropping one.
+ * One character class is refused on top of that shape: the display boundary removes the interlinear-annotation and Egyptian-hieroglyph format characters from a line it shows even though this validator admits them as ordinary text, so a stored one would render differently from the payload it travels in — a divergence no surface can draw around, unlike the tab, whose single space is faithful.
  * A shape that reads as an email address goes down the legacy branch instead and is held to {@link MAX_EMAIL_CHARS}, the cap the field carried before it widened, so a share link written then still validates: every value the old rule accepted is accepted here too.
+ * That branch is left exactly as it was — a single line of at most {@link MAX_EMAIL_CHARS} characters with no control character at all, which no tab reaches — so neither the tab pass nor the refusal above narrows or widens it, and it is the one shape the paragraph above does not cover: the recorded byte-for-byte legacy decision pins its accepted set to the set the old rule admitted, which holds the interlinear-annotation and Egyptian-hieroglyph format characters `util/text.ts`'s display strip removes, so such a value is stored as the payload spells it and drawn stripped rather than refused.
+ * Each refusal names the bound its value tripped and how to satisfy it: a line past {@link MAX_CONTACT_LINE_CHARS} says to shorten or break the line and names the whole-value email-shaped exception that admits it alone, more lines than {@link MAX_CONTACT_LINES} says to use fewer, and the total is checked last — after the two bounds that imply it — so the coarse total-length message never stands in for the specific bound a value actually tripped.
+ * The ends are settled before any of those bounds: a value whose only fault is a trailing line break has no fault of that kind in its line count once the break is gone, so it is told about its padding rather than refused for a count it never reached.
  */
 function contact(value, path) {
     if (typeof value !== "string") {
         throw new InvalidInvoiceError(path, `must be a string, got ${preview(value)}`);
     }
-    // The legacy test below reads the stored spelling, so the line endings and the NFC composition `text` applies are settled first.
-    const normalized = value.normalize("NFC").replace(/\r\n?/g, "\n");
+    // The legacy test below reads the stored spelling, so the line endings, the tab-to-space pass, and the NFC composition are settled first; none of them changes a value the legacy rule accepts, which holds no tab and nothing but free text on its one line.
+    const normalized = canonicalContactText(value);
     if (EMAIL_PATTERN.test(normalized)) {
         return text(normalized, path, { max: MAX_EMAIL_CHARS });
     }
-    const lines = text(normalized, path, { max: MAX_CONTACT_CHARS, multiline: true }).split("\n");
+    // The ends are checked before the bounds below, because a value padded with a line break has one line fewer than the split reads: counting first would refuse it for a bound it never tripped. `text` checks the ends again with the rest of the shape rules, and the value reaching it is unpadded, so that check passes.
+    assertUnpadded(normalized, path);
+    // The line count and the per-line bound are checked before the total: each names its own bound and its remedy, where the total-length message `text` would raise first says only how long the value is, and every value past {@link MAX_CONTACT_CHARS} is past one of these two anyway.
+    const lines = normalized.split("\n");
     if (lines.length > MAX_CONTACT_LINES) {
-        throw new InvalidInvoiceError(path, `must hold at most ${MAX_CONTACT_LINES} lines, got ${lines.length}`);
+        throw new InvalidInvoiceError(path, `must hold at most ${MAX_CONTACT_LINES} lines, got ${lines.length} — put the contact info on ${MAX_CONTACT_LINES} lines or fewer`);
     }
     for (const line of lines) {
         if (line.length > MAX_CONTACT_LINE_CHARS) {
-            throw new InvalidInvoiceError(path, `must hold lines of at most ${MAX_CONTACT_LINE_CHARS} characters, got ${line.length}`);
+            throw new InvalidInvoiceError(path, `must hold lines of at most ${MAX_CONTACT_LINE_CHARS} characters, got ${line.length} — shorten the line to ${MAX_CONTACT_LINE_CHARS} characters or fewer, or break it across lines; only a whole value that is one email-shaped line is held to ${MAX_EMAIL_CHARS} instead`);
         }
     }
-    return lines.join("\n");
+    // `text` still enforces the total cap and the shape rules the two bounds above do not read, and every value reaching it here is already within {@link MAX_CONTACT_CHARS}.
+    const stored = text(normalized, path, { max: MAX_CONTACT_CHARS, multiline: true });
+    // The display boundary removes a control or invisible-format character from every stored line it shows, so a character it would remove is one no surface can draw as itself; the tab it would also remove reached here already replaced by a space.
+    const unrenderable = firstUnrenderableCodePoint(stored);
+    if (unrenderable !== null) {
+        throw new InvalidInvoiceError(path, `must not contain ${codePointLabel(unrenderable)}, an invisible formatting character no surface can show — remove it or replace it with a visible character`);
+    }
+    return stored;
+}
+/** The `U+XXXX` label a refusal gives a character that renders as nothing, since the character's own text cannot stand in the message. */
+function codePointLabel(codePoint) {
+    return `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
+}
+/**
+ * The first code point a stored contact value carries that `util/text.ts`'s display strip would remove, or `null` when every character survives it.
+ *
+ * The value is split into lines before the check because the strip removes the newline between them as well; the model's own shape refusals run before this, so the only code points it can return are the invisible-format characters those refusals leave unrefused.
+ */
+function firstUnrenderableCodePoint(stored) {
+    for (const line of stored.split("\n")) {
+        for (const character of line) {
+            const codePoint = character.codePointAt(0);
+            if (codePoint !== undefined && stripDisplayCharacters(character) !== character)
+                return codePoint;
+        }
+    }
+    return null;
 }
 function date(value, path) {
     if (typeof value !== "string") {

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { encodeInvoice } from "../app/js/invoice/codec.js";
 import { MAX_ICON_DIMENSION } from "../app/js/invoice/icon.js";
-import { InvalidInvoiceError, MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_DESCRIPTION_CHARS, MAX_ID_CHARS, MAX_NAME_CHARS, createInvoice } from "../app/js/invoice/model.js";
+import { InvalidInvoiceError, MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ID_CHARS, MAX_NAME_CHARS, createInvoice } from "../app/js/invoice/model.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
@@ -19,6 +19,7 @@ import {
 	BASELINE_ASCENT,
 	CONTENT_RIGHT,
 	FLOOR_TOP,
+	MIN_CONTACT_RUN_SCALE,
 	PAGE,
 	PAYMENT_VALUE_MIN_SIZE,
 	QR_SYMBOL,
@@ -29,6 +30,7 @@ import {
 	renderInvoicePdf,
 	renderPdf,
 	toPdfText,
+	wrapContactText,
 	wrapText,
 } from "../app/js/pdf/renderer.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
@@ -493,22 +495,23 @@ function assertHeadsAboveFloor(fixture, pages) {
 }
 
 /**
- * A name of exactly `length` characters in the word shape the half-em metric wraps to the most lines: 14-character words are the longest two of which no longer share one narrow column line, so every word takes a line of its own.
+ * A name of exactly `length` characters in the tallest shape the model's name cap admits: one unbroken run of `W`, the widest glyph the exported party-name face (Times-Bold) carries at 1 em.
+ * The run holds no space to break at and no glyph narrower than any other, so it wraps into the most lines a name of that length can.
  */
 function cappedName(length) {
-	const words = Array.from({ length: Math.ceil(length / 15) }, () => "n".repeat(14));
-	return words.join(" ").slice(0, length).padEnd(length, "n");
+	return "W".repeat(length);
 }
 
 /**
- * A contact value of exactly `length` characters in the shape the model's caps leave as the tallest one a party can carry: as many per-line-cap lines as the total cap holds, the last of them short by the newlines the total counts between them.
+ * A contact value of exactly `length` characters in the multi-line shape the model's contact caps admit: as many per-line-cap lines as the total cap holds, the line breaks between them counted against the total as the model counts them, each line spelled with `glyph`.
+ * This is not the tallest shape a party can carry — `tallestContact` returns the legacy line, which holds twice the characters the total cap allows here — but it is the shape the widest line the per-line cap admits is measured in.
  */
-function cappedContact(length) {
+function cappedContact(length, glyph = "m") {
 	const lines = [];
 	let left = length;
 	while (left > 0 && lines.length < MAX_CONTACT_LINES) {
 		const size = Math.min(MAX_CONTACT_LINE_CHARS, left);
-		lines.push("m".repeat(size));
+		lines.push(glyph.repeat(size));
 		left -= size;
 		// Each line after the first carries the newline that separates it, which the value's own total cap counts too.
 		if (left > 0) left -= 1;
@@ -517,13 +520,23 @@ function cappedContact(length) {
 }
 
 /**
+ * A contact value in the tallest shape a validated invoice can carry: a single legacy email line at `MAX_EMAIL_CHARS`, spelled with the widest glyph the exported party-detail face and the legacy branch's address pattern both leave free to repeat.
+ * The legacy line is length-bounded rather than width-bounded, so it holds twice the characters the multi-line caps allow, and it measures wider than the column at any glyph, which is what makes it the value the PDF wraps into the most runs — the head the blocks' missing fit check has to survive.
+ * `@` is the widest glyph the exported face carries (1.015 em in Helvetica), but the model's own `EMAIL_PATTERN` admits one of them at most, so the repeating body is `Æ` — 1 em, tied with the ellipsis, the per-mille sign, `Œ`, the em dash, and the trade mark sign as the widest glyph the pattern lets a local part carry.
+ */
+function tallestContact() {
+	const tail = "@Æ.Æ";
+	const contact = "Æ".repeat(MAX_EMAIL_CHARS - tail.length) + tail;
+	assert.equal(contact.length, MAX_EMAIL_CHARS);
+	return contact;
+}
+
+/**
  * The tallest head a validated invoice can draw: a name and a contact value at the model's own caps, in the narrowest column the party grid gives, with both party columns filled at once — the payee, the bill-to and the dates make three blocks, so each column is a third of the content width rather than a half.
  */
-function capMaxInvoice({ nameLength = MAX_NAME_CHARS, contactLength = MAX_CONTACT_CHARS } = {}) {
+function capMaxInvoice({ nameLength = MAX_NAME_CHARS, contact = tallestContact() } = {}) {
 	const name = cappedName(nameLength);
-	const contact = cappedContact(contactLength);
 	assert.equal(name.length, nameLength);
-	assert.equal(contact.length, contactLength);
 	return invoiceFor({
 		due: "2026-11-02",
 		payee: { name, address: PAYEE, email: contact },
@@ -532,14 +545,17 @@ function capMaxInvoice({ nameLength = MAX_NAME_CHARS, contactLength = MAX_CONTAC
 	});
 }
 
+/** The least room the cap-max head must leave above the content floor, in points: the tallest head a validated invoice can draw measures 20.8 points clear under the export's own faces, and the guard is taken just below that so the bound rests on the measured worst case rather than on a neighbour of it. */
+const CAP_MAX_FLOOR_MARGIN = 20;
+
 test("the blocks the layout draws without a fit check stay above the content floor at the invoice's field caps", async () => {
-	// The head blocks carry no fit check because the model's own field caps bound them, so what the bound rests on is the cap-max head — the longest name and contact value a validated invoice can carry, in the narrowest column three parties give — and a short fixture stands far clear of the floor without saying anything about it.
+	// The head blocks carry no fit check because the model's own field caps bound them, so what the bound rests on is the cap-max head — the longest name and the tallest contact value a validated invoice can carry, in the narrowest column three parties give — and a short fixture stands far clear of the floor without saying anything about it.
 	const plain = buildInvoicePages(
 		buildInvoiceViewModel(invoiceFor({ due: "2026-11-02", notes: "Thanks for your business." }), "2026-10-03"),
 		METRICS,
 	);
 	const capped = buildInvoicePages(buildInvoiceViewModel(capMaxInvoice(), "2026-10-03"), METRICS);
-	// The stand-in measures a half em per glyph while the faces the export embeds measure wider — Helvetica `m` is 0.833 em and Times `n` 0.556 em — so the same invoice is laid out with each metric source: the cap-max name wraps at each one's own column width, and a contact line is one run either way.
+	// The stand-in measures a half em per glyph while the faces the export embeds measure wider — Helvetica `m` is 0.833 em, `Æ` 1 em, and Times-Bold `W` 1 em — so the same invoice is laid out with each metric source: the cap-max name wraps at each one's own column width, and the legacy contact line wraps into more runs under the export's wider faces than under the stand-in.
 	const exported = buildInvoicePages(buildInvoiceViewModel(capMaxInvoice(), "2026-10-03"), await exportFontMetrics());
 	assert.equal(plain.length, 1);
 	const lowest = (page) => Math.max(...headBlocks(page).flatMap(([, block]) => block.map(drawnBottomTop)));
@@ -548,9 +564,35 @@ test("the blocks the layout draws without a fit check stay above the content flo
 		assertHeadsAboveFloor(fixture, pages);
 	}
 	assert.ok(lowest(capped[0]) > lowest(plain[0]), "the cap-max head is the taller of the two, so it is the case the unchecked head blocks have to survive");
-	// The caps are what keeps the bound true, so the fixture pins the relationship rather than a figure: a name or a contact value one character past them is refused where the invoice is created.
+	// The cap-max head is the tallest shape the caps leave under the export's own faces, and the margin it clears the floor by is checked rather than assumed: the bound is only as strong as that head, so a head that came near the floor fails here instead of resting on a fixture that happens to fit.
+	for (const [fixture, pages] of [["the cap-max invoice", capped], ["the exported cap-max invoice", exported]]) {
+		const margin = FLOOR_TOP - lowest(pages[0]);
+		assert.ok(margin >= CAP_MAX_FLOOR_MARGIN, `${fixture}: the cap-max head reaches ${lowest(pages[0]).toFixed(1)} from the page's top, only ${margin.toFixed(1)} points above the ${FLOOR_TOP}-point content floor`);
+	}
+	// The fixture's claim is that its contact is the tallest shape a validated invoice can carry, so the rival cap shape is measured against it: four per-line-cap lines of the widest glyph in the party face still draw a shorter head than the legacy line, which carries twice their characters.
+	const rival = buildInvoicePages(buildInvoiceViewModel(capMaxInvoice({ contact: cappedContact(MAX_CONTACT_CHARS, "@") }), "2026-10-03"), await exportFontMetrics());
+	assert.ok(lowest(exported[0]) > lowest(rival[0]), `the legacy contact line is the taller shape, ${lowest(exported[0]).toFixed(1)} against ${lowest(rival[0]).toFixed(1)}`);
+	// That is the legacy branch's own doing rather than the glyphs: the same count of characters as one line of `Æ` alone is refused by the per-line cap, while the email spelling admits a line that long.
+	assert.equal(invoiceFor({ due: "2026-11-02", payee: { name: "X", address: PAYEE, email: tallestContact() } }).payee.email, tallestContact(), "a legacy email line at `MAX_EMAIL_CHARS` characters validates as one line");
+	assert.throws(
+		() => invoiceFor({ due: "2026-11-02", payee: { name: "X", address: PAYEE, email: "Æ".repeat(MAX_EMAIL_CHARS) } }),
+		InvalidInvoiceError,
+		"a single contact line past the per-line cap is refused outside the legacy spelling",
+	);
+	// The caps are what keeps the bound true, so the fixture pins the relationship rather than a figure: the total is derived to admit the widest shape the per-line caps allow, and a name or a line one character past its own cap is refused where the invoice is created.
+	assert.equal(
+		MAX_CONTACT_CHARS,
+		Array.from({ length: MAX_CONTACT_LINES }, () => "m".repeat(MAX_CONTACT_LINE_CHARS)).join("\n").length,
+		"the total cap is the per-line caps plus the breaks between them",
+	);
 	assert.throws(() => capMaxInvoice({ nameLength: MAX_NAME_CHARS + 1 }), InvalidInvoiceError, "a name past the cap is refused");
-	assert.throws(() => capMaxInvoice({ contactLength: MAX_CONTACT_CHARS + 1 }), InvalidInvoiceError, "a contact value past the cap is refused");
+	const widestContact = cappedContact(MAX_CONTACT_CHARS);
+	assert.equal(widestContact.length, MAX_CONTACT_CHARS, "the multi-line caps admit this many characters and no more");
+	assert.throws(
+		() => invoiceFor({ due: "2026-11-02", payee: { name: "X", address: PAYEE, email: `${widestContact}m` } }),
+		InvalidInvoiceError,
+		"a contact line one character past its own cap is refused",
+	);
 });
 
 /** The text draws of a page's own parties block: the ops the layout emits between the letterhead's closing rule and the parties' own. */
@@ -558,7 +600,8 @@ function partyTextOps(page) {
 	return headBlocks(page)[1][1].filter((op) => op.kind === "text");
 }
 
-test("a party's contact line is one unbroken run held inside the narrowest column the party grid gives", async () => {
+test("a contact line of forty m characters is one unbroken run held inside the narrowest column the party grid gives", async () => {
+	// The fixture spells each line with `m`, the widest letter the party-detail face carries at 0.833 em; the widest glyph the per-line cap admits is `@`, and the case below pins where the scale floor makes that line wrap instead of staying one run.
 	const contact = cappedContact(MAX_CONTACT_CHARS);
 	const lines = contact.split("\n");
 	assert.equal(lines.length, MAX_CONTACT_LINES, "the fixture carries the most lines a contact value may hold");
@@ -587,11 +630,106 @@ test("a party's contact line is one unbroken run held inside the narrowest colum
 			assert.ok(op.xScale > 0 && op.xScale <= 1, `${fixture}: a contact run is drawn at a fraction of its natural width, never stretched`);
 			assert.ok(drawnWidth <= columnWidth + 0.01, `${fixture}: a contact run reaches ${drawnWidth} points, past its ${columnWidth}-point column`);
 		}
-		assert.ok(runs.some((op) => op.xScale < 1), `${fixture}: the widest contact line is compressed rather than wrapped`);
+		assert.ok(runs.some((op) => op.xScale < 1), `${fixture}: the per-line-cap contact line is compressed rather than wrapped`);
 
 		// Nothing in the block is a piece of a contact line, so no line was broken into fragments.
 		const fragments = party.filter((op) => op.text !== "" && contact.includes(op.text) && !lines.includes(op.text));
 		assert.deepEqual(fragments, [], `${fixture}: a contact line is drawn whole rather than as fragments`);
+	}
+});
+
+test("the widest per-line-cap contact line wraps into fitted runs below the scale floor", async () => {
+	// The per-line cap bounds a contact line's characters, not its width, so a legal line of forty of the widest glyph the validator and the exported party face both admit — `@`, 1.015 em in Helvetica, about 345 points here — needs a scale near 0.44 in a three-block column, under MIN_CONTACT_RUN_SCALE; the shipped behaviour below the floor is a wrap into fitted runs rather than a squeeze, where the same-length line of `m` needs 0.54 and stays one run, so the two together pin the floor's edge.
+	const widest = "@".repeat(MAX_CONTACT_LINE_CHARS);
+	const letter = "m".repeat(MAX_CONTACT_LINE_CHARS);
+	const view = buildInvoiceViewModel(
+		invoiceFor({
+			due: "2026-11-02",
+			payee: { name: "Studio Example", address: PAYEE, email: `billing\n${widest}` },
+			payer: { name: "Client Co", email: letter },
+		}),
+		"2026-10-03",
+	);
+	const metrics = await exportFontMetrics();
+	const party = partyTextOps(buildInvoicePages(view, metrics)[0]);
+	const datesLabel = party.find((op) => op.text === view.labels.dates.toUpperCase());
+	assert.ok(datesLabel !== undefined, "the layout draws the role label that opens the third column");
+	const columnWidth = CONTENT_RIGHT - datesLabel.x;
+	const maxWidth = columnWidth - 2;
+
+	// The widest legal line needs a scale below the floor, which is what makes it wrap instead of staying one squeezed run.
+	const fragments = party.filter((op) => widest.includes(op.text));
+	assert.ok(fragments.length > 0, "the layout draws the widest contact line");
+	const fitScale = maxWidth / metrics.widthOfText(widest, fragments[0].size, fragments[0].font);
+	assert.ok(fitScale < MIN_CONTACT_RUN_SCALE, `the widest legal line would need a ${fitScale.toFixed(3)} scale, under the ${MIN_CONTACT_RUN_SCALE} floor, so it is wrapped rather than drawn as one run`);
+	assert.ok(fragments.length > 1, "the widest line is wrapped into several runs rather than drawn as one squeezed run");
+	assert.equal(fragments.map((op) => op.text).join(""), widest, "the wrapped runs carry the whole line, no glyph dropped");
+	for (const op of fragments) {
+		assert.ok(op.xScale >= MIN_CONTACT_RUN_SCALE - 1e-9, "a wrapped run is drawn at no less than the scale floor, so it stays legible");
+		assert.ok(metrics.widthOfText(op.text, op.size, op.font) * op.xScale <= columnWidth + 0.01, "and inside its column");
+	}
+
+	// The same-length line of `m` needs no more than the floor, so it stays one run: the floor is what separates the two shapes.
+	const letterRuns = party.filter((op) => op.text === letter);
+	assert.equal(letterRuns.length, 1, "the widest letter line is drawn as one run");
+	const letterScale = maxWidth / metrics.widthOfText(letter, letterRuns[0].size, letterRuns[0].font);
+	assert.ok(letterScale >= MIN_CONTACT_RUN_SCALE, `the widest letter line needs a ${letterScale.toFixed(3)} scale, at or above the ${MIN_CONTACT_RUN_SCALE} floor, so it stays one run`);
+});
+
+test("a contact line too long to compress legibly is wrapped rather than squeezed", async () => {
+	// A legacy email spelling is one legal contact line of up to MAX_EMAIL_CHARS characters, far wider than the column, so compressing it to fit would draw it at a fraction of its width; past the floor the line is wrapped instead, so every glyph stays legible.
+	const email = `${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length)}@example.com`;
+	assert.equal(email.length, MAX_EMAIL_CHARS, "the fixture is the longest single contact line the legacy path accepts");
+	assert.equal(email.includes("\n"), false, "and it is one line");
+	const view = buildInvoiceViewModel(
+		invoiceFor({ due: "2026-11-02", payee: { name: "Studio Example", address: PAYEE, email } }),
+		"2026-10-03",
+	);
+	for (const [fixture, metrics] of [["the half-em stand-in", METRICS], ["the exported metric source", await exportFontMetrics()]]) {
+		const party = partyTextOps(buildInvoicePages(view, metrics)[0]);
+		const datesLabel = party.find((op) => op.text === view.labels.dates.toUpperCase());
+		assert.ok(datesLabel !== undefined, `${fixture}: the layout draws the role label that opens the third column`);
+		const columnWidth = CONTENT_RIGHT - datesLabel.x;
+		const fragments = party.filter((op) => op.text !== "" && email.includes(op.text));
+		assert.ok(fragments.length > 1, `${fixture}: the line is wrapped into several runs rather than drawn as one run a fraction of its width`);
+		assert.equal(fragments.map((op) => op.text).join(""), email, `${fixture}: the wrapped runs carry the whole value, no glyph dropped`);
+		for (const op of fragments) {
+			const drawnWidth = metrics.widthOfText(op.text, op.size, op.font) * op.xScale;
+			assert.ok(op.xScale >= MIN_CONTACT_RUN_SCALE - 1e-9, `${fixture}: a wrapped run is drawn at no less than the scale floor, so it stays legible`);
+			assert.ok(drawnWidth <= columnWidth + 0.01, `${fixture}: and inside its column`);
+		}
+	}
+});
+
+test("a contact line is drawn with its own spacing, as one run and through the scale floor alike", async () => {
+	// The page preserves the spaces a payee typed, so the PDF has to draw those same characters: a line the column holds is drawn as one run of the line's own text, and a line legal by the per-line cap but wide enough to fall under the scale floor wraps without collapsing a run of spaces or dropping the space it opens with.
+	const spaced = "12  Example  Street";
+	const widest = ` ${"@".repeat(MAX_CONTACT_LINE_CHARS - 1)}`;
+	const view = buildInvoiceViewModel(
+		invoiceFor({ due: "2026-11-02", payee: { name: "Studio Example", address: PAYEE, email: `${spaced}\n${widest}` }, payer: { name: "Client Co" } }),
+		"2026-10-03",
+	);
+	assert.equal(view.from.email[0], spaced, "the stored line keeps its run of spaces");
+	assert.equal(view.from.email[1].length, MAX_CONTACT_LINE_CHARS, "and the second line is the widest a contact line may be");
+	const metrics = await exportFontMetrics();
+	const party = partyTextOps(buildInvoicePages(view, metrics)[0]);
+	const datesLabel = party.find((op) => op.text === view.labels.dates.toUpperCase());
+	assert.ok(datesLabel !== undefined, "the layout draws the role label that opens the third column");
+	const columnWidth = CONTENT_RIGHT - datesLabel.x;
+
+	// The line with the run of spaces fits the column, so it reaches the page as one run spelled the way it was stored rather than as a collapsed rendering of it.
+	assert.deepEqual(party.filter((op) => op.text === spaced).map((op) => op.text), [spaced], "the run of spaces is drawn as it stands");
+
+	// The widest line needs a scale under the floor, so it is wrapped; each run carries the line's own characters, its opening space among them.
+	const fragments = party.filter((op) => op.text !== "" && widest.includes(op.text));
+	const fitScale = (columnWidth - 2) / metrics.widthOfText(widest, fragments[0].size, fragments[0].font);
+	assert.ok(fitScale < MIN_CONTACT_RUN_SCALE, `the widest legal line would need a ${fitScale.toFixed(3)} scale, under the ${MIN_CONTACT_RUN_SCALE} floor, so it wraps rather than being squeezed`);
+	assert.ok(fragments.length > 1, "the widest line is wrapped into several runs rather than squeezed under the floor");
+	assert.equal(fragments.map((op) => op.text).join(""), widest, "the wrapped runs are the line's own characters, its run of spaces and its opening space included");
+	assert.ok(fragments[0].text.startsWith(" ") && fragments[0].text.length > 1, "the space the line opens with is drawn beside the token rather than on a line of its own");
+	for (const op of fragments) {
+		const drawnWidth = metrics.widthOfText(op.text, op.size, op.font) * op.xScale;
+		assert.ok(drawnWidth <= columnWidth + 0.01, `a wrapped run reaches ${drawnWidth} points, past its ${columnWidth}-point column`);
 	}
 });
 
@@ -650,6 +788,24 @@ test("wrapText always consumes at least one glyph, even when a single glyph exce
 	const lines = wrapText("abcdef", 1, 10, "sans", metrics);
 	assert.deepEqual(lines, ["a", "b", "c", "d", "e", "f"]);
 	assert.equal(lines.join(""), "abcdef", "no glyph is dropped when one glyph overflows the line");
+});
+
+test("wrapContactText keeps every space of the line it wraps", () => {
+	// The module's stand-in measures every glyph at half an em, so a ten-point line holds six characters a line here.
+	assert.deepEqual(wrapContactText("one two three", 30, 10, "sans", METRICS), ["one ", "two ", "three"], "a break falls at a space, and the space stays on the line it followed rather than being consumed or collapsed");
+	assert.deepEqual(wrapContactText("a  b", 100, 10, "sans", METRICS), ["a  b"], "a run of spaces the line holds is drawn as it stands");
+	assert.deepEqual(wrapContactText("aa  bb", 15, 10, "sans", METRICS), ["aa ", " bb"], "a run the line cannot hold whole is cut between its own spaces rather than collapsed to one");
+	assert.deepEqual(wrapContactText("  Accounts", 100, 10, "sans", METRICS), ["  Accounts"], "the space a line opens with is drawn");
+	assert.deepEqual(wrapContactText("abcdef", 15, 10, "sans", METRICS), ["abc", "def"], "a token with no space in it is hard-broken as a word is");
+	assert.deepEqual(wrapContactText("", 100, 10, "sans", METRICS), [""], "a blank line survives as a blank line");
+	// The widest line the per-line cap admits still opens with its own space: it is not ended early and the token is not moved to a line of its own, which is where a wrapped line would otherwise start blank.
+	const widest = ` ${"@".repeat(MAX_CONTACT_LINE_CHARS - 1)}`;
+	const wraps = wrapContactText(widest, 30, 10, "sans", METRICS);
+	assert.equal(wraps[0], ` ${"@".repeat(5)}`, "the space stays on the first line with as much of the token as fits beside it");
+
+	for (const text of ["one two three", "aa  bb", "a  b", "  Accounts", widest]) {
+		assert.equal(wrapContactText(text, 30, 10, "sans", METRICS).join(""), text, `every character of ${JSON.stringify(text)} survives the wrap`);
+	}
 });
 
 test("PDF generation performs zero network I/O", async () => {
@@ -1437,6 +1593,50 @@ test("the letterhead draws the payee's icon in place of the default accent mark,
 	assertClose(plainWordmark.y, iconWordmark.y, "the wordmark sits on the same line either way");
 	assert.ok(iconWordmark.x >= icon.x + icon.width, "the wordmark starts past the icon's box");
 	assert.ok(plainWordmark.x >= marks[0].x + marks[0].width, "as it starts past the accent mark on an invoice that has none");
+});
+
+test("the letterhead reserves the icon's mark-sized square, so the wordmark offset does not turn on the icon's aspect ratio", () => {
+	// The on-screen letterhead draws the icon in a fixed mark-sized box with `object-fit: contain`, so the wordmark starts at one offset whatever the icon's aspect; the export has to reserve that same square rather than only the aspect-fitted width, or a tall icon would start the wordmark earlier in the PDF than on the page.
+	const square = { bytes: ICON_PNG, width: 32, height: 32 };
+	const tall = { bytes: ICON_PNG, width: 32, height: 64 };
+	const squarePage = buildInvoicePages(buildInvoiceViewModel(invoiceFor({ icon: ICON_SVG }), "2026-10-03"), METRICS, square)[0];
+	const tallPage = buildInvoicePages(buildInvoiceViewModel(invoiceFor({ icon: ICON_SVG }), "2026-10-03"), METRICS, tall)[0];
+	const squareIcon = squarePage.ops.find((op) => op.kind === "image");
+	const tallIcon = tallPage.ops.find((op) => op.kind === "image");
+	assert.ok(squareIcon !== undefined && tallIcon !== undefined, "both letterheads draw the icon");
+	// A square icon fills the reserved box, so that box's own width is the mark-sized square the letterhead reserves.
+	const reserved = squareIcon.width;
+	assertClose(squareIcon.height, reserved, "a square icon fills the whole reserved square");
+	assertClose(tallIcon.width, reserved / 2, "a 2:1 tall icon is fitted to half the reserved square's width");
+	assertClose(tallIcon.x - PAGE.marginX, (reserved - tallIcon.width) / 2, "and it letterboxes inside the square, centered as the page's `object-fit: contain` centers it");
+	assertClose(PAGE.height - (tallIcon.y + tallIcon.height), PAGE.marginTop, "with the square's full height reserved, so its top is the letterhead's own top");
+	const squareWordmark = wordmark(squarePage);
+	const tallWordmark = wordmark(tallPage);
+	assert.ok(squareWordmark !== undefined && tallWordmark !== undefined, "both letterheads draw the wordmark");
+	assertClose(tallWordmark.x, squareWordmark.x, "the wordmark starts at one offset whether the icon is square or tall, because the reserve is the mark-sized square");
+	assert.ok(tallWordmark.x >= PAGE.marginX + reserved, "and starts past that whole square, not the fitted image's own edge");
+});
+
+/** The CSS reference ratio that turns a stylesheet's rem length into the points the export draws in: 16 px to the rem and 0.75 pt to the px. */
+const CSS_REM_PT = 12;
+
+test("the export reserves the page's own letterhead mark, and starts the wordmark past it by the page's own brand gap", () => {
+	// The page boxes the icon at `--letterhead-mark` and spaces the wordmark from it by `.letterhead-brand`'s own gap, and the export has to reproduce both, or the two letterheads place the same icon and wordmark differently; the page writes each length in rem and the export in points, so the agreements are pinned here rather than derived on either side, and either moving alone fails.
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const declaredSide = /--letterhead-mark:\s*([\d.]+)rem;/.exec(invoiceCss);
+	assert.ok(declaredSide !== null, "the letterhead declares the mark's own side in rem");
+	const pageSide = Number(declaredSide[1]) * CSS_REM_PT;
+	const declaredGap = /\.letterhead-brand \{[^}]*gap:\s*([\d.]+)rem/.exec(invoiceCss);
+	assert.ok(declaredGap !== null, "the brand block declares the gap from the mark to the wordmark in rem");
+	const pageGap = Number(declaredGap[1]) * CSS_REM_PT;
+	const square = { bytes: ICON_PNG, width: 32, height: 32 };
+	const page = buildInvoicePages(buildInvoiceViewModel(invoiceFor({ icon: ICON_SVG }), "2026-10-03"), METRICS, square)[0];
+	const icon = page.ops.find((op) => op.kind === "image");
+	const wordmarkOp = wordmark(page);
+	assert.ok(icon !== undefined && wordmarkOp !== undefined, "the letterhead draws the icon and the wordmark");
+	// A square icon fills the reserved box, so that box's own width is the square the export reserves for it, and the wordmark's own start past that box is the gap the export draws between them.
+	assertClose(icon.width, pageSide, "the export reserves the page's own mark square for the icon");
+	assertClose(wordmarkOp.x - (icon.x + icon.width), pageGap, "the export starts the wordmark past the icon by the page's own brand gap, so the page and the export put the wordmark at one offset");
 });
 
 test("the embedded-image count covers every page, not the first one", async () => {

@@ -1,4 +1,4 @@
-/** The suite for the clipboard module: that `app/js/ui/clipboard.js` stays a neutral helper the share panel re-exports, that a copy hands over the value byte for byte, and that the fallback selects a value the user can copy by hand whichever element holds it. */
+/** The suite for the clipboard module: that `app/js/ui/clipboard.js` stays a neutral helper the share panel re-exports, that a copy hands over the value byte for byte, that the fallback selects a value the user can copy by hand whichever element holds it, and that the status the seam reports in is declared as the members it reads rather than as an element. */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { installDocument } from "./helpers/dom.mjs";
+import { runTypeProbe } from "./helpers/type-probe.mjs";
 import { nextTask } from "./helpers/wait.mjs";
 import { copyText, copyWithFallback } from "../app/js/ui/clipboard.js";
 import { copyText as copyTextFromShare } from "../app/js/ui/share.js";
@@ -88,4 +89,28 @@ test("the fallback still selects a form control through its own method", async (
 	} finally {
 		fake.restore();
 	}
+});
+
+test("the copy seam's status contract is the members it reads, so a plain object reports in it and one without text does not", () => {
+	// The seam writes the confirmation into the status's text and reads whether it is still mounted, so those two members are the whole contract; the probe pins a plain object's acceptance and refuses one that cannot carry the text, where a parameter typed as an element would state a contract neither the guard nor the tests hold.
+	runTypeProbe({
+		prefix: "invoice-clipboard-status-probe-",
+		fileName: "clipboard-status.ts",
+		failureMessage: "the type probe must compile cleanly under the project's own configuration, so a plain object is accepted as the copy seam's status while one that cannot carry the confirmation's text is refused",
+		source: (specifier) => `/** The compile-time probe for the copy seam's status contract, compiled by tests/clipboard.test.mjs under the project's own tsconfig. */
+import { copyWithFallback, type CopyStatus } from "${specifier("app/ts/ui/clipboard.js")}";
+import { copyControlClick } from "${specifier("app/ts/ui/payment-section.js")}";
+
+declare const value: HTMLElement;
+
+const status: CopyStatus = { textContent: "" };
+const detached: CopyStatus = { textContent: "", isConnected: false };
+
+copyWithFallback("zcash:u1example", null, value, status);
+copyControlClick("zcash:u1example", null, value, detached, { after: () => () => {} });
+
+// @ts-expect-error a status that cannot carry the confirmation's text is not one this seam writes into
+const silent: CopyStatus = { isConnected: true };
+`,
+	});
 });

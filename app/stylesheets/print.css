@@ -2,7 +2,7 @@
  * Print treatment for the official invoice.
  *
  * The on-screen document is the source of truth; this only makes it print cleanly.
- * Wrapped in `@media print`, it strips the app chrome, drops the screen card's depth, forces black on white, keeps rows, totals, and the payment block from splitting across a page, and prints each payment value whole: the single-line field is a control whose overflow paper clips, so the field is dropped and its print twin, the same string as a text node, takes its place and wraps.
+ * Wrapped in `@media print`, it strips the app chrome, drops the screen card's depth, forces black on white, keeps rows, totals, and the payment block from splitting across a page, and prints each payment value whole: on screen the value is a single non-wrapping run that a print engine would lay out on one line and clip at the column's edge, so the on-screen value is dropped and its print twin, the same string as a text node, takes its place and wraps.
  * Page geometry is US Letter with comfortable margins.
  * This stylesheet serves the browser's own print path; the `Save as PDF` button is a separate route that hands the invoice to the pdf-lib renderer, which lays out its own pages rather than printing this DOM.
  */

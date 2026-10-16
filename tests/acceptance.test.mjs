@@ -45,6 +45,10 @@ import { MAX_ICON_DIMENSION, MAX_ICON_SVG_BYTES } from "../app/js/invoice/icon.j
 import {
 	InvalidInvoiceError,
 	UnsupportedInvoiceVersionError,
+	MAX_CONTACT_CHARS,
+	MAX_CONTACT_LINE_CHARS,
+	MAX_CONTACT_LINES,
+	MAX_EMAIL_CHARS,
 	computeTotals,
 	createInvoice,
 } from "../app/js/invoice/model.js";
@@ -1221,6 +1225,48 @@ test("the README's stated caps are the ones the code enforces", () => {
 		readme.includes(`\`MAX_ICON_DIMENSION = ${MAX_ICON_DIMENSION}\` pixels an axis`),
 		`the README states the dimension cap the icon gate applies, ${MAX_ICON_DIMENSION}`,
 	);
+	assert.ok(
+		readme.includes(`\`MAX_CONTACT_LINES = ${MAX_CONTACT_LINES}\` lines`),
+		`the README states the contact line cap the model applies, ${MAX_CONTACT_LINES}`,
+	);
+	assert.ok(
+		readme.includes(`\`MAX_CONTACT_LINE_CHARS = ${MAX_CONTACT_LINE_CHARS}\` characters`),
+		`the README states the contact per-line cap the model applies, ${MAX_CONTACT_LINE_CHARS}`,
+	);
+	assert.ok(
+		readme.includes(`\`MAX_CONTACT_CHARS = ${MAX_CONTACT_CHARS}\` characters in total`),
+		`the README states the total contact cap the model applies, ${MAX_CONTACT_CHARS}`,
+	);
+	assert.ok(
+		readme.includes(`\`MAX_EMAIL_CHARS = ${MAX_EMAIL_CHARS}\` characters`),
+		`the README states the legacy email cap the model still accepts, ${MAX_EMAIL_CHARS}`,
+	);
+});
+
+test("the README states the contact field's widening in both directions", () => {
+	const readme = readFileSync(join(root, "README.md"), "utf8");
+	assert.ok(
+		readme.includes("a legacy link whose `payee.email` or `payer.email` is a single-line email address stays readable"),
+		"the README states the legacy direction: a link written before the field widened stays readable",
+	);
+	assert.ok(
+		readme.includes("a payload whose contact value is a phone number or several lines is refused by an older build"),
+		"and the forward direction, which the README states for the icon above",
+	);
+
+	// The rule an older build held the whole field to is still this model's email-shaped branch: the one shape admitted past the per-line cap that holds free text, and the rule the refusal the README quotes comes from. The acceptance of the widened values below is the other half the README pairs with that rule.
+	const contact = (email) => usdcInvoice({ payee: { name: "Studio Example", address: PAYEE, email } }).payee.email;
+	const address = `${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length)}@example.com`;
+	assert.equal(address.length, MAX_EMAIL_CHARS, "the fixture is a single-line address at exactly the legacy cap");
+	assert.equal(contact(address), address, "and it is admitted whole, past the per-line cap free text is held to");
+	assert.match(
+		refusalMessage(() => contact("m".repeat(MAX_EMAIL_CHARS))),
+		new RegExp(`payee\.email: must hold lines of at most ${MAX_CONTACT_LINE_CHARS} characters`),
+		"a line of the same length that is not an address reaches the free-text cap instead, so the address shape is the one an older build's rule admits",
+	);
+	for (const widened of ["+44 20 7946 0958", "Studio Example\n+44 20 7946 0958"]) {
+		assert.equal(contact(widened), widened, `this build accepts ${JSON.stringify(widened)} as a party's contact info`);
+	}
 });
 
 test("the committed app/ tree is a fresh build of its sources, with maps pointing back to ts/", async () => {

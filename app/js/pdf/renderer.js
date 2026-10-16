@@ -100,8 +100,16 @@ const GAP = Object.freeze({
     /** Between the payment terms' column and the symbol drawn beside it. */
     termsToSymbol: 18,
 });
-/** The gap between the letterhead icon's box and the wordmark that starts past it, so the payee's icon reads as its own element rather than as part of the wordmark. */
-const LETTERHEAD_ICON_GAP = 12;
+/**
+ * The gap between the letterhead icon's box and the wordmark that starts past it, in points: the page's own `.letterhead-brand` gap of 0.9rem through the same CSS reference ratio that turns `--letterhead-mark` into this module's mark square.
+ * The page holds that gap in rem rather than in points, so the two surfaces cannot share the literal and are pinned together by a test instead of derived from one another, exactly as {@link LETTERHEAD_MARK} is.
+ */
+const LETTERHEAD_ICON_GAP = 10.8;
+/**
+ * The letterhead mark's side, in points: the page's own `--letterhead-mark` of 3rem through the CSS reference ratio of 16 px to the rem and 0.75 pt to the px.
+ * The page holds that square in rem rather than in points, so the two surfaces cannot share the literal and are pinned together by a test instead of derived from one another.
+ */
+const LETTERHEAD_MARK = 36;
 /** The type scale, in points; every run of text names one of these. */
 const SIZE = Object.freeze({
     brand: 19,
@@ -214,6 +222,8 @@ const CP1252_EXTRAS = new Set([
 /**
  * Wrap `text` to `maxWidth`, breaking on spaces and hard-breaking any single word wider than the line.
  * The result is always at least one line; an empty string yields one empty line, so a blank notes row survives as a blank line rather than disappearing.
+ * A break consumes the whitespace it lands on and a run of spaces between two words collapses to one, which is the shape of the text wrapped here: a name, a table cell, or a note is drawn on a surface that collapses those spaces too, so the wrap and the drawing agree about them.
+ * A contact line is the other shape — the page preserves its spaces, so the drawing has them to keep — and {@link wrapContactText} wraps that one.
  */
 export function wrapText(text, maxWidth, size, font, metrics) {
     const clean = toPdfText(text);
@@ -247,6 +257,57 @@ export function wrapText(text, maxWidth, size, font, metrics) {
             if (take === 0)
                 take = 1;
             lines.push(rest.slice(0, take));
+            rest = rest.slice(take);
+        }
+    }
+    if (current !== "" || lines.length === 0)
+        lines.push(current);
+    return lines;
+}
+/**
+ * Wrap a contact line to `maxWidth`, breaking only at the spaces it carries and keeping every character of it.
+ *
+ * {@link wrapText} is the wrapper for text whose spaces a surface collapses anyway; this one is for a contact line, which the page draws with its spacing preserved (`.party-detail` in `invoice.css`), so a wrapper that collapsed a run of spaces or dropped the space a break lands on would draw a different value from the page's and from the one the model stores.
+ * A run of spaces is broken at any of its own characters, so a line is filled with as much of it as fits and the remainder opens the next line; a token with no space in it is broken only when it cannot fit a line of its own, and then one glyph at a time, exactly as {@link wrapText} breaks an over-wide word.
+ * Concatenating the returned lines yields the text they were wrapped from, which is what holds the contact line to the page's own characters.
+ */
+export function wrapContactText(text, maxWidth, size, font, metrics) {
+    const clean = toPdfText(text);
+    if (clean === "")
+        return [""];
+    const width = (value) => metrics.widthOfText(value, size, font);
+    const lines = [];
+    let current = "";
+    // One run of spaces or of everything else at a time, in the order the line spells them, so a break can fall at a space without a character of it going missing.
+    for (const run of clean.match(/ +|[^ ]+/g) ?? []) {
+        let rest = run;
+        // A run of spaces breaks between any two of its characters, and a token wider than a whole line has to be broken somewhere; either way the line is filled with as much of the run as fits. A token that would fit a line of its own is moved to the next line whole instead, so a word is never split where it happened to land.
+        const fillsInPlace = run.startsWith(" ") || width(run) > maxWidth;
+        while (rest !== "") {
+            if (width(current + rest) <= maxWidth) {
+                current += rest;
+                break;
+            }
+            if (!fillsInPlace && current !== "") {
+                lines.push(current);
+                current = "";
+                continue;
+            }
+            // Grow `take` from one glyph so every measurement spans at most one line, as the over-wide word case in {@link wrapText} does.
+            let take = 0;
+            while (take < rest.length && width(current + rest.slice(0, take + 1)) <= maxWidth)
+                take += 1;
+            if (take === 0) {
+                // Nothing of the run fits past what the line already carries, so the line is done; a glyph wider than the column itself is still drawn, as its own line, rather than dropped.
+                if (current !== "") {
+                    lines.push(current);
+                    current = "";
+                    continue;
+                }
+                take = 1;
+            }
+            lines.push(current + rest.slice(0, take));
+            current = "";
             rest = rest.slice(take);
         }
     }
@@ -492,22 +553,23 @@ class Flow {
  * The letterhead: the payee's own icon when the invoice carries one and the default accent mark when it does not, the wordmark and tagline, the document kind and number, and the status badge, closed by the heavy rule.
  *
  * The icon takes the accent mark's place at the letterhead's left edge and the wordmark starts past its box, mirroring the on-screen letterhead's own order: a supplied icon replaces the default mark rather than standing beside it, and the wordmark and tagline are drawn either way.
- * Its box is the wordmark block's height, so the icon stands as tall as the name beside it and the block grows no taller.
+ * Its box is {@link LETTERHEAD_MARK}, the square the on-screen letterhead gives it through `--letterhead-mark`, so the icon letterboxes inside that square when its own aspect does not fill it and the wordmark starts past the same reserve on both surfaces.
  * An invoice with no icon draws exactly what it drew before: no box is reserved, and the accent mark and wordmark start at the content edge.
  */
 function drawLetterhead(flow, view, icon) {
     const top = flow.top;
     const brandHeight = leading(SIZE.brand) + leading(SIZE.tagline);
     const metaHeight = leading(SIZE.kind) + leading(SIZE.documentNumber) + 3 + 16;
-    // The wordmark's left edge sits 18 points past the accent mark's own edge — the mark's 11 points and the 7-point gap to the wordmark — and past the icon's box instead when the icon takes the mark's place.
+    // The wordmark's left edge sits 18 points past the accent mark's own edge — the mark's 11 points and the 7-point gap to the wordmark — and past the icon's mark-sized square instead when the icon takes the mark's place.
     let markLeft = CONTENT_LEFT + 18;
     if (icon === null) {
         flow.fill(CONTENT_LEFT, top + 1, 11, 11, PALETTE.accent);
     }
     else {
-        const box = fitIconBox(icon, brandHeight);
-        flow.image(CONTENT_LEFT, top + (brandHeight - box.height) / 2, box.width, box.height, icon.bytes);
-        markLeft = CONTENT_LEFT + box.width + LETTERHEAD_ICON_GAP;
+        // The icon reserves the whole mark-sized square whether or not its aspect fills it, exactly as the on-screen `object-fit: contain` box does, so the wordmark starts at one offset on both surfaces and the page stays a faithful preview of the export.
+        const box = fitIconBox(icon, LETTERHEAD_MARK);
+        flow.image(CONTENT_LEFT + (LETTERHEAD_MARK - box.width) / 2, top + (LETTERHEAD_MARK - box.height) / 2, box.width, box.height, icon.bytes);
+        markLeft = CONTENT_LEFT + LETTERHEAD_MARK + LETTERHEAD_ICON_GAP;
     }
     flow.text(markLeft, top, view.labels.brand, SIZE.brand, "sansBold", PALETTE.ink);
     flow.text(markLeft, top + leading(SIZE.brand), view.labels.tagline.toUpperCase(), SIZE.tagline, "sansBold", PALETTE.muted);
@@ -523,12 +585,13 @@ function drawLetterhead(flow, view, icon) {
         width: 0.8,
     });
     flow.textRight(CONTENT_RIGHT - 9, centerTop(badgeTop, 16, SIZE.status), label, SIZE.status, "sansBold", status.ink);
-    flow.advance(Math.max(brandHeight, metaHeight) + GAP.letterheadToRule);
+    flow.advance(Math.max(LETTERHEAD_MARK, brandHeight, metaHeight) + GAP.letterheadToRule);
     flow.rule(flow.top, CONTENT_LEFT, CONTENT_RIGHT, 2, PALETTE.ink);
     flow.advance(GAP.afterSectionRule);
 }
 /**
  * The box the letterhead icon is drawn in: the raster's own aspect ratio fitted inside a `side`-point square.
+ * The square is the mark-sized reserve both surfaces give the icon, so the fitted box letterboxes inside it rather than sizing the space the wordmark starts after.
  * The raster carries the icon's own pixels, so this box is the only size the document imposes on it, and fitting rather than stretching keeps a non-square icon's proportions — what the on-screen `object-fit: contain` does for the same image.
  */
 function fitIconBox(icon, side) {
@@ -537,22 +600,46 @@ function fitIconBox(icon, side) {
 }
 /** A party's contact lines as the document's own line records, one record per line the party's contact info carries, and none for a party that carries none. */
 function partyDetailLines(contact) {
-    return contact === undefined ? [] : contact.map((line) => ({ text: line, size: SIZE.partyDetail, font: "sans", color: PALETTE.inkSoft, singleRun: true }));
+    return contact === undefined ? [] : contact.map((line) => ({ text: line, size: SIZE.partyDetail, font: "sans", color: PALETTE.inkSoft, contact: true }));
 }
 /**
- * The horizontal scale that holds one party contact line to `maxWidth`: 1 when the line measures inside it, and otherwise the fraction of its natural width the width leaves.
- * A contact line is drawn as the single run this holds inside the column, so the value reaches whoever reads or selects the document with no break inside it, however wide its glyphs measure.
+ * The horizontal scale that holds one run to `maxWidth`: 1 when it measures inside it, and otherwise the fraction of its natural width the width leaves.
  */
 function fitRunScale(text, maxWidth, size, font, metrics) {
     const measured = metrics.widthOfText(toPdfText(text), size, font);
     return measured <= maxWidth ? 1 : maxWidth / measured;
+}
+/**
+ * The smallest horizontal scale a contact line is drawn at.
+ *
+ * A contact line is drawn as one run held to its column by a horizontal scale, which is what a payer selecting the document needs: the value with no break inside it.
+ * A line the model accepts can still be far wider than the column — a legacy email spelling is one line of up to 320 characters — and compressing such a line to fit would draw it at a small fraction of its width, too narrow to read.
+ * Below this floor the line is wrapped instead, each wrapped line drawn at the size the column holds, so a long value stays legible rather than being squeezed.
+ * Exported with the scale it bounds, so a test can assert no contact run is drawn below it.
+ */
+export const MIN_CONTACT_RUN_SCALE = 0.5;
+/**
+ * A contact line as the runs it is drawn in, held inside `maxWidth`.
+ *
+ * A line that measures inside the column, or that needs no more than {@link MIN_CONTACT_RUN_SCALE} compression, is one run held to the width by {@link fitRunScale}.
+ * A line wider than that floor allows is wrapped at the column width and each wrapped line drawn as its own run, so the value stays legible rather than squeezed to a fraction of its width.
+ * Both paths draw the line as the payee spelled it: the single run is fitted without altering a character, and the wrapped runs come from {@link wrapContactText}, which keeps every space of the line rather than collapsing a run or dropping the one a break lands on.
+ */
+function contactRuns(text, maxWidth, size, font, metrics) {
+    const measured = metrics.widthOfText(toPdfText(text), size, font);
+    if (measured <= maxWidth)
+        return [{ text, xScale: 1 }];
+    const scale = maxWidth / measured;
+    if (scale >= MIN_CONTACT_RUN_SCALE)
+        return [{ text, xScale: scale }];
+    return wrapContactText(text, maxWidth, size, font, metrics).map((line) => ({ text: line, xScale: fitRunScale(line, maxWidth, size, font, metrics) }));
 }
 function drawParties(flow, view) {
     const blocks = [
         {
             label: view.from.role,
             lines: [
-                { text: view.from.name, size: SIZE.partyName, font: "serifBold", color: PALETTE.ink, singleRun: false },
+                { text: view.from.name, size: SIZE.partyName, font: "serifBold", color: PALETTE.ink, contact: false },
                 ...partyDetailLines(view.from.email),
             ],
         },
@@ -561,7 +648,7 @@ function drawParties(flow, view) {
         blocks.push({
             label: view.billTo.role,
             lines: [
-                { text: view.billTo.name, size: SIZE.partyName, font: "serifBold", color: PALETTE.ink, singleRun: false },
+                { text: view.billTo.name, size: SIZE.partyName, font: "serifBold", color: PALETTE.ink, contact: false },
                 ...partyDetailLines(view.billTo.email),
             ],
         });
@@ -569,8 +656,8 @@ function drawParties(flow, view) {
     blocks.push({
         label: view.labels.dates,
         lines: view.dates.flatMap((date) => [
-            { text: date.label.toUpperCase(), size: SIZE.dateLabel, font: "sansBold", color: PALETTE.muted, singleRun: false },
-            { text: date.value, size: SIZE.dateValue, font: "sans", color: PALETTE.ink, singleRun: false },
+            { text: date.label.toUpperCase(), size: SIZE.dateLabel, font: "sansBold", color: PALETTE.muted, contact: false },
+            { text: date.value, size: SIZE.dateValue, font: "sans", color: PALETTE.ink, contact: false },
         ]),
     });
     const gap = 20;
@@ -583,10 +670,11 @@ function drawParties(flow, view) {
         flow.text(x, y, block.label.toUpperCase(), SIZE.roleLabel, "sansBold", PALETTE.muted);
         y += leading(SIZE.roleLabel) + 3;
         for (const line of block.lines) {
-            const runs = line.singleRun ? [line.text] : wrapText(line.text, columnWidth - 2, line.size, line.font, flow.metrics);
+            const runs = line.contact
+                ? contactRuns(line.text, columnWidth - 2, line.size, line.font, flow.metrics)
+                : wrapText(line.text, columnWidth - 2, line.size, line.font, flow.metrics).map((text) => ({ text, xScale: 1 }));
             for (const run of runs) {
-                const xScale = line.singleRun ? fitRunScale(run, columnWidth - 2, line.size, line.font, flow.metrics) : 1;
-                flow.text(x, y, run, line.size, line.font, line.color, xScale);
+                flow.text(x, y, run.text, line.size, line.font, line.color, run.xScale);
                 y += leading(line.size);
             }
             y += 1;
