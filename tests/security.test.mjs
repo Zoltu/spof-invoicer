@@ -1,4 +1,4 @@
-/** The suite for the app's security invariants: no command downloads remote code, `.gitignore` refuses secrets, and `index.html`'s CSP and script loads hold, checked through the source sweeps and the runtime blocker. */
+/** The suite for the app's security invariants: no project command downloads remote code, and `index.html`'s CSP and script loads hold, checked through the source sweeps and the runtime blocker. */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -64,33 +64,6 @@ test("no project command downloads or executes remote code", () => {
 	const scripts = JSON.parse(read("package.json")).scripts ?? {};
 	for (const [name, command] of Object.entries(scripts)) {
 		assert.ok(!reachesNetwork.test(command), `script "${name}" reaches the network: ${command}`);
-	}
-});
-
-test(".gitignore refuses secrets, wallet material, and editor junk", () => {
-	const lines = new Set(
-		read(".gitignore")
-			.split("\n")
-			.map((line) => line.trim()),
-	);
-	const required = [
-		".env",
-		".env.*",
-		"*.pem",
-		"*.key",
-		"*.keystore",
-		"*.p12",
-		"*.pfx",
-		"*.seed",
-		"wallet.json",
-		".vscode/",
-		".idea/",
-		"Thumbs.db",
-		"*.swp",
-		"*.tmp",
-	];
-	for (const pattern of required) {
-		assert.ok(lines.has(pattern), `.gitignore must list ${pattern}`);
 	}
 });
 

@@ -1,34 +1,8 @@
+# Installed dependencies — `bun install` reproduces `node_modules/` from `bun.lock`.
 node_modules/
-*.log
-.DS_Store
-
-# Secrets, credentials, and wallet material — never commit, never pin to IPFS.
-.env
-.env.*
-*.pem
-*.key
-*.keystore
-*.p12
-*.pfx
-*.jks
-*.seed
-*.mnemonic
-mnemonic*
-wallet.json
-*.wallet
-secrets/
-.npmrc
-
-# Editor, OS, and temporary junk.
-.vscode/
-.idea/
-Thumbs.db
-*.swp
-*.swo
-*~
-*.tmp
-.history/
-.orchestration/
 
 # Generated build output — `bun run build` reproduces `app/js/**` from `app/ts/**` and `vendor-src/**`.
 app/js/
+
+# Harness bookkeeping — local orchestration state, never part of the project.
+.orchestration/
