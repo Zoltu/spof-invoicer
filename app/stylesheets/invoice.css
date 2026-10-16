@@ -90,7 +90,7 @@
 	background-size: contain;
 }
 
-/* The payee's own icon is drawn at the brand mark's own size, so an icon of any intrinsic size stands where the default mark would have. */
+/* The payee's own icon is drawn at the brand mark's own size, so an icon of any intrinsic size stands where the default brand mark would have. */
 .letterhead-icon {
 	display: inline-block;
 	width: var(--letterhead-mark);
@@ -458,7 +458,7 @@
 }
 
 /*
- * The focusable verbatim value is a scroll container, so it needs the ring `app.css` gives only a/button/input/select/textarea — the same ring the itemized table's scroll box takes, both being focusable scroll regions this stylesheet draws.
+ * The focusable verbatim value is a scroll container, so it needs the ring `app.css` gives only `a/button/input/select/textarea` — the same ring the itemized table's scroll box takes, both being focusable scroll regions this stylesheet draws.
  * Its colour falls back to the root-scoped `--accent` because the payment section is drawn on two surfaces: the payer's document nests it under `.view-invoice`, which declares `--inv-accent`, while the create screen draws it under `.created-payment` with no such ancestor, so a bare `--inv-accent` would leave the outline's shorthand invalid there and the ring gone.
  */
 .payment-value-verbatim:focus-visible {

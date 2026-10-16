@@ -53,7 +53,6 @@ function selectContents(element) {
  * The write is issued before anything is deferred, so it stays inside the click's own gesture; `schedule` runs the report instead of the write's own resolution, so a caller that blanked `status` first can have the confirmation land on a later task rather than in the same one as the blank.
  */
 export function copyWithFallback(text, clipboard, element, status, schedule = (report) => report()) {
-    // The write is issued now, still inside the click's own gesture; only the reporting of its outcome may be moved to another task.
     void copyText(text, clipboard).then((copied) => {
         schedule(() => {
             if (copied) {

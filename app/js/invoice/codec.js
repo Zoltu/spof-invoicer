@@ -17,7 +17,7 @@
  *
  * The JSON is canonical — {@link serializeInvoice} writes it in a fixed key order with no whitespace, no absent optional field, text already composed to NFC and the optional icon's line endings normalized to LF with its surrounding whitespace trimmed, a byte-order mark at either end with it, and every number in its shortest exact spelling — and {@link decodeInvoice} refuses anything that is not byte-for-byte what this encoder writes, so a repeated key (the last one winning silently in `JSON.parse`) cannot hide inside a share string, and neither can an NFD spelling of the same visible text, an icon padded with whitespace or a byte-order mark at either end, nor a longer spelling of the same number.
  *
- * Either party's `email` key carries free-text contact info — an email address, a phone number, a postal address — and it keeps that name however wide its value grows: widening a field adds no second spelling of it, so a payload a build wrote when the key held an email address alone still decodes and re-encodes byte for byte, and no schema version changes.
+ * Either party's `email` key carries free-text contact info — an email address, a phone number, or a postal address — and it keeps that name however wide its value grows: widening a field adds no second spelling of it, so a payload a build wrote when the key held an email address alone still decodes and re-encodes byte for byte, and no schema version changes.
  *
  * Money is transported as a decimal string of the asset's own units — `"150.00"`, never a JSON number and never base units — so every value survives the round trip exactly and a reader can convert it with `toBaseUnits` alone.
  * {@link decodeInvoice} derives the totals; they are never transported.

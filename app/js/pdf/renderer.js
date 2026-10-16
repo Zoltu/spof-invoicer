@@ -3,7 +3,7 @@
  *
  * This is the payer's document in a portable, printable form: the same {@link InvoiceViewModel} the on-screen view draws (`ui/presentation.ts`), laid out on US Letter with pdf-lib's base-14 fonts — a serif voice for the document, a sans voice for its tabular data, a monospace voice for addresses.
  * Everything is vector.
- * pdf-lib cannot embed SVG and the export makes no network request of its own, so the letterhead's own mark is drawn rather than loaded: an accent square beside a wordmark and rules, or the payee's own icon in the square's place, rasterized from its data URL by the browser's canvas.
+ * pdf-lib cannot embed SVG and the export makes no network request of its own, so the letterhead's own brand mark is drawn rather than loaded: the default brand mark beside a wordmark and rules, or the payee's own icon in its place, rasterized from its data URL by the browser's canvas.
  *
  * The module is three layers:
  * - {@link buildInvoicePages} is the pure layout: the view model and a {@link FontMetrics} become one {@link PdfPageLayout} of {@link DrawOp}s per page with pagination already resolved.
@@ -106,7 +106,7 @@ const GAP = Object.freeze({
  */
 const LETTERHEAD_ICON_GAP = 10.8;
 /**
- * The letterhead mark's side, in points: the page's own `--letterhead-mark` of 3rem through the CSS reference ratio of 16 px to the rem and 0.75 pt to the px.
+ * The brand mark's side, in points: the page's own `--letterhead-mark` of 3rem through the CSS reference ratio of 16 px to the rem and 0.75 pt to the px.
  * The page holds that square in rem rather than in points, so the two surfaces cannot share the literal and are pinned together by a test instead of derived from one another.
  */
 const LETTERHEAD_MARK = 36;
@@ -293,7 +293,7 @@ export function wrapContactText(text, maxWidth, size, font, metrics) {
                 current = "";
                 continue;
             }
-            // Grow `take` from one glyph so every measurement spans at most one line, as the over-wide word case in {@link wrapText} does.
+            // Grow `take` from one glyph so every measurement spans at most one line, as the over-wide word case in `wrapText` does.
             let take = 0;
             while (take < rest.length && width(current + rest.slice(0, take + 1)) <= maxWidth)
                 take += 1;
@@ -550,17 +550,17 @@ class Flow {
     }
 }
 /**
- * The letterhead: the payee's own icon when the invoice carries one and the default accent mark when it does not, the wordmark and tagline, the document kind and number, and the status badge, closed by the heavy rule.
+ * The letterhead: the payee's own icon when the invoice carries one and the default brand mark when it does not, the wordmark and tagline, the document kind and number, and the status badge, closed by the heavy rule.
  *
- * The icon takes the accent mark's place at the letterhead's left edge and the wordmark starts past its box, mirroring the on-screen letterhead's own order: a supplied icon replaces the default mark rather than standing beside it, and the wordmark and tagline are drawn either way.
+ * The icon takes the brand mark's place at the letterhead's left edge and the wordmark starts past its box, mirroring the on-screen letterhead's own order: a supplied icon replaces the default brand mark rather than standing beside it, and the wordmark and tagline are drawn either way.
  * Its box is {@link LETTERHEAD_MARK}, the square the on-screen letterhead gives it through `--letterhead-mark`, so the icon letterboxes inside that square when its own aspect does not fill it and the wordmark starts past the same reserve on both surfaces.
- * An invoice with no icon draws exactly what it drew before: no box is reserved, and the accent mark and wordmark start at the content edge.
+ * An invoice with no icon draws exactly what it drew before: no box is reserved, and the brand mark and wordmark start at the content edge.
  */
 function drawLetterhead(flow, view, icon) {
     const top = flow.top;
     const brandHeight = leading(SIZE.brand) + leading(SIZE.tagline);
     const metaHeight = leading(SIZE.kind) + leading(SIZE.documentNumber) + 3 + 16;
-    // The wordmark's left edge sits 18 points past the accent mark's own edge — the mark's 11 points and the 7-point gap to the wordmark — and past the icon's mark-sized square instead when the icon takes the mark's place.
+    // The wordmark's left edge sits 18 points past the brand mark's own edge — the mark's 11 points and the 7-point gap to the wordmark — and past the icon's mark-sized square instead when the icon takes the mark's place.
     let markLeft = CONTENT_LEFT + 18;
     if (icon === null) {
         flow.fill(CONTENT_LEFT, top + 1, 11, 11, PALETTE.accent);

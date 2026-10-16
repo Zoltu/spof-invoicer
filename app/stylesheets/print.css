@@ -142,7 +142,7 @@
 	}
 
 	/*
-	 * Best effort so the default letterhead mark survives print: it is a CSS background image, which a browser may still drop, while a payee's own icon is an image element and needs nothing here.
+	 * Best effort so the default brand mark survives print: it is a CSS background image, which a browser may still drop, while a payee's own icon is an image element and needs nothing here.
 	 */
 	.invoice-logo {
 		-webkit-print-color-adjust: exact;

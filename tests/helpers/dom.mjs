@@ -108,7 +108,6 @@ export function installInteractiveDocument() {
 			parent.children = parent.children.filter((child) => child !== this);
 			this.parentNode = null;
 		}
-
 		get isConnected() {
 			let node = this;
 			while (node.parentNode instanceof FakeElement) node = node.parentNode;

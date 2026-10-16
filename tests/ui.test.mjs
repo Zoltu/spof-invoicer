@@ -550,6 +550,7 @@ test("the payout-address hint is composed from the validators' own form lists", 
 		assert.ok(moneroGuidance.includes(`${form.characters}-character ${form.name} beginning with ${form.prefixes[0]}`), `${form.name} missing from the guidance`);
 	}
 });
+
 test("the create view renders its title, form, and submit handler through the DOM helpers", () => {
 	const fake = installInteractiveDocument();
 	try {

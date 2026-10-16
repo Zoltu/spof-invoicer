@@ -1246,7 +1246,7 @@ test("the letterhead draws the invoice's own icon, and draws none when it carrie
 
 		const bare = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
 		assert.deepEqual(findAll(bare, (node) => hasClass(node, "letterhead-icon")), [], "an icon-less invoice draws none");
-		// The icon replaces the default mark rather than accompanying it, so the letterhead draws exactly one of the two, and the wordmark is drawn beside whichever it is.
+		// The icon replaces the default brand mark rather than accompanying it, so the letterhead draws exactly one of the two, and the wordmark is drawn beside whichever it is.
 		assert.deepEqual(findAll(view, (node) => hasClass(node, "invoice-logo")), [], "a supplied icon leaves the default brand mark out of the letterhead");
 		assert.equal(
 			findAll(brand, (node) => hasClass(node, "letterhead-title")).map((node) => textOf(node))[0],
@@ -1265,13 +1265,13 @@ test("the letterhead draws the invoice's own icon, and draws none when it carrie
 });
 
 test("the print path keeps the letterhead's supplied mark and never restores the default one", () => {
-	// The page draws exactly one of the two marks and the PDF draws the icon in the accent mark's place; the print path renders the page's own markup, so print.css must keep whichever mark the page drew — never hide the supplied icon, and never add a rule that would draw the built-in mark the page left out.
+	// The page draws exactly one of the two marks and the PDF draws the icon in the brand mark's place; the print path renders the page's own markup, so print.css must keep whichever mark the page drew — never hide the supplied icon, and never add a rule that would draw the built-in brand mark the page left out.
 	const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
 	for (const body of [...printCss.matchAll(/\.letterhead-icon[^{}]*\{([^{}]*)\}/g)].map((match) => match[1])) {
 		assert.doesNotMatch(body, /display:\s*none|visibility:\s*hidden/, `print.css must not hide the payee's own icon: ${body.trim()}`);
 	}
 	const markRules = [...printCss.matchAll(/\.invoice-logo[^{}]*\{([^{}]*)\}/g)].map((match) => match[1]);
-	assert.ok(markRules.length > 0, "print.css declares the default mark's own print treatment");
+	assert.ok(markRules.length > 0, "print.css declares the default brand mark's own print treatment");
 	for (const body of markRules) {
 		assert.doesNotMatch(body, /display:|background-image:|content:|visibility:/, `print.css must not re-show the built-in brand mark the page leaves out when the invoice carries its own icon: ${body.trim()}`);
 	}
@@ -1340,6 +1340,7 @@ test("a stored contact value is drawn line for line exactly as the validator sto
 		fake.restore();
 	}
 });
+
 test("a tab pasted into a contact value is stored as the space the page, the print twin, and the PDF all draw", () => {
 	// The model admits a tab inside a contact line while the display boundary removes it, so a stored tab would be drawn as nothing and would join the words it separated; the canonical contact text stores the single space the tab stood for instead.
 	const invoice = invoiceFor({ payee: { name: "Studio Example", address: PAYEE, email: "Studio\tExample\n+44 20 7946 0000" } });
@@ -1364,6 +1365,7 @@ test("a tab pasted into a contact value is stored as the space the page, the pri
 		fake.restore();
 	}
 });
+
 test("a contact value's own spacing is drawn as the payee typed it on the page and on paper", () => {
 	// The field is free text, so a run of spaces and the space a line opens with are part of the value; the block that draws it would collapse them under the default `white-space`, while the PDF draws the line's own characters, and the print path is that same element rather than a second copy of the markup.
 	const contact = "12  Example  Street\n  Accounts\n+44 20 7946 0000";

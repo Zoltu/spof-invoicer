@@ -76,7 +76,6 @@ export function copyWithFallback(
 	status: CopyStatus,
 	schedule: (report: () => void) => void = (report) => report(),
 ): void {
-	// The write is issued now, still inside the click's own gesture; only the reporting of its outcome may be moved to another task.
 	void copyText(text, clipboard).then((copied) => {
 		schedule(() => {
 			if (copied) {

@@ -39,7 +39,7 @@ const CONTACT_HINT = `Up to ${MAX_CONTACT_LINES} lines, each of at most ${MAX_CO
 /**
  * The hint the bill-to name field carries.
  *
- * The bill-to block is optional as a whole — an invoice with no payor stays valid — while the payor's name is required as soon as the block carries anything else.
+ * The bill-to block is optional as a whole — an invoice with no payer stays valid — while the payer's name is required as soon as the block carries anything else.
  * That is the requirement {@link requiredFieldErrors} holds, and it is what this hint states: a field whose placeholder called the name optional left a payee who filled the client's contact info to meet the requirement as a post-submit error instead.
  */
 const PAYER_NAME_HINT = "The bill-to block is optional as a whole, but the client name is required as soon as the block carries anything, such as the client's contact info.";

@@ -527,7 +527,7 @@ function cappedContact(length, glyph = "m") {
 function tallestContact() {
 	const tail = "@Æ.Æ";
 	const contact = "Æ".repeat(MAX_EMAIL_CHARS - tail.length) + tail;
-	assert.equal(contact.length, MAX_EMAIL_CHARS);
+	assert.equal(contact.length, MAX_EMAIL_CHARS, "the fixture is one line at the legacy email cap");
 	return contact;
 }
 
@@ -1565,7 +1565,7 @@ test("an icon invoice embeds one image XObject at the letterhead, and an icon-le
 	assert.deepEqual(await renderInvoicePdf(invoiceFor(), "2026-10-03", unused), plain, "an icon-less export never reaches the rasterizer, and it is the case whose bytes are stable, so they are the ones it always produced");
 });
 
-/** The accent mark the letterhead draws as the default brand mark: the 11-by-11 fill it reserves for it. */
+/** The default brand mark the letterhead draws: the 11-by-11 fill it reserves for it. */
 function accentMarks(page) {
 	return headBlocks(page)[0][1].filter((op) => op.kind === "fill" && op.width === 11 && op.height === 11);
 }
@@ -1575,24 +1575,24 @@ function wordmark(page) {
 	return headBlocks(page)[0][1].find((op) => op.kind === "text" && op.text === "Invoicing");
 }
 
-test("the letterhead draws the payee's icon in place of the default accent mark, and the mark alone when there is no icon", () => {
+test("the letterhead draws the payee's icon in place of the default brand mark, and the mark alone when there is no icon", () => {
 	const raster = { bytes: ICON_PNG, width: 64, height: 32 };
 	const withIcon = buildInvoicePages(buildInvoiceViewModel(invoiceFor({ icon: ICON_SVG }), "2026-10-03"), METRICS, raster)[0];
 	const plain = buildInvoicePages(buildInvoiceViewModel(invoiceFor(), "2026-10-03"), METRICS)[0];
 
 	const icon = withIcon.ops.find((op) => op.kind === "image");
 	assert.ok(icon !== undefined, "the icon letterhead draws the icon's box");
-	assert.deepEqual(accentMarks(withIcon), [], "the icon stands in the mark's place, so the letterhead draws no accent mark beside it");
+	assert.deepEqual(accentMarks(withIcon), [], "the icon stands in the mark's place, so the letterhead draws no brand mark beside it");
 	const marks = accentMarks(plain);
-	assert.equal(marks.length, 1, "an invoice with no icon still draws the one default accent mark");
+	assert.equal(marks.length, 1, "an invoice with no icon still draws the one default brand mark");
 
 	const iconWordmark = wordmark(withIcon);
 	const plainWordmark = wordmark(plain);
 	assert.ok(iconWordmark !== undefined && plainWordmark !== undefined, "both letterheads draw the wordmark");
-	assertClose(icon.x, marks[0].x, "the icon takes the accent mark's own left edge");
+	assertClose(icon.x, marks[0].x, "the icon takes the brand mark's own left edge");
 	assertClose(plainWordmark.y, iconWordmark.y, "the wordmark sits on the same line either way");
 	assert.ok(iconWordmark.x >= icon.x + icon.width, "the wordmark starts past the icon's box");
-	assert.ok(plainWordmark.x >= marks[0].x + marks[0].width, "as it starts past the accent mark on an invoice that has none");
+	assert.ok(plainWordmark.x >= marks[0].x + marks[0].width, "as it starts past the brand mark on an invoice that has none");
 });
 
 test("the letterhead reserves the icon's mark-sized square, so the wordmark offset does not turn on the icon's aspect ratio", () => {
@@ -1620,7 +1620,7 @@ test("the letterhead reserves the icon's mark-sized square, so the wordmark offs
 /** The CSS reference ratio that turns a stylesheet's rem length into the points the export draws in: 16 px to the rem and 0.75 pt to the px. */
 const CSS_REM_PT = 12;
 
-test("the export reserves the page's own letterhead mark, and starts the wordmark past it by the page's own brand gap", () => {
+test("the export reserves the page's own brand mark, and starts the wordmark past it by the page's own brand gap", () => {
 	// The page boxes the icon at `--letterhead-mark` and spaces the wordmark from it by `.letterhead-brand`'s own gap, and the export has to reproduce both, or the two letterheads place the same icon and wordmark differently; the page writes each length in rem and the export in points, so the agreements are pinned here rather than derived on either side, and either moving alone fails.
 	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
 	const declaredSide = /--letterhead-mark:\s*([\d.]+)rem;/.exec(invoiceCss);
