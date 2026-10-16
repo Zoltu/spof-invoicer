@@ -30,7 +30,7 @@ Only the hash the wallet returns is displayed.
 app/                        deployable root (the only thing served or pinned)
   index.html                shell; CSP + referrer policy, loads js/main.js as a native ES module
   ts/                       TypeScript sources (the source of truth)
-  js/                       tsc output + copied vendor .js + source maps (committed)
+  js/                       tsc output + copied vendor .js + source maps (generated; not committed)
   stylesheets/              app.css, invoice.css (the document), print.css (@media print)
   images/                   logo.svg + favicon.svg (copied from assets-src/images)
 build.mjs                   copy vendor .js -> copy images -> tsc
@@ -48,7 +48,7 @@ scripts/vendor-pins.mjs     pin each package's version + lockfile integrity, che
 assets-src/                 image sources (copied to app/images by the build)
 ```
 
-`assets-src/` and `vendor-src/` are both committed, alongside the `app/js/vendor/` and `app/images/` copies the build produces from them.
+`assets-src/` and `vendor-src/` are both committed, alongside the `app/images/` copies the build produces from them; the generated `app/js/vendor/` copies are build output and are not committed.
 The image input stays optional: `build.mjs` detects the absence of `assets-src/` and skips the copy with a log line, so `bun run build` still works if the sources are removed.
 
 ## Commands
@@ -118,13 +118,14 @@ The runtime is [Bun](https://bun.sh): in this environment `node` is a shim for `
 - Build order is deliberate: vendor files and their hand-written `.d.ts` shims are copied into `app/js/vendor/` **before** `tsc` runs, so relative `.js` imports typecheck against the shims beside them.
   `allowJs` stays `false`, so `tsc` never emits or rewrites anything under `app/js/vendor/`.
 - Source maps are always on and inline the TypeScript source, so `app/js/main.js.map` carries `sources: ["../ts/main.ts"]` plus `sourcesContent`; the acceptance gate checks every emitted map for that, and for the embedded source still matching `app/ts/`.
-- `app/js/` is committed, and `tests/acceptance.test.mjs` builds into a scratch directory and compares the whole served tree byte for byte, so the committed `app/js/**` cannot silently drift from `app/ts/**`.
+- `app/js/` is generated output and is not committed: `bun run build` reproduces it from `app/ts/**` and `vendor-src/**`, and `bun test` builds it once before the suites import it when it is absent (see `bunfig.toml`).
+  `tests/acceptance.test.mjs` builds into a scratch directory and compares the whole served tree byte for byte, so a working-tree `app/js/**` cannot silently drift from `app/ts/**`.
 - The pdf-lib bundle (~1.4 MB) is imported lazily on the first PDF export, so it stays out of first load.
 
 ## Style and conventions
 
 Beyond the five `.editorconfig` keys, the code follows a set of token-level conventions that the config cannot express and the gate does not check; most are held by convention and review alone, but two are machine-enforced: `verbatimModuleSyntax` in `tsconfig.json` makes a type-only import that omits `import type` a compile error, and `NodeNext` resolution enforces the `.js`-suffixed relative import (see "Build rules").
-The token conventions in this section, and the `.editorconfig` `indent_style` key they extend, govern the authored tree only: the committed `app/js/**` that `tsc` emits with 4-space indentation (as in `app/js/util/decimal.js`) is a byte-held build artifact, and `.editorconfig` unsets every rule for it, just as it does for the other byte-held trees (`vendor-src/**`, `app/images/**`, `node_modules/**`, `tests/fixtures/**`) — see those `unset` sections.
+The token conventions in this section, and the `.editorconfig` `indent_style` key they extend, govern the authored tree only: the generated `app/js/**` that `tsc` emits with 4-space indentation (as in `app/js/util/decimal.js`) is a byte-held build artifact, and `.editorconfig` unsets every rule for it, just as it does for the other byte-held trees (`vendor-src/**`, `app/images/**`, `node_modules/**`, `tests/fixtures/**`) — see those `unset` sections.
 The whitespace and line-ending keys (`charset`, `end_of_line`, `insert_final_newline`, `trim_trailing_whitespace`) are not confined that way: they reach every committed file outside those `unset` trees, `bun.lock` among them — the one tool-generated file the gate sweeps, held to those rules alone because its extension is outside the tab-rule section (see "Verifying the guarantees").
 The SHA256 sums and the fresh-build byte comparison, not the style gate, are what hold those bytes, so reading the generated `app/js/**` as a style violation is a mistake.
 String literals are double-quoted, statements end in a semicolon, multi-line literals and argument lists carry a trailing comma, every exported declaration carries a JSDoc block, and names use `camelCase` for functions and variables, `PascalCase` for types and interfaces, `UPPER_SNAKE_CASE` for fixed-literal constants, and `kebab-case` for file names.
@@ -134,7 +135,7 @@ A module-level JSDoc block, when present, goes at the very top of the file, ahea
 A type-only import is written `import type` (or an inline `type` modifier when a type shares one statement with value imports), and a Node built-in is imported under its `node:` prefix, as in `import { join } from "node:path"`.
 
 Line length is deliberately uncapped: `.editorconfig` omits `max_line_length` on purpose, so long prose, JSDoc, and code lines are kept as authored rather than reflowed.
-A maintainer who "fixes" a long line can diverge the emitted bytes of the committed, byte-compared `app/js/**`, so the carve-out is a convention to preserve, not an oversight to correct.
+A maintainer who "fixes" a long line can diverge the emitted bytes of the byte-compared `app/js/**`, so the carve-out is a convention to preserve, not an oversight to correct.
 
 ## Vendored libraries
 
@@ -324,7 +325,7 @@ A privacy-chain invoice goes through the same shared link: its rendered document
 A payee address on another network is refused there by name: a testnet unified `utest1` container never renders a document, and the notice the payer sees names the network that refused it.
 The PDF export, Pay, and boot cases each install a network blocker for the duration of the case, and the Pay and boot cases assert that no provider call happens before the Pay click.
 The create form and the share dialog themselves are covered by the UI suites (`tests/ui.test.mjs`, `tests/view.test.mjs`), not by the gate.
-The gate then asserts the invariants directly: no page-origin network request anywhere except the app's own two lazy same-origin module imports (the PDF renderer on the first export, its icon rasterizer on the first export that carries an icon), hostile payloads and hostile invoice text refused, the CSP pinned directive by directive, no network API or markup sink anywhere in the served runtime code, every reference same-origin and present on disk, and the committed `app/` tree byte-identical to a fresh build (with the emitted modules' source maps pointing back at `app/ts/`).
+The gate then asserts the invariants directly: no page-origin network request anywhere except the app's own two lazy same-origin module imports (the PDF renderer on the first export, its icon rasterizer on the first export that carries an icon), hostile payloads and hostile invoice text refused, the CSP pinned directive by directive, no network API or markup sink anywhere in the served runtime code, every reference same-origin and present on disk, and the `app/` tree byte-identical to a fresh build (with the emitted modules' source maps pointing back at `app/ts/`).
 
 `tests/style.test.mjs` is the repo's own style gate, and `.editorconfig` is its single source of truth for scope and rules: at run time it parses the config, resolves the effective properties for each governed path, and walks the tree, so which files it sweeps, which keys they carry, and whether the indentation rule applies are read from the config rather than restated in the guard.
 What the guard fixes in code is how each of the five keys is checked and the shared extension-to-comment-syntax table (`languageFor` in `tests/helpers/code-only.mjs`) it needs to exempt wrapped comment lines; a value it cannot check (for example `end_of_line = crlf`), a key it does not enforce, and a glob construct it does not model are each reported rather than silently ignored, so the gate cannot quietly enforce nothing.
@@ -389,12 +390,12 @@ The source-level half is enforced by `tests/acceptance.test.mjs` — the icon te
 The deployable artifact is the `app/` directory and nothing else:
 
 ```sh
-bun run build            # app/js/** is regenerated; commit it
+bun run build            # app/js/** is regenerated
 ipfs add -r app          # or an equivalent pinning service / `ipfs-cli`
 ```
 
 `ipfs add -r app` pins the entire `app/` tree with no filtering, so anything dropped under `app/` — a key, a note, `app/wallet.json` — is published along with the app.
-The build and the server do not gate that: the repo's acceptance gate (`tests/acceptance.test.mjs`) is what catches a stray file, by requiring every committed file under `app/` to be a build output or an authored source, so keep secrets out of `app/` and let the gate's stray-file check keep it that way.
+The build and the server do not gate that: the repo's acceptance gate (`tests/acceptance.test.mjs`) is what catches a stray file, by requiring every file under `app/` to be a build output or an authored source, so keep secrets out of `app/` and let the gate's stray-file check keep it that way.
 
 Then pin the returned directory CID, and serve it from an origin that holds nothing but this app: a per-CID subdomain gateway (`https://<cid>.ipfs.<gateway>/`), or a domain that serves only this directory.
 A path-style gateway (`https://<gateway>/ipfs/<cid>/index.html`) serves every other CID from this app's own origin, so a sibling page's script can frame this app and read its fragment; the fragment-privacy guarantee above holds only on a per-CID or otherwise dedicated origin, where no other page shares the app's origin.

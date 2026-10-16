@@ -1269,7 +1269,7 @@ test("the README states the contact field's widening in both directions", () => 
 	}
 });
 
-test("the committed app/ tree is a fresh build of its sources, with maps pointing back to ts/", async () => {
+test("the app/ tree is a fresh build of its sources, with maps pointing back to ts/", async () => {
 	const problems = await servedTreeProblems();
 	assert.deepEqual(problems, [], problems.join("\n"));
 

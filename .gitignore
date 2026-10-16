@@ -29,3 +29,6 @@ Thumbs.db
 *.tmp
 .history/
 .orchestration/
+
+# Generated build output — `bun run build` reproduces `app/js/**` from `app/ts/**` and `vendor-src/**`.
+app/js/

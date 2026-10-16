@@ -1,4 +1,4 @@
-/** Build the served tree into a throwaway root and compare it, byte for byte, against the committed `app/`, so the acceptance gate catches a stale or stray file. */
+/** Build the served tree into a throwaway root and compare it, byte for byte, against the working-tree `app/`, so the acceptance gate catches a stale or stray file. */
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -15,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUILD_OUTPUTS = ["app/js", "app/images"];
 
 // Files the build does not produce but the app ships deliberately: the page shell, and the TypeScript sources and stylesheets under these trees.
-// Every other committed file under app/ is reported.
+// Every other file under app/ is reported.
 const AUTHORED_FILES = new Set(["app/index.html"]);
 const AUTHORED_TREES = [
 	{ dir: "app/ts", extension: ".ts", emitted: "app/js" },
@@ -23,11 +23,11 @@ const AUTHORED_TREES = [
 ];
 
 /**
- * Build into a throwaway root and compare the whole served `app/` tree against what is committed.
- * The build outputs (`app/js/**` — our emitted modules, their maps, and the copied vendor bundles — and `app/images/**`) are checked byte for byte, and every other committed file under `app/` must be one of the authored sources the app ships deliberately.
+ * Build into a throwaway root and compare the whole served `app/` tree against the working tree.
+ * The build outputs (`app/js/**` — our emitted modules, their maps, and the copied vendor bundles — and `app/images/**`) are checked byte for byte, and every other file under `app/` must be one of the authored sources the app ships deliberately.
  * A stale or hand-edited file is reported instead of being quietly overwritten by the next build, and a stray file that would still be pinned to IPFS is reported too.
  * The build itself verifies `vendor-src/` against its SHA256 manifest before copying a byte, so a drifted vendor tree aborts here as well.
- * Resolves to an array of problem strings — `[]` when the committed `app/` tree is exactly a fresh build.
+ * Resolves to an array of problem strings — `[]` when the working-tree `app/` is exactly a fresh build.
  */
 export async function servedTreeProblems() {
 	const out = await mkdtemp(join(tmpdir(), "invoice-acceptance-"));
@@ -40,8 +40,8 @@ export async function servedTreeProblems() {
 		if (build.status !== 0) {
 			return [`a fresh build failed (exit ${build.status}):\n${build.stdout}\n${build.stderr}`];
 		}
-		const committed = await committedServedFiles();
-		const problems = authoredFileProblems(committed);
+		const served = await servedFiles();
+		const problems = authoredFileProblems(served);
 		for (const dir of BUILD_OUTPUTS) {
 			problems.push(...(await treeDifferences(dir, join(root, dir), join(out, dir))));
 		}
@@ -51,8 +51,8 @@ export async function servedTreeProblems() {
 	}
 }
 
-/** Every file under the committed `app/`, relative to the repo root; `[]` when `app/` is missing. */
-async function committedServedFiles() {
+/** Every file under the working-tree `app/`, relative to the repo root; `[]` when `app/` is missing. */
+async function servedFiles() {
 	try {
 		return (await listFiles(join(root, "app"))).map((file) => `app/${file}`);
 	} catch {
@@ -61,13 +61,13 @@ async function committedServedFiles() {
 }
 
 /**
- * A committed file under `app/` that is neither part of a build output nor an authored source would still ship to IPFS, so it is a problem.
+ * A file under `app/` that is neither part of a build output nor an authored source would still ship to IPFS, so it is a problem.
  * An authored source must in turn be accounted for: an emitted module behind every `app/ts/**.ts`, and a reference from the shell to every stylesheet.
  */
-function authoredFileProblems(committed) {
-	if (committed.length === 0) return ["app/ is missing — run `bun run build` and commit it"];
+function authoredFileProblems(served) {
+	if (served.length === 0) return ["app/ is missing — run `bun run build`"];
 	const problems = [];
-	for (const path of committed) {
+	for (const path of served) {
 		if (BUILD_OUTPUTS.some((dir) => path.startsWith(`${dir}/`))) continue;
 		if (AUTHORED_FILES.has(path)) continue;
 		const tree = AUTHORED_TREES.find(({ dir, extension }) => path.startsWith(`${dir}/`) && path.endsWith(extension));
@@ -88,13 +88,13 @@ function authoredFileProblems(committed) {
 	return problems;
 }
 
-async function treeDifferences(label, committed, fresh) {
-	let committedFiles;
+async function treeDifferences(label, servedRoot, fresh) {
+	let servedTreeFiles;
 	let freshFiles;
 	try {
-		committedFiles = await listFiles(committed);
+		servedTreeFiles = await listFiles(servedRoot);
 	} catch {
-		return [`${label}/ is missing — run \`bun run build\` and commit it`];
+		return [`${label}/ is missing — run \`bun run build\``];
 	}
 	try {
 		freshFiles = await listFiles(fresh);
@@ -104,19 +104,19 @@ async function treeDifferences(label, committed, fresh) {
 
 	const problems = [];
 	for (const file of freshFiles) {
-		if (!committedFiles.includes(file)) {
-			problems.push(`${label}/${file} is missing from the committed tree — run \`bun run build\``);
+		if (!servedTreeFiles.includes(file)) {
+			problems.push(`${label}/${file} is missing from the working tree — run \`bun run build\``);
 			continue;
 		}
 		const built = await readFile(join(fresh, file));
-		const committedBytes = await readFile(join(committed, file));
+		const servedBytes = await readFile(join(servedRoot, file));
 		if (file.endsWith(".map")) {
-			problems.push(...mapDifferences(label, file, built, committedBytes, join(fresh, file), join(committed, file)));
-		} else if (!built.equals(committedBytes)) {
+			problems.push(...mapDifferences(label, file, built, servedBytes, join(fresh, file), join(servedRoot, file)));
+		} else if (!built.equals(servedBytes)) {
 			problems.push(`${label}/${file} differs from a fresh build — run \`bun run build\``);
 		}
 	}
-	for (const file of committedFiles) {
+	for (const file of servedTreeFiles) {
 		if (!freshFiles.includes(file)) {
 			problems.push(`${label}/${file} is not produced by the build`);
 		}
@@ -128,22 +128,22 @@ async function treeDifferences(label, committed, fresh) {
  * A source map cannot be compared byte for byte across out roots: `tsc` spells `sources` relative to the `--outDir` it was handed, so the same compile writes `../ts/x.ts` into the repo and a longer path back into `app/ts/` into a scratch root.
  * Every other field — the mappings, the embedded source text, the file name — is out-root independent; `sources` is compared by resolving both sides against their own map file, which pins the same absolute TypeScript files, except for a vendored map, which is copied byte for byte and so has identical `sources` that already compare literally.
  */
-function mapDifferences(label, file, builtBytes, committedBytes, builtPath, committedPath) {
+function mapDifferences(label, file, builtBytes, servedBytes, builtPath, servedPath) {
 	const built = JSON.parse(builtBytes.toString("utf8"));
-	const committed = JSON.parse(committedBytes.toString("utf8"));
+	const served = JSON.parse(servedBytes.toString("utf8"));
 	const problems = [];
 	for (const key of ["version", "file", "names", "sourcesContent"]) {
-		if (JSON.stringify(built[key]) !== JSON.stringify(committed[key])) {
+		if (JSON.stringify(built[key]) !== JSON.stringify(served[key])) {
 			problems.push(`${label}/${file} has a different ${key} than a fresh build`);
 		}
 	}
-	if (built.mappings !== committed.mappings) {
+	if (built.mappings !== served.mappings) {
 		problems.push(`${label}/${file} has different mappings than a fresh build`);
 	}
 	// A vendored map is copied byte for byte, so its `sources` are identical and resolve relative to whichever out root holds the copy; only tsc's own maps, whose `sources` differ per out root, need the resolve-both-and-compare treatment.
 	const sourcesOf = (map, path) => (map.sources ?? []).map((source) => resolve(dirname(path), source)).join("\n");
-	const sameSources = JSON.stringify(built.sources) === JSON.stringify(committed.sources);
-	if (!sameSources && sourcesOf(built, builtPath) !== sourcesOf(committed, committedPath)) {
+	const sameSources = JSON.stringify(built.sources) === JSON.stringify(served.sources);
+	if (!sameSources && sourcesOf(built, builtPath) !== sourcesOf(served, servedPath)) {
 		problems.push(`${label}/${file} resolves to different sources than a fresh build`);
 	}
 	return problems;

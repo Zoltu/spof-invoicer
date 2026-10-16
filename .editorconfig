@@ -10,8 +10,8 @@ trim_trailing_whitespace = true
 [*.{ts,js,mjs,html,css,json,svg}]
 indent_style = tab
 
-# The SHA256-pinned vendor trees, the committed compiler output, the copied image assets and the installed node_modules tree are byte-for-byte artifacts: the build and its gates require their exact bytes.
-# The vendor trees and the committed compiler output mix line endings and final-newline conventions, so no single explicit value fits them; unset every rule the config sets on all four, `charset` included, so the guard treats the whole tree as out of scope.
+# The SHA256-pinned vendor trees, the generated compiler output, the copied image assets and the installed node_modules tree are byte-for-byte artifacts: the build and its gates require their exact bytes.
+# The vendor trees and the generated compiler output mix line endings and final-newline conventions, so no single explicit value fits them; unset every rule the config sets on all four, `charset` included, so the guard treats the whole tree as out of scope.
 # `unset` only removes the property, so an editor falls back to its own defaults and may still rewrite these bytes; the SHA256SUMS verification and the fresh-build byte comparison are what actually hold them.
 [vendor-src/**]
 charset = unset
