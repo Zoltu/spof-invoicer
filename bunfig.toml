@@ -1,3 +1,7 @@
+[install]
+exact = true
+frozenLockfile = true
+
 [test]
 # The served `app/js/**` tree is generated output rather than a committed artifact, so a fresh checkout has none; build it once before the test files import it.
 # The acceptance gate then compares this working-tree build against a fresh build in a scratch root, so a stale or hand-edited tree is still reported.
