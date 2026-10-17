@@ -11,16 +11,20 @@ There is nothing to install and no account to create.
 ## Screenshots
 
 ![The invoice form with a business name, two line items, and a total.](docs/screenshots/create-invoice.png)
-*Fill in your details, add line items, and share the invoice by link.*
+
+*Start with your own details, then add what you are billing for.*
 
 ![A finished invoice with a letterhead, an itemized table, a total, and a QR code.](docs/screenshots/shared-invoice.png)
-*See the invoice as the person you bill opens it, ready to pay.*
 
-![The payment panel with the amount, the recipient, and the network.](docs/screenshots/pay-panel.png)
-*See how to pay before you connect a wallet.*
+*The page the person you bill opens from your link.*
 
-![The share dialog with a link and a copy-paste code.](docs/screenshots/share-dialog.png)
-*Share the invoice in the way that suits the person you bill.*
+![The payment panel showing the amount, the recipient, and the network.](docs/screenshots/pay-panel.png)
+
+*Choose how to pay, with a wallet or without one.*
+
+![The share dialog showing a link and a copy-paste code.](docs/screenshots/share-dialog.png)
+
+*Send the link, or the copy-paste code.*
 
 ## What you can do
 
@@ -36,17 +40,17 @@ There is nothing to install and no account to create.
 
 - No account and no sign-up.
 - No cookies, no tracking, and no analytics.
-- Nothing is uploaded, because the invoice travels inside the link you share and never reaches a server of ours.
-- The app is a set of static files with no backend.
+- Nothing is uploaded: the invoice travels inside the link you share, and no company server ever holds it.
+- The app itself is a set of pages, so it runs entirely in your browser rather than on a server.
 
 ## Open the app
 
 All three links open the same app, so pick the one that suits how you browse.
 IPFS is a network that serves files from many computers rather than one company.
-If you are new to IPFS, use the first one.
+If you do not know what IPFS is, use the hosted link below; it opens like any other website.
 The long code starting `bafybei…` names the same content in all three, so the copy you are served can be checked against it.
 
-- **Most people:** <https://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.zoltu.io/> works in any browser, because a public service serves it for you; that service is run by someone else and could change the files before serving them, so trust it only as far as you trust its operator.
+- **Most people:** <https://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.zoltu.io/> works in any browser, because a public gateway serves it for you; that gateway is run by someone else and could change the files before serving them, so trust it only as far as you trust its operator.
 - **Already use IPFS:** <ipfs://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4> opens the same app through your own IPFS software.
 - **Run your own IPFS node:** <http://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.localhost:8080/> serves the app from your own computer.
 
