@@ -24,23 +24,24 @@ There is nothing to install and no account to create.
 - No cookies, no tracking, and no analytics.
 - Nothing is uploaded: the invoice travels inside the link you share, and no company server ever holds it.
 - The app itself is a set of pages, so it runs entirely in your browser rather than on a server.
-- There is no saved list of what you billed, so no history of your invoices sits anywhere waiting to be collected, leaked or demanded.
-- You cannot send an invoice by a short ID, because a record like that would tie the invoice back to a person.
+- The app keeps no list of the invoices you made, because nothing is saved: each invoice exists only inside its link.
+- You have to share the whole link, because a shorter link would need a copy stored on a server that could point back to you.
 - The invoice is readable by anyone who holds the link, so the link is the secret and should not be posted publicly.
 
 ## Security over features
 
-- The app has nowhere to send your data: the browser's own rules block every outbound connection.
-- The part of the link that holds the invoice is never sent to a server.
-- Nothing touches your crypto wallet until you click pay, and the payment panel will not open inside another site's page.
-- Before a payment goes out, the app re-checks which network the wallet is really on, because a wallet can report success while staying on the wrong one.
-- The amount, the recipient and the network you see are worked out from the invoice on your screen, so a tampered link cannot change them.
+- The app's own code has no way to reach an outside server, so it never contacts a tracking service.
+- The app refuses to hand the payment to the crypto wallet unless the wallet reports the invoice's own network.
+- A wallet can report the right network while being on another, so the app can only go by what your own wallet reports.
+- The panel the Pay button opens shows the amount and where the money goes.
+- Nothing touches your wallet until you click Connect wallet & pay.
+- The app refuses to open the payment panel when another website shows the app's page, so covering the Pay button is harder, though not impossible.
+- Invoice text is always shown as plain text, so a link cannot add code to the page.
 
-Some features were left out on purpose:
+A few things are missing on purpose:
 
-- We left out compressed share links, because that would mean trusting a compression library.
-- We left out links to a public page that looks up a payment, because that would need a network destination the app refuses to have.
-- We left out any formatting inside invoice fields, because the link is untrusted input and every value is shown as plain text.
+- Invoice text never turns into bold or italics, because a link can come from anyone.
+- You get the transaction hash, the code the wallet gives back for the payment, instead of a link that looks up the payment.
 
 ## Open the app
 
