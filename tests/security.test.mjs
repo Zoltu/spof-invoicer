@@ -102,7 +102,7 @@ test("the inline allowance is confined to script-src-elem and closes every other
 });
 
 // The assertions below re-derive the effective-directive decisions from the same parsed map the tests above use, so they prove the policy's own semantics — not that any browser enforces them.
-// The end-to-end behavior, including whether Firefox applies script-src-elem to an injected inline script, is the manual Firefox check in README.md's "Testing with a real wallet" section.
+// The end-to-end behavior, including whether Firefox applies script-src-elem to an injected inline script, is left to a manual check in Firefox before a release.
 test("the parsed policy permits the injected inline script element and blocks the other script vectors", () => {
 	const directives = cspDirectives();
 	assert.equal(allowsInlineScriptElement(directives), true, "an inline <script> element must be permitted");

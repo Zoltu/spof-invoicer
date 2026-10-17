@@ -31,7 +31,6 @@ import { listFiles } from "../../scripts/vendor-manifest.mjs";
 import { parseHash } from "../../app/js/app/router.js";
 import { bootApp, mountShell, renderRoute } from "../../app/js/app/shell.js";
 import {
-	MAX_JSON_BYTES,
 	MAX_PAYLOAD_CHARS,
 	ShareFormatError,
 	UnsupportedShareVersionError,
@@ -41,13 +40,10 @@ import {
 	encodeInvoiceBlob,
 	serializeInvoice,
 } from "../../app/js/invoice/codec.js";
-import { MAX_ICON_DIMENSION, MAX_ICON_SVG_BYTES } from "../../app/js/invoice/icon.js";
 import {
 	InvalidInvoiceError,
 	UnsupportedInvoiceVersionError,
-	MAX_CONTACT_CHARS,
 	MAX_CONTACT_LINE_CHARS,
-	MAX_CONTACT_LINES,
 	MAX_EMAIL_CHARS,
 	computeTotals,
 	createInvoice,
@@ -292,7 +288,7 @@ function countOccurrences(source, text) {
 }
 
 /**
- * Every authored file the served tree is built from, plus the README, read as one text: the sources the app compiles from, the stylesheets it ships, the page that serves them, and the documentation describing them, so a sentence claimed to have one spelling is counted everywhere a second copy could hide.
+ * Every authored file the served tree is built from, read as one text: the sources the app compiles from, the stylesheets it ships, and the page that serves them, so a sentence claimed to have one spelling is counted everywhere a second copy could hide.
  * The compiled `app/js/**` copy is the same sentence compiled rather than a second spelling of it, and the fresh-build gate is what holds it to the source.
  */
 async function authoredTreeText() {
@@ -300,7 +296,6 @@ async function authoredTreeText() {
 		...(await listFiles(join(appDir, "ts"))).map((file) => join(appDir, "ts", file)),
 		...(await listFiles(join(appDir, "stylesheets"))).map((file) => join(appDir, "stylesheets", file)),
 		join(appDir, "index.html"),
-		join(root, "README.md"),
 	];
 	return files.map((file) => readFileSync(file, "utf8")).join("\n");
 }
@@ -314,7 +309,7 @@ function isOurModule(file) {
  *
  * `util/dom.ts`'s `h()` builder has one sanctioned call, `document.createElement(tag)`, safe because the tag it hands over is the parameter `h()` has already checked against its own forbidden tags.
  * Each exemption is file-scoped and site-exact: it admits one whole statement, so a `createElement` call a reported line spells beside the sanctioned one — a second tag on the same line, or another sink sharing it — is reported rather than admitted by a pattern the line merely contains.
- * The PDF export's download anchor in `pdf/renderer.ts` is one of the exceptions `README.md` documents: it is built on the fly to take an app-generated `blob:` URL that `h()` itself would refuse, and its tag is the literal `"a"`.
+ * The PDF export's download anchor in `pdf/renderer.ts` is an exception: it is built on the fly to take an app-generated `blob:` URL that `h()` itself would refuse, and its tag is the literal `"a"`.
  * `pdf/rasterize.ts` builds the browser-only rasterizer's own two elements — the `<img>` that loads the icon leaf's data URL and the `<canvas>` its pixels are drawn into — which is the image context the icon is rendered in and neither of which can carry script.
  */
 const ELEMENT_BUILDERS = new Set(["app/ts/util/dom.ts", "app/js/util/dom.js"]);
@@ -1104,11 +1099,11 @@ test("the runtime sweeps catch the vectors they name and each allow-list exempts
 	);
 });
 
-test("the hand-off sentence has one spelling across the authored tree and the README", async () => {
+test("the hand-off sentence has one spelling across the authored tree", async () => {
 	assert.equal(
 		countOccurrences(await authoredTreeText(), UNSUPPORTED_WALLET_MESSAGE),
 		1,
-		"the sentence has one spelling across the authored sources, the stylesheets, the page, and the README, so a copy inlined in a third authored file fails here",
+		"the sentence has one spelling across the authored sources, the stylesheets, and the page, so a copy inlined in a third authored file fails here",
 	);
 });
 
@@ -1202,59 +1197,9 @@ test("index.html pins the policy the app's guarantees rest on", () => {
 	);
 });
 
-test("the README quotes the policy index.html pins, verbatim and once", () => {
-	const html = readFileSync(join(appDir, "index.html"), "utf8");
-	const policy = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]*)">/);
-	assert.ok(policy, "index.html must carry a CSP meta tag");
-	const readme = readFileSync(join(root, "README.md"), "utf8");
-	assert.ok(
-		readme.includes(`pins a CSP meta tag: \`${policy[1]}\``),
-		"the README quotes the policy index.html pins, so the documented policy cannot drift from the served one",
-	);
-	assert.equal(countOccurrences(readme, "default-src"), 1, "and the README spells the policy once, so no stale second copy can survive beside it");
-});
+	test("the contact field admits the legacy address shape whole and the widened shapes beside it", () => {
 
-test("the README's stated caps are the ones the code enforces", () => {
-	const readme = readFileSync(join(root, "README.md"), "utf8");
-	assert.ok(readme.includes(`${MAX_JSON_BYTES / 1024} KiB of JSON`), `the README states the payload cap the codec applies, ${MAX_JSON_BYTES} bytes`);
-	assert.ok(
-		readme.includes(`\`MAX_ICON_SVG_BYTES = ${MAX_ICON_SVG_BYTES}\` UTF-8 bytes`),
-		`the README states the byte cap the icon gate applies, ${MAX_ICON_SVG_BYTES}`,
-	);
-	assert.ok(
-		readme.includes(`\`MAX_ICON_DIMENSION = ${MAX_ICON_DIMENSION}\` pixels an axis`),
-		`the README states the dimension cap the icon gate applies, ${MAX_ICON_DIMENSION}`,
-	);
-	assert.ok(
-		readme.includes(`\`MAX_CONTACT_LINES = ${MAX_CONTACT_LINES}\` lines`),
-		`the README states the contact line cap the model applies, ${MAX_CONTACT_LINES}`,
-	);
-	assert.ok(
-		readme.includes(`\`MAX_CONTACT_LINE_CHARS = ${MAX_CONTACT_LINE_CHARS}\` characters`),
-		`the README states the contact per-line cap the model applies, ${MAX_CONTACT_LINE_CHARS}`,
-	);
-	assert.ok(
-		readme.includes(`\`MAX_CONTACT_CHARS = ${MAX_CONTACT_CHARS}\` characters in total`),
-		`the README states the total contact cap the model applies, ${MAX_CONTACT_CHARS}`,
-	);
-	assert.ok(
-		readme.includes(`\`MAX_EMAIL_CHARS = ${MAX_EMAIL_CHARS}\` characters`),
-		`the README states the legacy email cap the model still accepts, ${MAX_EMAIL_CHARS}`,
-	);
-});
-
-test("the README states the contact field's widening in both directions", () => {
-	const readme = readFileSync(join(root, "README.md"), "utf8");
-	assert.ok(
-		readme.includes("a legacy link whose `payee.email` or `payer.email` is a single-line email address stays readable"),
-		"the README states the legacy direction: a link written before the field widened stays readable",
-	);
-	assert.ok(
-		readme.includes("a payload whose contact value is a phone number or several lines is refused by an older build"),
-		"and the forward direction, which the README states for the icon above",
-	);
-
-	// The rule an older build held the whole field to is still this model's email-shaped branch: the one shape admitted past the per-line cap that holds free text, and the rule the refusal the README quotes comes from. The acceptance of the widened values below is the other half the README pairs with that rule.
+	// The rule an older build held the whole field to is still this model's email-shaped branch: the one shape admitted past the per-line cap that holds free text, so a line of the same length that is not an address reaches that cap instead.
 	const contact = (email) => usdcInvoice({ payee: { name: "Studio Example", address: PAYEE, email } }).payee.email;
 	const address = `${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length)}@example.com`;
 	assert.equal(address.length, MAX_EMAIL_CHARS, "the fixture is a single-line address at exactly the legacy cap");

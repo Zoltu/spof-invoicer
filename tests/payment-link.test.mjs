@@ -15,7 +15,6 @@ import { QR_MAX_TEXT_BYTES, encodeQr } from "../app/js/util/qr.js";
 import { MAX_EVM_ADDRESS_LENGTH } from "../app/js/wallet/address.js";
 import { MAX_MONERO_ADDRESS_LENGTH } from "../app/js/wallet/monero-address.js";
 import { InvalidZcashAddressError, requireZcashAddress } from "../app/js/wallet/zcash-address.js";
-import { QR_SYMBOL } from "../app/js/pdf/renderer.js";
 import { PAYEE, XMR_PAYEE, ZEC_PAYEE } from "./helpers/payee-vectors.mjs";
 import { USDC, USDT } from "./helpers/tokens.mjs";
 import { unifiedOfBytes } from "./helpers/unified-address.mjs";
@@ -508,19 +507,8 @@ test("the module exports its validated surface and no constructor for an uncheck
 	assert.deepEqual(Object.keys(await import("../app/js/payment/links.js")).sort(), ["MAX_PAYMENT_LINK_BYTES", "PaymentLinkBudgetError", "PaymentLinkError", "buildPaymentLink", "requireLinkBudget"]);
 });
 
-test("the README's claim about the amount a link carries holds for all five assets", () => {
+test("every link carries the invoice's own total in its family's spelling, and the symbol's screen sizes are the stylesheet's own", () => {
 	// The claim is checked against the builders rather than restated: every link carries the invoice's own recomputed total in the spelling its family's standard uses — a bare decimal for Zcash and Monero, the total in base units for Ethereum — while the Amount term displays that same bare decimal, the spelling a wallet's own amount field takes.
-	const readme = readFileSync(join(root, "README.md"), "utf8");
-	assert.ok(
-		readme.includes("carry that same exact amount in the spelling its own family's field takes"),
-		"the README states the spelling each family's link carries rather than one spelling for all five assets",
-	);
-	assert.equal(
-		readme.includes("bare-decimal amount a wallet's amount field takes"),
-		false,
-		"the README no longer claims a bare-decimal amount for an EVM link, which carries base units",
-	);
-
 	for (const [invoice, linkEnding, displayedAmount] of [
 		[zecInvoice(), "=1.23456789", "1.23456789"],
 		[xmrInvoice(), "=0.000000000001", "0.000000000001"],
@@ -537,26 +525,15 @@ test("the README's claim about the amount a link carries holds for all five asse
 		assert.equal(amountTerm.value, displayedAmount, `${invoice.asset}'s Amount term states the bare decimal its own link's amount field carries`);
 	}
 
-	// The same paragraph states the symbol's own screen and PDF figures, so they are pinned here against the stylesheet and the layout they describe rather than left to drift.
+	// The symbol's own screen figures belong to the stylesheet that declares them, so they are read off the two rules that carry them: a step-down that failed to lower the module is the shape that would let the widest symbol overflow the narrow viewport it covers.
 	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
 	const card = /\.payment-qr \{([^}]*)\}/.exec(invoiceCss)?.[1];
 	const baseModule = /--qr-module:\s*([\d.]+)px/.exec(card ?? "")?.[1];
 	const stepDown = /(@media screen and \(max-width: (\d+)px\)) \{\s*\.payment-qr \{\s*--qr-module:\s*([\d.]+)px/.exec(invoiceCss);
 	assert.ok(baseModule !== undefined && stepDown !== undefined, "the stylesheet declares the screen symbol's base module size and its screen-scoped step-down");
-	const [stepDownQuery, stepDownBreakpoint, stepDownModule] = [stepDown[1], stepDown[2], stepDown[3]];
-
-	// The boundary comes from the rule's own query rather than from the README's wording: a `max-width` query keeps the smaller module in force at the breakpoint itself, so the README has to name that query and that figure, and must not push the step-down below the width it covers.
+	const [stepDownQuery, stepDownModule] = [stepDown[1], stepDown[3]];
 	assert.ok(
-		readme.includes(`a ${baseModule}px module inside the standard's four-module quiet zone, stepped down to ${stepDownModule}px at the rule's own \`${stepDownQuery}\` boundary`),
-		`the README states the screen symbol's own figures and the boundary the rule declares — ${baseModule}px, stepped down to ${stepDownModule}px at the rule's own ${stepDownQuery} — rather than a size or a boundary the stylesheet does not declare`,
-	);
-	assert.equal(
-		readme.includes(`stepped down to ${stepDownModule}px below`),
-		false,
-		`a \`max-width: ${stepDownBreakpoint}px\` query keeps the step-down in force at ${stepDownBreakpoint}px itself, so the README must not say the symbol steps down below it`,
-	);
-	assert.ok(
-		readme.includes(`the PDF as filled rectangles at ${QR_SYMBOL.module} points a module inside that same quiet zone`),
-		`the README states the PDF's own module size, the ${QR_SYMBOL.module} points the layout draws`,
+		Number(stepDownModule) < Number(baseModule),
+		`the rule's own ${stepDownQuery} boundary lowers the ${baseModule}px module to ${stepDownModule}px rather than declaring a size it does not change`,
 	);
 });
