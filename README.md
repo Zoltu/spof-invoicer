@@ -1,4 +1,4 @@
-# Invoicing & Payment App
+# Security and Privacy over Features (SPOF) - Decentralized invoicing
 
 Make an invoice in your browser, share it as a link, and get paid in crypto.
 
@@ -7,6 +7,51 @@ Make an invoice in your browser, share it as a link, and get paid in crypto.
 An invoice is a page you fill in, and the person you bill opens it from the link you send.
 It shows what is owed and how to pay, and the crypto reaches your wallet.
 There is nothing to install and no account to create.
+
+## What you can do
+
+- Create an invoice with line items and tax.
+- Add your own logo.
+- Share the invoice as a link or a copy-paste code.
+- Let the person you bill see a clean invoice with a scannable QR code and a payment link.
+- Save the invoice as a PDF.
+- Pay from a crypto wallet (Ethereum, USDC, USDT).
+- Show a QR code the person you bill can scan to pay in Zcash or Monero.
+
+## Privacy over features
+
+- No account and no sign-up.
+- No cookies, no tracking, and no analytics.
+- Nothing is uploaded: the invoice travels inside the link you share, and no company server ever holds it.
+- The app itself is a set of pages, so it runs entirely in your browser rather than on a server.
+- There is no saved list of what you billed, so no history of your invoices sits anywhere waiting to be collected, leaked or demanded.
+- You cannot send an invoice by a short ID, because a record like that would tie the invoice back to a person.
+- The invoice is readable by anyone who holds the link, so the link is the secret and should not be posted publicly.
+
+## Security over features
+
+- The app has nowhere to send your data: the browser's own rules block every outbound connection.
+- The part of the link that holds the invoice is never sent to a server.
+- Nothing touches your crypto wallet until you click pay, and the payment panel will not open inside another site's page.
+- Before a payment goes out, the app re-checks which network the wallet is really on, because a wallet can report success while staying on the wrong one.
+- The amount, the recipient and the network you see are worked out from the invoice on your screen, so a tampered link cannot change them.
+
+Some features were left out on purpose:
+
+- We left out compressed share links, because that would mean trusting a compression library.
+- We left out links to a public page that looks up a payment, because that would need a network destination the app refuses to have.
+- We left out any formatting inside invoice fields, because the link is untrusted input and every value is shown as plain text.
+
+## Open the app
+
+All three links open the same app, so pick the one that suits how you browse.
+IPFS is a network that serves files from many computers rather than one company.
+If you do not know what IPFS is, use the hosted link below; it opens like any other website.
+The long code starting `bafybei…` names the same content in all three, so the copy you are served can be checked against it.
+
+- **Most people:** <https://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.zoltu.io/> works in any browser, because a public gateway serves it for you; that gateway is run by someone else and could change the files before serving them, so trust it only as far as you trust its operator.
+- **Already use IPFS:** <ipfs://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4> opens the same app through your own IPFS software.
+- **Run your own IPFS node:** <http://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.localhost:8080/> serves the app from your own computer.
 
 ## Screenshots
 
@@ -25,34 +70,6 @@ There is nothing to install and no account to create.
 ![The share dialog showing a link and a copy-paste code.](docs/screenshots/share-dialog.png)
 
 *Send the link, or the copy-paste code.*
-
-## What you can do
-
-- Create an invoice with line items and tax.
-- Add your own logo.
-- Share the invoice as a link or a copy-paste code.
-- Let the person you bill see a clean invoice with a scannable QR code and a payment link.
-- Save the invoice as a PDF.
-- Pay from a crypto wallet (Ethereum, USDC, USDT).
-- Show a QR code the person you bill can scan to pay in Zcash or Monero.
-
-## Privacy by design
-
-- No account and no sign-up.
-- No cookies, no tracking, and no analytics.
-- Nothing is uploaded: the invoice travels inside the link you share, and no company server ever holds it.
-- The app itself is a set of pages, so it runs entirely in your browser rather than on a server.
-
-## Open the app
-
-All three links open the same app, so pick the one that suits how you browse.
-IPFS is a network that serves files from many computers rather than one company.
-If you do not know what IPFS is, use the hosted link below; it opens like any other website.
-The long code starting `bafybei…` names the same content in all three, so the copy you are served can be checked against it.
-
-- **Most people:** <https://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.zoltu.io/> works in any browser, because a public gateway serves it for you; that gateway is run by someone else and could change the files before serving them, so trust it only as far as you trust its operator.
-- **Already use IPFS:** <ipfs://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4> opens the same app through your own IPFS software.
-- **Run your own IPFS node:** <http://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.localhost:8080/> serves the app from your own computer.
 
 ## License
 
