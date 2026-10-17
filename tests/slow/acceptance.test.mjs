@@ -867,7 +867,7 @@ test("the runtime sweeps catch the vectors they name and each allow-list exempts
 		assert.ok(SCRIPT_URL_VECTORS.test(literal), `the script-URL sweep misses ${literal}`);
 	}
 	assert.ok(MARKUP_SINKS.test("const element = document.createElement(\"a\");"), "a DOM-creation call is a sink whatever tag it is handed, so the allow-list is what exempts one, not the tag");
-	// The sweep's whole allow-list, pinned so it cannot widen unnoticed: the builder's one sanctioned call, the documented download anchor, and neither a forbidden tag literal nor any other call anywhere.
+	// The sweep's whole allow-list, pinned so it cannot widen unnoticed: the builder's one sanctioned call, the download anchor's one sanctioned statement, and neither a forbidden tag literal nor any other call anywhere.
 	assert.ok(
 		isSanctionedElementBuilder({ file: "app/ts/util/dom.ts", text: "const element = document.createElement(tag);" }),
 		"the builder's own call is exempt in it",
@@ -890,7 +890,7 @@ test("the runtime sweeps catch the vectors they name and each allow-list exempts
 	);
 	assert.ok(
 		isSanctionedElementBuilder({ file: "app/ts/pdf/renderer.ts", text: 'const link = document.createElement("a");' }),
-		"the documented download anchor is exempt",
+		"the download anchor's own statement is exempt",
 	);
 	assert.ok(
 		!isSanctionedElementBuilder({ file: "app/ts/pdf/renderer.ts", text: "const link = document.createElement(tag);" }),
@@ -1103,7 +1103,7 @@ test("the hand-off sentence has one spelling across the authored tree", async ()
 	assert.equal(
 		countOccurrences(await authoredTreeText(), UNSUPPORTED_WALLET_MESSAGE),
 		1,
-		"the sentence has one spelling across the authored sources, the stylesheets, and the page, so a copy inlined in a third authored file fails here",
+		"the sentence has one spelling across the authored sources, the stylesheets, and the page, so a second copy anywhere in them fails here",
 	);
 });
 
@@ -1197,8 +1197,7 @@ test("index.html pins the policy the app's guarantees rest on", () => {
 	);
 });
 
-	test("the contact field admits the legacy address shape whole and the widened shapes beside it", () => {
-
+test("the contact field admits the legacy address shape whole and the widened shapes beside it", () => {
 	// The rule an older build held the whole field to is still this model's email-shaped branch: the one shape admitted past the per-line cap that holds free text, so a line of the same length that is not an address reaches that cap instead.
 	const contact = (email) => usdcInvoice({ payee: { name: "Studio Example", address: PAYEE, email } }).payee.email;
 	const address = `${"m".repeat(MAX_EMAIL_CHARS - "@example.com".length)}@example.com`;

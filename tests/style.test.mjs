@@ -36,7 +36,7 @@ async function fixture(files) {
 	return dir;
 }
 
-/** A governed representative file under `tree` taken from the real tree, or `null` when the tree is absent — a documented state for `assets-src/`, which the build treats as optional. */
+/** A governed representative file under `tree` taken from the real tree, or `null` when the tree is absent — the state `assets-src/` is in whenever the build skips it for having no source. */
 async function representativeUnder(root, tree) {
 	let entries;
 	try {
@@ -60,7 +60,7 @@ test("the resolver derives the tab rule and the exclusions from the real `.edito
 	for (const label of ["app/ts/x.ts", "package.json", "tsconfig.json", "assets-src/images/logo.svg", "app/index.html", "tests/x.mjs", "app/stylesheets/app.css", "scripts/x.mjs"]) {
 		assert.equal(resolveProps(sections, label).indent_style, "tab", `${label} should be tab-indented`);
 	}
-	for (const label of ["node_modules/x.js", "vendor-src/x.js", "app/js/x.js", "app/images/x.svg"]) {
+	for (const label of ["node_modules/x.js", "vendor-src/x.js", "app/js/x.js", "app/images/x.svg", "docs/screenshots/create-invoice.png"]) {
 		assert.equal(resolveProps(sections, label).indent_style, "unset", `${label} should be excluded`);
 		assert.equal(resolveProps(sections, label).charset, "unset", `${label} should be out of scope, charset included`);
 	}
@@ -168,19 +168,19 @@ test("the governed inventory covers every authored tree and no artifact tree", a
 	for (const label of ["app/ts/main.ts", "tests/style.test.mjs", "scripts/vendor-manifest.mjs", "app/stylesheets/app.css", "package.json", "tsconfig.json"]) {
 		assert.ok(labels.has(label), `the governor no longer covers ${label}`);
 	}
-	// `assets-src/` is documented as removable, so its representative is taken from the tree rather than hard-coded.
+	// `assets-src/` may be absent, so its representative is taken from the tree rather than hard-coded.
 	const imageSource = await representativeUnder(root, "assets-src");
 	if (imageSource !== null) assert.ok(labels.has(imageSource), `the governor no longer covers ${imageSource}`);
 	for (const label of labels) {
-		assert.ok(!/^(app\/js|app\/images|vendor-src|node_modules|\.git)\//.test(label), `the governor reached ${label}`);
+		assert.ok(!/^(app\/js|app\/images|vendor-src|node_modules|docs\/screenshots|\.git)\//.test(label), `the governor reached ${label}`);
 	}
 });
 
-test("the shipped config prunes the four artifact trees at the root", async () => {
+test("the shipped config prunes the five artifact trees at the root", async () => {
 	// Pruning is what keeps the sweep affordable: `node_modules/` alone holds tens of thousands of files, so descending into it would make the gate unusably slow, and every byte in those trees is already held by the SHA256 sums and the fresh-build byte comparison.
 	const { files } = await governedFiles(root);
 	const labels = files.map((file) => file.label);
-	for (const tree of ["app/js", "app/images", "vendor-src", "node_modules"]) {
+	for (const tree of ["app/js", "app/images", "vendor-src", "node_modules", "docs/screenshots"]) {
 		assert.ok(!labels.some((label) => label === tree || label.startsWith(`${tree}/`)), `the walk descended into ${tree}`);
 	}
 	// A governed sibling under the same parent proves the walk ran rather than being pruned wholesale.

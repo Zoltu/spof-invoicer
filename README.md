@@ -4,8 +4,8 @@ Make an invoice in your browser, share it as a link, and get paid in crypto.
 
 ## What it is
 
-Create an invoice with your own line items, tax, and logo.
-Share it as a link, and the person you bill opens a clean invoice they can pay.
+An invoice is a page you fill in, and the person you bill opens it from the link you send.
+It shows what is owed and how to pay, and the crypto reaches your wallet.
 There is nothing to install and no account to create.
 
 ## Screenshots
@@ -14,34 +14,36 @@ There is nothing to install and no account to create.
 *Fill in your details, add line items, and share the invoice by link.*
 
 ![A finished invoice with a letterhead, an itemized table, a total, and a QR code.](docs/screenshots/shared-invoice.png)
-*A shared link opens as a finished invoice the person you bill can pay.*
+*See the invoice as the person you bill opens it, ready to pay.*
 
 ![The payment panel with the amount, the recipient, and the network.](docs/screenshots/pay-panel.png)
-*Pay restates the transfer before you connect a wallet.*
+*See how to pay before you connect a wallet.*
 
 ![The share dialog with a link and a copy-paste code.](docs/screenshots/share-dialog.png)
-*Share gives you a link or a code you can paste anywhere.*
+*Share the invoice in the way that suits the person you bill.*
 
 ## What you can do
 
 - Create an invoice with line items and tax.
 - Add your own logo.
 - Share the invoice as a link or a copy-paste code.
-- Let the person you bill see a clean invoice, with a scannable QR code and a payment link.
+- Let the person you bill see a clean invoice with a scannable QR code and a payment link.
 - Save the invoice as a PDF.
-- Take payment from a crypto wallet in Ethereum, USDC, or USDT.
-- Scan a QR code to pay in Zcash or Monero.
+- Pay from a crypto wallet (Ethereum, USDC, USDT).
+- Show a QR code the person you bill can scan to pay in Zcash or Monero.
 
 ## Privacy by design
 
 - No account and no sign-up.
 - No cookies, no tracking, and no analytics.
-- Nothing is uploaded, because the invoice travels inside the link itself and never reaches a server.
+- Nothing is uploaded, because the invoice travels inside the link you share and never reaches a server of ours.
 - The app is a set of static files with no backend.
 
 ## Open the app
 
-All three links open the same app, so pick the one that suits how you browse. If you do not know what IPFS is — a network that serves files from many computers rather than one company — use the first one.
+All three links open the same app, so pick the one that suits how you browse.
+IPFS is a network that serves files from many computers rather than one company.
+If you are new to IPFS, use the first one.
 The long code starting `bafybei…` names the same content in all three, so the copy you are served can be checked against it.
 
 - **Most people:** <https://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.zoltu.io/> works in any browser, because a public service serves it for you; that service is run by someone else and could change the files before serving them, so trust it only as far as you trust its operator.

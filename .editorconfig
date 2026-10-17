@@ -50,8 +50,8 @@ end_of_line = unset
 insert_final_newline = unset
 trim_trailing_whitespace = unset
 
-# The screenshots committed under `docs/screenshots/` are byte-held PNGs, so like the other artifact trees they carry no line or encoding contract: a PNG is not UTF-8 text and need not end in a newline, so unset every rule the config sets, `charset` included.
-# They live outside `app/`, which the acceptance suite pins byte for byte, and outside `assets-src/`, which the build copies into `app/images/`.
+# The screenshots committed under `docs/screenshots/` are byte-held PNGs, so, like the other artifact trees, they carry no line or encoding contract: a PNG is not UTF-8 text and need not end in a newline, so unset every rule the config sets, `charset` included.
+# They live outside `app/`, which the acceptance suite pins byte for byte, and outside `assets-src/images/`, the tree the build copies into `app/images/`.
 [docs/screenshots/**]
 charset = unset
 indent_style = unset

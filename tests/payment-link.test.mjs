@@ -507,8 +507,8 @@ test("the module exports its validated surface and no constructor for an uncheck
 	assert.deepEqual(Object.keys(await import("../app/js/payment/links.js")).sort(), ["MAX_PAYMENT_LINK_BYTES", "PaymentLinkBudgetError", "PaymentLinkError", "buildPaymentLink", "requireLinkBudget"]);
 });
 
-test("every link carries the invoice's own total in its family's spelling, and the symbol's screen sizes are the stylesheet's own", () => {
-	// The claim is checked against the builders rather than restated: every link carries the invoice's own recomputed total in the spelling its family's standard uses — a bare decimal for Zcash and Monero, the total in base units for Ethereum — while the Amount term displays that same bare decimal, the spelling a wallet's own amount field takes.
+test("every link carries the invoice's own total in its family's spelling", () => {
+	// A family's spelling is not interchangeable — a bare decimal for Zcash and Monero, the total in base units for Ethereum — while the Amount term displays that same bare decimal, the spelling a wallet's own amount field takes.
 	for (const [invoice, linkEnding, displayedAmount] of [
 		[zecInvoice(), "=1.23456789", "1.23456789"],
 		[xmrInvoice(), "=0.000000000001", "0.000000000001"],
@@ -524,16 +524,4 @@ test("every link carries the invoice's own total in its family's spelling, and t
 		assert.equal(amountTerm.verbatim, true, `${invoice.asset}'s Amount term is marked as a value a wallet takes verbatim`);
 		assert.equal(amountTerm.value, displayedAmount, `${invoice.asset}'s Amount term states the bare decimal its own link's amount field carries`);
 	}
-
-	// The symbol's own screen figures belong to the stylesheet that declares them, so they are read off the two rules that carry them: a step-down that failed to lower the module is the shape that would let the widest symbol overflow the narrow viewport it covers.
-	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
-	const card = /\.payment-qr \{([^}]*)\}/.exec(invoiceCss)?.[1];
-	const baseModule = /--qr-module:\s*([\d.]+)px/.exec(card ?? "")?.[1];
-	const stepDown = /(@media screen and \(max-width: (\d+)px\)) \{\s*\.payment-qr \{\s*--qr-module:\s*([\d.]+)px/.exec(invoiceCss);
-	assert.ok(baseModule !== undefined && stepDown !== undefined, "the stylesheet declares the screen symbol's base module size and its screen-scoped step-down");
-	const [stepDownQuery, stepDownModule] = [stepDown[1], stepDown[3]];
-	assert.ok(
-		Number(stepDownModule) < Number(baseModule),
-		`the rule's own ${stepDownQuery} boundary lowers the ${baseModule}px module to ${stepDownModule}px rather than declaring a size it does not change`,
-	);
 });

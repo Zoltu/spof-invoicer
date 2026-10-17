@@ -1070,13 +1070,13 @@ test("the symbol is drawn inside its quiet zone, in the block the layout places 
 	assertClose(drawn.right - drawn.left, symbolSide, "the drawn modules span the symbol's own side");
 	assertClose(drawn.right + quiet, CONTENT_RIGHT, "the drawn symbol's right edge stands one quiet zone inside the content edge the layout aligns it to");
 	assertClose(drawn.top - quiet, blockTop, "the drawn symbol's top edge stands one quiet zone below the block's top");
-	// The insets above read the renderer's own figures, so a change to either would move the drawing and the expectation together; what they have to be is the documented 2.5-point module and the standard's own four-module quiet zone.
+	// The insets above read the renderer's own figures, so a change to either would move the drawing and the expectation together; what they have to be is the configured 2.5-point module and the standard's own four-module quiet zone.
 	assertClose(
 		drawn.right + quiet,
 		drawnRightEdge(pages[0], view.labels.amount.toUpperCase()),
 		"the drawn symbol's right edge stands one quiet zone inside the column edge the document itself draws — the right-aligned column header — rather than a figure recomputed from the renderer's constants",
 	);
-	assert.equal(QR_SYMBOL.module, 2.5, "the configured module size is the documented 2.5 points");
+	assert.equal(QR_SYMBOL.module, 2.5, "the configured module size is 2.5 points");
 	assert.equal(QR_SYMBOL.quietModules, 4, "the configured quiet zone is the standard's four modules");
 });
 
