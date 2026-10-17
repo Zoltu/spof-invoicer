@@ -24,24 +24,19 @@ There is nothing to install and no account to create.
 - No cookies, no tracking, and no analytics.
 - Nothing is uploaded: the invoice travels inside the link you share, and no company server ever holds it.
 - The app itself is a set of pages, so it runs entirely in your browser rather than on a server.
-- The app keeps no list of the invoices you made, because nothing is saved: each invoice exists only inside its link.
+- The app keeps no list of the invoices you made, because saved history would show who paid whom and how much: each invoice exists only inside its link.
 - You have to share the whole link, because a shorter link would need a copy stored on a server that could point back to you.
-- The invoice is readable by anyone who holds the link, so the link is the secret and should not be posted publicly.
+- The app doesn't index things by invoice number because that would require a server and retaining user data on a server.
+- The invoice is readable by anyone who holds the link, so users have agency to decide who to share it with.
 
 ## Security over features
 
-- The app's own code has no way to reach an outside server, so it never contacts a tracking service.
+- The app has no way to reach an outside server, so it never contacts a tracking service.
 - The app refuses to hand the payment to the crypto wallet unless the wallet reports the invoice's own network.
-- A wallet can report the right network while being on another, so the app can only go by what your own wallet reports.
-- The panel the Pay button opens shows the amount and where the money goes.
 - Nothing touches your wallet until you click Connect wallet & pay.
-- The app refuses to open the payment panel when another website shows the app's page, so covering the Pay button is harder, though not impossible.
 - Invoice text is always shown as plain text, so a link cannot add code to the page.
-
-A few things are missing on purpose:
-
-- Invoice text never turns into bold or italics, because a link can come from anyone.
-- You get the transaction hash, the code the wallet gives back for the payment, instead of a link that looks up the payment.
+- Payee entered text never turns into bold or italics, because a link can come from anyone.
+- You get the transaction hash, the code the wallet gives back for the payment, instead of an external link that looks up the payment.
 
 ## Open the app
 
