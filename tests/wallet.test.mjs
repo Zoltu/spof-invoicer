@@ -52,7 +52,10 @@ const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 const PAYEE_LOWER = PAYEE.toLowerCase();
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const USDC_TOTAL = 357000000n;
-const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
+/**
+ * The render options every case in this suite builds on: a renderer requires the release of what it subscribed to, and the cases that hold one override this placeholder with their own.
+ */
+const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null, onRelease: () => {} };
 
 /**
  * Every call mints a distinct invoice id, so the in-memory payment latch — keyed by invoice content — does not silently carry between tests as it would not across a page reload.
@@ -586,7 +589,7 @@ test("the panel refuses to send when the balance is short and re-checks on retry
 		assert.match(textOf(dialog), /less than the 357 USDC needed/);
 		assert.equal(provider.calls.some((call) => call.method === "eth_sendTransaction"), false);
 
-		assert.match(textOf(dialog), /Wallet balance: 0\.000001 USDC/);
+		assert.match(textOf(dialog), /Wallet balance:\s*0\.000001 USDC/, "the balance reads as the line it names, beside the wallet's report of it");
 
 		provider.state.callResult = word(USDC_TOTAL);
 		click(byText(dialog, "button", "Try again")[0]);
@@ -988,17 +991,18 @@ test("eth_call refuses an oversized reply before scanning it and admits a genero
 test("the payment panel opens inside a frame and still contacts no wallet until the click", async () => {
 	const fake = installInteractiveDocument();
 	const provider = mockProvider();
-	const framed = { ethereum: provider, top: {} };
-	const installed = installWindow(framed);
+	const installed = installWindow({ ethereum: provider, top: {} });
 	try {
+		assert.notEqual(globalThis.window.top, globalThis.window, "the fixture is a framed document rather than the top-level page");
 		const notices = noticeRecorder();
 		const handle = openPayPanel(usdcInvoice(), { notice: notices, clipboard: null });
-		assert.ok(handle, "the panel is presented inside a frame");
-		assert.equal(notices.calls.filter((call) => call.tone === "error").length, 0, "no refusal is raised");
-		assert.equal(provider.calls.length, 0, "opening the panel inside a frame contacts no wallet");
+		assert.ok(handle, "the panel is presented inside the frame");
+		assert.equal(notices.calls.filter((call) => call.tone === "error").length, 0, "and no refusal is raised for the frame");
+		assert.equal(provider.calls.length, 0, "opening the panel contacts no wallet");
 		click(byText(handle.element, "button", "Connect wallet & pay")[0]);
 		await drain();
-		assert.equal(hashOf(handle.element), TX_HASH, "the payer's own click is the only route to the provider");
+		assert.equal(hashOf(handle.element), TX_HASH, "the payer's own click inside the frame is the only route to the provider");
+		assert.equal(provider.calls.filter((call) => call.method === "eth_sendTransaction").length, 1, "and the flow it starts sends exactly once");
 	} finally {
 		installed.restore();
 		fake.restore();

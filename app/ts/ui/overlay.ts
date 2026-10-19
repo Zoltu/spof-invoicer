@@ -25,23 +25,42 @@ export interface OverlayHandle {
 }
 
 /**
+ * A dialog an overlay wraps: its element, and the way to release whatever the dialog subscribed to while it was built.
+ *
+ * The release is the dialog's own rather than something handed back through a variable its builder assigns to, so a dialog built behind an overlay cannot be dismissed with a subscription still watching a row the page has dropped.
+ */
+export interface OverlayDialog {
+	readonly element: HTMLElement;
+	/**
+	 * Stop everything the dialog subscribed to; the overlay runs it once, as the dialog closes.
+	 * A dialog that subscribed to nothing leaves it out. It is the same teardown shape the payment panel and the payment section hand back, so a caller of either holds one kind of release.
+	 */
+	readonly stop?: () => void;
+}
+
+/**
  * Wrap a dialog in a backdrop and wire its dismissal and focus containment, without mounting it.
  *
- * `buildDialog` is handed the overlay's `close`, so a dialog's own close and done controls route through the same idempotent path as Escape and a backdrop click.
+ * `buildDialog` is handed the overlay's `close`, so a dialog's own close and done controls route through the same idempotent path as Escape and a backdrop click, and it hands back the dialog's own release beside its element.
  * Tab is trapped inside the dialog so a keyboard user cannot reach the obscured page and then find Escape unresponsive.
  */
 export function createOverlay(
-	buildDialog: (close: () => void) => HTMLElement,
+	buildDialog: (close: () => void) => OverlayDialog,
 	options: OverlayOptions = {},
 ): OverlayHandle {
 	let closed = false;
+	// The dialog's release runs first and the caller's close runs inside a `finally`, so neither half of a dismissal can keep the other from running.
 	const close = (): void => {
 		if (closed) return;
 		closed = true;
-		options.onClose?.();
+		try {
+			dialog.stop?.();
+		} finally {
+			options.onClose?.();
+		}
 	};
 	const dialog = buildDialog(close);
-	const element = h("div", { class: "dialog-backdrop", role: "presentation" }, dialog);
+	const element = h("div", { class: "dialog-backdrop", role: "presentation" }, dialog.element);
 
 	element.addEventListener("click", (event) => {
 		if (event.target === element) close();
@@ -51,7 +70,7 @@ export function createOverlay(
 			close();
 			return;
 		}
-		if (event.key === "Tab") trapFocus(event, dialog);
+		if (event.key === "Tab") trapFocus(event, dialog.element);
 	});
 
 	return { element, close };
@@ -62,7 +81,7 @@ export function createOverlay(
  * Closing removes it, un-hides the page, and returns focus to whatever had it.
  */
 export function openOverlay(
-	buildDialog: (close: () => void) => HTMLElement,
+	buildDialog: (close: () => void) => OverlayDialog,
 	options: OverlayOptions = {},
 ): OverlayHandle {
 	let teardown = (): void => {};
@@ -107,7 +126,7 @@ function trapFocus(event: KeyboardEvent, dialog: HTMLElement): void {
 	}
 }
 
-/** Every focusable control below `root`, in document order: the dialog's buttons and its inputs. */
+/** Every focusable element below `root`, in document order: the dialog's controls and the focus stops its content declares. */
 function focusableElements(root: HTMLElement): HTMLElement[] {
 	const found: HTMLElement[] = [];
 	const visit = (node: HTMLElement): void => {
@@ -123,11 +142,28 @@ function focusableElements(root: HTMLElement): HTMLElement[] {
 
 const FOCUSABLE_TAGS: ReadonlySet<string> = new Set(["button", "input", "select", "textarea"]);
 
+/**
+ * Whether `element` can take keyboard focus: a form control, a link with a target, or anything the page made a focus stop with a non-negative `tabindex`.
+ *
+ * The `tabindex` case is what keeps a dialog's own focusable regions reachable by Tab: the payment panel's values are scroll boxes the page made stops, and a trap that counted only form controls would skip them, leaving a value that overflows its column unreachable while the same value is an ordinary stop in the payer's document. A negative `tabindex` is an element made programmatically focusable alone, so the dialog does not become a stop of its own.
+ * A `tabindex` the platform cannot read as an integer — an empty value, a word — is no `tabindex` at all, so such an element is judged by its tag here exactly as the browser judges it, rather than being counted as a stop the browser never makes.
+ */
 function isFocusable(element: HTMLElement): boolean {
 	if (element.hasAttribute("disabled")) return false;
+	const tabindex = element.getAttribute("tabindex");
+	if (tabindex !== null) {
+		const declared = declaredTabIndex(tabindex);
+		if (declared !== null) return declared >= 0;
+	}
 	const tag = element.tagName.toLowerCase();
 	if (tag === "a") return element.hasAttribute("href");
 	return FOCUSABLE_TAGS.has(tag);
+}
+
+/** The integer a `tabindex` attribute declares, or `null` when the platform would read none out of it and the element's own tag decides instead. */
+function declaredTabIndex(value: string): number | null {
+	const trimmed = value.trim();
+	return /^[+-]?\d+$/.test(trimmed) ? Number(trimmed) : null;
 }
 
 function activeElement(): HTMLElement | null {

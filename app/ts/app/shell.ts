@@ -2,7 +2,7 @@
  * The app shell: the page chrome around whichever route is showing.
  *
  * It owns the header, the notice region, and the route container, and it is the one place that wires `hashchange` to `app/router.ts`.
- * Every message that reaches the notice region — a router refusal that embeds an attacker-controlled share substring, a success line — is rendered as a text child of `util/dom.ts`'s `h()` and then made display-safe here: the same invisible-and-direction-formatting characters the wallet-label boundary strips are removed first, and the result is re-bounded, so no payload can become markup, carry a bidi override or other default-ignorable into the rendered text, or overflow the notice.
+ * Every message that reaches the notice region — a router refusal that embeds an attacker-controlled share substring, a success line, the report of a document whose release failed — is rendered as a text child of `util/dom.ts`'s `h()` and then made display-safe here: the same invisible-and-direction-formatting characters the wallet-label boundary strips are removed first, and the result is re-bounded, so no payload can become markup, carry a bidi override or other default-ignorable into the rendered text, or overflow the notice.
  * The shell itself never touches the network.
  *
  * The route→render decision lives in {@link dispatchRoute}, which talks only to the {@link RouteEffects} it is handed and never to the DOM; {@link renderRoute} supplies a shell-backed implementation of those effects, and {@link createDispatcher} adds the memo that keeps a repeated route from rebuilding its view.
@@ -17,6 +17,7 @@
 import type { Invoice } from "../invoice/model.js";
 import { decodeShare, encodeShare } from "../invoice/share.js";
 import { renderCreateView, type CreateViewOptions } from "../ui/create.js";
+import type { LayoutProbe } from "../ui/fit-value.js";
 import type { NoticeApi, NoticeTone } from "../ui/notice.js";
 import { openPayPanel } from "../ui/pay.js";
 import { INVOICE_LABELS } from "../ui/presentation.js";
@@ -35,6 +36,13 @@ export interface AppShell extends NoticeApi {
 	readonly notice: HTMLElement;
 	readonly content: HTMLElement;
 	setContent(node: Node): void;
+	/**
+	 * Take the release of the document a renderer is about to mount; it runs when {@link setContent} next takes the route container.
+	 * The container is what drops a document, so it is also what hands back what that document subscribed to, and nothing waits for a layout report to notice that the dropped rows are gone.
+	 * A render that throws never mounts, so its own release runs on its own failure path and the document still on screen keeps its subscriptions.
+	 * The registration is promoted into the live slot before the dropped document's release runs, so a release that fails — reported in the notice region rather than thrown at the renderer that replaced it — cannot strand the registration behind it.
+	 */
+	setContentRelease(release: () => void): void;
 	setActiveNav(name: string): void;
 	setOpenControl(node: Node): void;
 }
@@ -44,18 +52,22 @@ export interface RenderOptions {
 	readonly baseUrl: string;
 	readonly today: string;
 	readonly clipboard: ClipboardLike | null;
+	/** The probe every fitted value the routes draw measures through, or `null` to fit nothing; {@link BootOptions.fit} states where it comes from. */
+	readonly fit: LayoutProbe | null;
 	readonly exportPdf?: ExportPdfHandler;
 	readonly pay?: PayHandler;
 }
 
 /**
- * The optional overrides {@link bootApp} accepts: the base URL and date its defaults read, the clipboard, and the two invoice-view seams.
- * Every field falls back to the live-page default when omitted.
+ * The optional overrides {@link bootApp} accepts: the base URL and date its defaults read, the clipboard, the layout probe the fitted values measure through, and the two invoice-view seams.
+ * Every field falls back to the live-page default when omitted, except the probe: an absent one fits nothing and leaves every value at the rung its stylesheet states, because only the entry module knows how the page can measure a box.
  */
 export interface BootOptions {
 	readonly baseUrl?: string;
 	readonly today?: string;
 	readonly clipboard?: ClipboardLike | null;
+	/** The probe the fitted values measure through; `main.ts` supplies the browser's own, and an absent option fits nothing. */
+	readonly fit?: LayoutProbe | null;
 	readonly exportPdf?: ExportPdfHandler;
 	readonly pay?: PayHandler;
 }
@@ -78,6 +90,9 @@ export function mountShell(root: HTMLElement): AppShell {
 	const notice = h("div", { class: "notice-region", role: "status" });
 	const content = h("main", { class: "app-content" });
 	root.replaceChildren(h("div", { class: "app" }, header, notice, content));
+	// What the document now in the route container subscribed to, and what the render about to mount registered: the first runs as the second's node takes the container.
+	let contentRelease = (): void => {};
+	let nextContentRelease = (): void => {};
 
 	function showNotice(message: string, tone: NoticeTone = "info"): void {
 		notice.replaceChildren(
@@ -101,6 +116,18 @@ export function mountShell(root: HTMLElement): AppShell {
 		clearNotice,
 		setContent(node: Node): void {
 			content.replaceChildren(node);
+			// The registration is promoted before the dropped document's release runs, so a release that throws can neither keep its successor from being promoted nor be run a second time by the next render; a release that fails is reported in the notice region, because the render that replaced the document has already succeeded and must not be undone for it.
+			const dropped = contentRelease;
+			contentRelease = nextContentRelease;
+			nextContentRelease = (): void => {};
+			try {
+				dropped();
+			} catch (error) {
+				showNotice(boundMessage(`Releasing the previous view failed: ${messageOf(error)}`, NOTICE_MESSAGE_MAX), "error");
+			}
+		},
+		setContentRelease(release: () => void): void {
+			nextContentRelease = release;
 		},
 		setActiveNav(name: string): void {
 			if (name === "create") {
@@ -186,7 +213,14 @@ function shellEffects(shell: AppShell, options: RenderOptions): RouteEffects {
 }
 
 function createViewOptions(shell: AppShell, options: RenderOptions): CreateViewOptions {
-	return { notice: shell, baseUrl: options.baseUrl, today: options.today, clipboard: options.clipboard };
+	return {
+		notice: shell,
+		baseUrl: options.baseUrl,
+		today: options.today,
+		clipboard: options.clipboard,
+		fit: options.fit,
+		onRelease: (release) => shell.setContentRelease(release),
+	};
 }
 
 /**
@@ -198,10 +232,12 @@ function viewOptions(shell: AppShell, options: RenderOptions): ViewOptions {
 		baseUrl: options.baseUrl,
 		today: options.today,
 		clipboard: options.clipboard,
+		fit: options.fit,
 		exportPdf: options.exportPdf ?? ((invoice) => exportInvoice(invoice, options.today)),
 		pay: options.pay ?? ((invoice) => {
-			openPayPanel(invoice, { notice: shell, clipboard: options.clipboard ?? null });
+			openPayPanel(invoice, { notice: shell, clipboard: options.clipboard ?? null, fit: options.fit });
 		}),
+		onRelease: (release) => shell.setContentRelease(release),
 	};
 }
 
@@ -278,6 +314,7 @@ export function bootApp(root: HTMLElement, options: BootOptions = {}): AppShell 
 		baseUrl: options.baseUrl ?? pageUrl(),
 		today: options.today ?? isoToday(new Date()),
 		clipboard: options.clipboard ?? null,
+		fit: options.fit ?? null,
 		exportPdf: options.exportPdf,
 		pay: options.pay,
 	};

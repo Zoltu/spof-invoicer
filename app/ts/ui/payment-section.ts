@@ -6,6 +6,7 @@
  *
  * The amount, the address, and the link are values a wallet takes verbatim, so each is drawn as ordinary text with an exact-copy control beside it: a payer selects and copies the value the way they would any other text on the page — one term per block, so selecting the whole section yields a label and a value per line — while one click on the control hands the clipboard that string itself rather than whatever a selection happened to span.
  * The stylesheet holds each value on one run, so neither the layout nor a text selection can put a line break inside a value that has none, and because a run that does not fit its column would be clipped, each verbatim value is handed to `ui/fit-value.ts`: that module sets the value at the largest rung of its size ladder that holds it on one line, and leaves the residual rung's visible scrollbar for a value no rung holds.
+ * The fitting is a subscription of its own, so the section hands back the way to drop it, and the surface that mounted the section is what calls it: a surface that replaces the section — the create screen rebuilding it for the next invoice — stops the one it is about to discard, and a surface that drops the whole document, as the router replaces the payer's document, stops the section as it hands its own teardown over. Nothing here waits for a later layout report to notice that the rows are gone, because no probe promises one.
  * The control's confirmation is a status line with a lifecycle: it is cleared after a pause so the section returns to its uniform resting height, and a repeated copy of the same value blanks the line first and re-sets it, so the change is one an assistive technology announces rather than an identical rewrite it may pass over.
  *
  * The print path is given a second presentation of the same string.
@@ -17,12 +18,7 @@
 import { h, type DomChild } from "../util/dom.js";
 import type { QrMatrix } from "../util/qr.js";
 import { copyWithFallback, type ClipboardLike, type CopyStatus } from "./clipboard.js";
-import {
-	browserLayoutProbe,
-	fitValue,
-	printFitRung,
-	type LayoutProbe,
-} from "./fit-value.js";
+import { fitValue, printFitRung, type LayoutProbe } from "./fit-value.js";
 import type { InvoicePaymentTermView, InvoiceViewModel } from "./presentation.js";
 
 /**
@@ -98,44 +94,82 @@ export function copyControlClick(
 	};
 }
 
-/** Everything the section needs beyond the view model: how to copy, and how a fitted value measures the box it is drawn in. */
+/** Everything the section needs beyond the view model: how to copy, and the probe its fitted values measure through. */
 export interface PaymentSectionOptions {
+	/**
+	 * The probe the section's fitted values measure through, or `null` to fit nothing and leave each value at the rung its stylesheet states.
+	 * An absent option fits nothing for the same reason: a surface handed no probe has no layout to measure, and the only fail-safe reading of that is the rung the stylesheet already states rather than a guess at the environment. The composition root supplies the browser's own probe.
+	 */
 	readonly fit?: LayoutProbe | null;
+}
+
+/** A rendered payment section: the element to mount, and the way to release the fitting its values took. */
+export interface PaymentSectionHandle {
+	readonly element: HTMLElement;
+	/** Stop fitting every value in the section, so no observer outlives it; a second call does nothing. */
+	stop(): void;
 }
 
 /**
  * The section the view model describes: its payment title, one term per entry in the model's own list, and the symbol of the link those terms state.
  *
  * The symbol is drawn under the terms that state the same URI, never as a second statement of it: the link text the term above it draws is what a screen reader reads and a payer can select.
- * Every value a wallet takes verbatim is fitted through the options' probe, which defaults to the browser's own: a fake document, or a caller that wants no fitting, hands in a probe of its own and the section keeps the size the stylesheet states.
+ * Every value a wallet takes verbatim is fitted through the probe the options state, and a caller that wires none — or hands `null` — keeps the size the stylesheet states.
+ * The section hands back the release of that fitting, and its callers own it from then on: a build that throws part-way — a term that cannot be drawn, a symbol the encoder refuses — releases the subscriptions the terms built before it, and a caller releases the section's own fitting when it drops the section, so no observer outlives the rows it was taken for.
  */
-export function renderPaymentSection(view: InvoiceViewModel, clipboard: ClipboardLike | null, options: PaymentSectionOptions = {}): HTMLElement {
-	const fit = options.fit ?? browserLayoutProbe;
-	return h(
-		"footer",
-		{ class: "invoice-payment" },
-		h("h2", { class: "section-title" }, view.labels.paymentTitle),
-		h("dl", { class: "payment-list" }, ...view.payment.map((term) => paymentTerm(term, clipboard, fit))),
-		qrBlock(view.paymentQr),
-	);
+export function renderPaymentSection(
+	view: InvoiceViewModel,
+	clipboard: ClipboardLike | null,
+	options: PaymentSectionOptions = {},
+): PaymentSectionHandle {
+	const fit = options.fit ?? null;
+	const fits: (() => void)[] = [];
+	const stop = (): void => {
+		for (const release of fits.splice(0)) release();
+	};
+	try {
+		const element = h(
+			"footer",
+			{ class: "invoice-payment" },
+			h("h2", { class: "section-title" }, view.labels.paymentTitle),
+			h("dl", { class: "payment-list" }, ...view.payment.map((term) => paymentTerm(term, clipboard, fit, fits))),
+			qrBlock(view.paymentQr),
+		);
+		return { element, stop };
+	} catch (error) {
+		stop();
+		throw error;
+	}
 }
 
 /**
  * One payment-details term: its label and, in the `<dd>`, the value {@link paymentValue} renders, in a monospace face when the term is one a wallet takes verbatim.
  *
  * A verbatim value is fitted with the row it is drawn in, because the row is the layout the choice is measured against — the label's rail, the value's column, and the copy control all decide how much width the run has — and the row is also the element the chosen rung's class is written on.
- * The value is looked up in the row rather than returned alongside it, the way `ui/pay.ts` finds its own rows, so {@link paymentValue} keeps one return shape whether or not the term is fitted.
+ * The value element is the one {@link paymentValue} just built and handed back, so the fit is taken against the element itself rather than a search of the row for a class name that could be renamed out from under it; the teardown of that fit is added to `fits`, which the section's own handle drains.
  */
-function paymentTerm(term: InvoicePaymentTermView, clipboard: ClipboardLike | null, fit: LayoutProbe | null): HTMLElement {
+function paymentTerm(
+	term: InvoicePaymentTermView,
+	clipboard: ClipboardLike | null,
+	fit: LayoutProbe | null,
+	fits: (() => void)[],
+): HTMLElement {
+	const built = paymentValue(term, clipboard);
 	const row = h(
 		"div",
 		{ class: "payment-term" },
 		h("dt", {}, term.label),
-		h("dd", { class: term.verbatim === true ? "mono" : undefined }, ...paymentValue(term, clipboard)),
+		h("dd", { class: term.verbatim === true ? "mono" : undefined }, ...built.children),
 	);
-	const value = row.querySelector<HTMLElement>(".payment-value-verbatim");
-	if (value !== null) fitValue({ row, value }, fit);
+	if (built.value !== null) fits.push(fitValue({ row, value: built.value }, fit));
 	return row;
+}
+
+/** What a term's value contributes to its `<dd>`: the elements it is drawn with, and the element the value's own text sits in when a wallet takes it verbatim. */
+interface PaymentTermValue {
+	readonly children: readonly DomChild[];
+	/** The element a verbatim value's text is drawn in, which is what the fitter measures and what the copy control reads; `null` for a term no wallet takes verbatim. */
+	readonly value: HTMLElement | null;
 }
 
 /**
@@ -152,9 +186,9 @@ function paymentTerm(term: InvoicePaymentTermView, clipboard: ClipboardLike | nu
  * The button's accessible name carries the term's label, so two controls reading "Copy" on one document are still told apart.
  * The one flag is what the term's own `verbatim` statement is: the copy control, the print twin, and the PDF's unbroken run all read it, so no surface can disagree about which values a wallet takes.
  */
-function paymentValue(term: InvoicePaymentTermView, clipboard: ClipboardLike | null): readonly DomChild[] {
+function paymentValue(term: InvoicePaymentTermView, clipboard: ClipboardLike | null): PaymentTermValue {
 	if (term.verbatim !== true) {
-		return [h("span", { class: "payment-value" }, term.value)];
+		return { children: [h("span", { class: "payment-value" }, term.value)], value: null };
 	}
 	const value = h(
 		"span",
@@ -166,7 +200,7 @@ function paymentValue(term: InvoicePaymentTermView, clipboard: ClipboardLike | n
 	const status = h("span", { class: "payment-status no-print", role: "status" });
 	const copy = h("button", { type: "button", class: "btn btn-secondary payment-copy no-print", "aria-label": `Copy ${term.label}` }, "Copy");
 	copy.addEventListener("click", copyControlClick(term.value, clipboard, value, status, wallClockTimer));
-	return [value, printed, copy, status];
+	return { children: [value, printed, copy, status], value };
 }
 
 /**

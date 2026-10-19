@@ -206,7 +206,11 @@
 		white-space: nowrap;
 	}
 
+	/*
+	 * The rung past the floor: the size the floor's rule states, so the value breaks at the 6pt face both comments describe rather than at whatever face it inherits.
+	 */
 	.payment-value-print.print-fit-wrap {
+		font-size: 6pt;
 		white-space: normal;
 		overflow-wrap: anywhere;
 	}

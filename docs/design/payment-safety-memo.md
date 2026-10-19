@@ -41,9 +41,9 @@ The last two are the uncomfortable ones: the abbreviation a payer sees is the at
 
 **(a) Remember the last paid address per payee, warning when a new invoice for that payee names a different one.** The only option that removes the comparison burden: the payer answers "this is different from last time" instead of "does this match a string I cannot remember". It needs local storage, so it lands or falls with section 2. Estimated effort: two to four days `(estimate)`.
 
-**(b) Show the address in groups of four.** The separators are not what a wallet takes verbatim: the value is one text node whose copy is byte-for-byte pinned at `tests/view.test.mjs:1206`, and grouping lengthens the string, pushing the fitter toward a smaller rung. `[verified in this repository]` No evidence supports the benefit. `[unverified]` Estimated effort: one to two days `(estimate)`; not worth doing alone.
+**(b) Show the address in groups of four.** The separators are not what a wallet takes verbatim: the value is one text node whose copy is byte-for-byte pinned by "the amount, the payee address, and the payment link copy byte for byte, at the widest values a legal invoice carries" in `tests/view.test.mjs`, and grouping lengthens the string, pushing the fitter toward a smaller rung. `[verified in this repository]` No evidence supports the benefit. `[unverified]` Estimated effort: one to two days `(estimate)`; not worth doing alone.
 
-**(c) Emphasise the first and last characters while keeping the whole string.** Emphasis needs per-character markup, turning one text node into many and colliding with the same copy, print twin, and focus stop (`tests/view.test.mjs:654`, `:1619`). Estimated effort: one to two days `(estimate)`; not recommended.
+**(c) Emphasise the first and last characters while keeping the whole string.** Emphasis needs per-character markup, turning one text node into many and colliding with the same copy, print twin, and focus stop (`tests/view.test.mjs`'s "a printed payment value is the whole value, sized by its length and wrapped only past the floor" and its "a verbatim payment value is a named focus stop with its own ring, and the residual rung is the visible cue that it scrolls"). Estimated effort: one to two days `(estimate)`; not recommended.
 
 **(d) Tell the payer to confirm the recipient in the wallet's own confirmation screen at signature time.** The wallet's window is a trusted display rather than a second channel: the attacker does not render it, and it shows the address the transaction will pay. The panel's resting status already names that screen, so this is prominence, not new machinery. `[verified in this repository]` Estimated effort: half a day `(estimate)`.
 
@@ -60,7 +60,7 @@ Only (a) changes the payer's task from memory to difference.
 ### What Cannot Be Done Without a Server
 
 - **A payee directory.** "Is this the real Acme?" needs an authoritative stored list, and the invoice travels inside its own link.
-- **ENS or DNS lookups.** A lookup is a network query, forbidden by `connect-src 'none'` and the sweep `[verified in this repository]` (`app/index.html`, `tests/slow/acceptance.test.mjs:90`), and it would leak which payee is about to be paid.
+- **ENS or DNS lookups.** A lookup is a network query, forbidden by `connect-src 'none'` and the sweep `[verified in this repository]` (`app/index.html`, and the `NETWORK_APIS` sweep in `tests/slow/acceptance.test.mjs`), and it would leak which payee is about to be paid.
 - **Confirmation from the payee.** Asking "did you send this?" needs a channel, and the app has none.
 
 ### The Residual Risk, Stated Plainly
@@ -75,15 +75,15 @@ No option above changes that; they change only how likely a payer is to notice a
 
 The guard exists and is deliberately memory-only, so it protects one page session: a reload or a second tab is an ordinary action that defeats it.
 
-- `sendAttempted` is set the instant a transaction is handed to the wallet, and cleared only on an explicit decline (`app/ts/ui/pay-flow.ts:114`, `:296`, `:308`). `[verified in this repository]`
-- A per-invoice map refuses reopening the panel for an invoice already attempted here (`app/ts/ui/pay.ts:53`, `:66`, `:134`). `[verified in this repository]`
-- The refusal says reloading is the only way to start over (`app/ts/ui/pay.ts:77`'s `REOPEN_MESSAGE`, `app/ts/ui/pay-flow.ts:100`). `[verified in this repository]`
-- A reload or a second tab wipes the guard, because nothing is written (`app/ts/ui/pay.ts:51`). `[verified in this repository]`
-- The app cannot confirm anything on chain: `connect-src 'none'`, and the sweep at `tests/slow/acceptance.test.mjs:90`. `[verified in this repository]`
+- The `sendAttempted` latch in `app/ts/ui/pay-flow.ts` is set the instant a transaction is handed to the wallet, and cleared only on an explicit decline. `[verified in this repository]`
+- A per-invoice map refuses reopening the panel for an invoice already attempted here (the `attemptedPayments` map and `claimPayment` in `app/ts/ui/pay.ts`). `[verified in this repository]`
+- The refusal says reloading is the only way to start over (`REOPEN_MESSAGE` in `app/ts/ui/pay.ts`, and `SEND_CLAIMED_ELSEWHERE_MESSAGE` in `app/ts/ui/pay-flow.ts`). `[verified in this repository]`
+- A reload or a second tab wipes the guard, because nothing is written (the comment on `attemptedPayments` in `app/ts/ui/pay.ts`). `[verified in this repository]`
+- The app cannot confirm anything on chain: `connect-src 'none'`, and the `NETWORK_APIS` sweep in `tests/slow/acceptance.test.mjs`. `[verified in this repository]`
 
 ### Three Options
 
-**Option A — memory plus a channel between tabs only.** A `BroadcastChannel` tells other open tabs an invoice was claimed. It survives neither a reload nor the case that matters most: a payer who reloads because the wallet was unclear, then pays again. The storage sweep does not name `BroadcastChannel` `[verified in this repository]` (`tests/slow/acceptance.test.mjs:92` names only `localStorage`, `sessionStorage`, `indexedDB`, `history`, `window.name`, `document.cookie`), so using it would pass the gate silently; the entry must be written deliberately. Estimated effort: about a day `(estimate)`.
+**Option A — memory plus a channel between tabs only.** A `BroadcastChannel` tells other open tabs an invoice was claimed. It survives neither a reload nor the case that matters most: a payer who reloads because the wallet was unclear, then pays again. The storage sweep does not name `BroadcastChannel` `[verified in this repository]` (`STORAGE_APIS` in `tests/slow/acceptance.test.mjs` names only `localStorage`, `sessionStorage`, `indexedDB`, `history`, `window.name`, `document.cookie`), so using it would pass the gate silently; the entry must be written deliberately. Estimated effort: about a day `(estimate)`.
 
 **Option B — one opaque salted hash record in local storage, plus a cross-tab notification.** One string per invoice survives a reload, a second tab, a browser restart, and back-and-forward navigation. Estimated effort: two to three days `(estimate)`, plus a gate change and README rewording. Recommended.
 
@@ -126,9 +126,9 @@ No wording may imply that forgetting undoes a payment: the label says "attempt",
 
 - "No cookies, no tracking, and no analytics" in `README.md`'s "Privacy over features" `[verified in this repository]` must say what the browser keeps: one anonymous marker per attempted invoice, with a Forget control in the payment panel.
 - "The app keeps no list of the invoices you made" stays true only if that section also says the marker is a digest rather than an invoice.
-- The no-storage note at `app/ts/ui/pay.ts:51` ("The record lives only in memory…") becomes false and must describe the digest, its retention, and Forget. `[verified in this repository]`
-- The hard gate: `STORAGE_APIS` at `tests/slow/acceptance.test.mjs:92` and its assertion at `:810` forbid any storage API in every runtime file. The change must be a content-specific exemption of the kind the sweep already uses, as `isSanctionedElementBuilder` and `isSanctionedSvgNamespace` are: a named module plus an exact statement, not a looser pattern. `[verified in this repository]`
-- The wording tests `tests/pay-flow.test.mjs:671`, `tests/wallet.test.mjs:1023` and `:1057` match `/already attempted/`. `[verified in this repository]`
+- The no-storage note on `attemptedPayments` in `app/ts/ui/pay.ts` ("The record lives only in memory…") becomes false and must describe the digest, its retention, and Forget. `[verified in this repository]`
+- The hard gate: `STORAGE_APIS` in `tests/slow/acceptance.test.mjs`, and the assertion of that file's "no served runtime module can build markup, evaluate code, or reach the network" sweep, forbid any storage API in every runtime file. The change must be a content-specific exemption of the kind the sweep already uses, as `isSanctionedElementBuilder` and `isSanctionedSvgNamespace` are: a named module plus an exact statement, not a looser pattern. `[verified in this repository]`
+- The wording tests match `/already attempted/`: "the send attempt is surfaced the instant the transaction leaves for the wallet" in `tests/pay-flow.test.mjs`, and "a panel reopened for the same invoice refuses a second payment" beside "navigating away and back to the same invoice cannot re-arm the payment latch" in `tests/wallet.test.mjs`. `[verified in this repository]`
 
 The owner has to sign the storage decision explicitly: the sweep exists because no-storage was a hard rule, and a rule widened quietly is worse than one narrowed in a named place.
 
@@ -146,7 +146,7 @@ The guard's job is the ordinary accident, and the wording should say so.
 - `@metamask/jazzicon`: CommonJS only, roughly 4–5 kB, unreleased since 2020, and its common address adapter uses only the first 8 hex characters as an integer seed. `[reported from an external source]`
 - `blo` 2.1.1: MIT, zero dependencies, pure ESM, about 0.7 kB gzipped, actively maintained, produces the blockies look MetaMask and Etherscan users recognise, lowercases the seed, and returns a `data:` SVG URL. `[reported from an external source]` The best fit.
 - `minidenticons`: MIT, 311 bytes gzipped, smaller but unrecognisable to anyone who has not seen it. `[reported from an external source]`
-- Hand-rolled: about 30 lines, no smaller than `minidenticons`, and it becomes code this project owns and tests. `[reported from an external source]`
+- Hand-rolled: about 30 lines, no smaller than `minidenticons`, and it becomes code this project owns and tests. `(estimate)`
 
 ### What the Family Computes
 
@@ -162,7 +162,7 @@ Files touched: `package.json` and `bun.lock`; both vendor scripts, plus a `HAND_
 
 The owner should see one gate problem before that work starts. The app's single image sink accepts only a branded SVG data URL with the exact `data:image/svg+xml;base64,` prefix and a bounded base64 payload, and `h()` refuses anything else (`checkedAttributeValue` in `app/ts/util/dom.ts`, `isSvgDataUrl` in `app/ts/util/data-url.ts`). `[verified in this repository]` The CSP already permits `data:` images, but this app-level gate is stricter, and `blo` returns a non-base64 SVG data URL. `[reported from an external source]` Integration needs a re-encode into the admitted shape or a new sanctioned sink: an edit to a security gate, and a decision for the owner.
 
-Tests needed: the bundle sweeps pick the new file up automatically, since they derive their list from `SOURCES` (`tests/helpers/vendor-bundles.mjs`, `tests/slow/vendor.test.mjs:395`, `:424`), and a shim's exports are checked against the bundle beside it (`:351`). `[verified in this repository]` New unit tests cover the seed fold, empty alternative text, the avatar never being the only identifier, and the image-gate decision itself.
+Tests needed: the bundle sweeps pick the new file up automatically, since they derive their list from `SOURCES` (`tests/helpers/vendor-bundles.mjs`, and "every vendored bundle is self-contained and free of network APIs" beside "the page entry and vendored modules load with every network API blocked" in `tests/slow/vendor.test.mjs`), and a shim's exports are checked against the bundle beside it by that file's "every name a hand-written shim declares is an export of the vendored bundle beside it". `[verified in this repository]` New unit tests cover the seed fold, empty alternative text, the avatar never being the only identifier, and the image-gate decision itself.
 
 Estimated effort: two to five days `(estimate)`, dominated by the gate decision and the vendoring ceremony rather than the drawing code.
 
@@ -184,7 +184,7 @@ The collision is with the README's privacy section, which says the app keeps no 
 
 ### What Must Change Together
 
-The same set as section 2: the code, the README privacy section, `STORAGE_APIS` at `tests/slow/acceptance.test.mjs:92` with the assertion at `:810`, and the no-storage sentence in `app/ts/ui/pay.ts:51`. `[verified in this repository]`
+The same set as section 2: the code, the README privacy section, `STORAGE_APIS` in `tests/slow/acceptance.test.mjs` with that sweep's assertion, and the no-storage sentence on `attemptedPayments` in `app/ts/ui/pay.ts`. `[verified in this repository]`
 If both features land, they land as one storage design with one exemption, one retention policy, and one Forget control.
 
 ### The Labelling Question
@@ -204,10 +204,10 @@ Recommendation: do not build the address book alone. Build it as the second step
 
 Address lengths look arbitrary and are not. `[verified in this repository]`
 
-- A Zcash transparent address (`t1…` or `t3…`) is 35 characters — a version, a 20-byte hash, and a checksum in Base58Check, bounded at 36 before decoding (`app/ts/wallet/zcash-address.ts:51`).
+- A Zcash transparent address (`t1…` or `t3…`) is 35 characters — a version, a 20-byte hash, and a checksum in Base58Check, bounded at 36 before decoding (the bound `MAX_TRANSPARENT_TEXT_LENGTH` in `app/ts/wallet/zcash-address.ts`).
 - A Zcash Sapling address (`zs1…`) is 78 characters — Bech32 over a 43-byte payment address (same file's `SAPLING_PAYLOAD_BYTES`).
 - A Zcash unified address (`u1…`) runs to 311 characters — `MAX_ZCASH_ADDRESS_LENGTH` in `app/ts/payment/schemes.ts`, derived as the widest symbol the app draws, less what a `zcash:` link spends besides the address, less an 8-byte margin.
-- A Monero address is 95 characters, or 106 for an integrated one (`app/ts/wallet/monero-address.ts:35` and following).
+- A Monero address is 95 characters, or 106 for an integrated one (the `MoneroForm` table in `app/ts/wallet/monero-address.ts`).
 
 A unified address is long because it carries several receivers at once, so one string lets a sender pay whichever form the recipient supports. That is normal, not a defect, and it is why the display and print ladders exist.
 

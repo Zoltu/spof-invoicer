@@ -5,8 +5,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { appliedDeclaration, cssRules, declaration, pxLength, ROOT_FONT_PX, ruleBody, selectorWeight } from "./helpers/css.mjs";
+import { appliedDeclaration, cssRules, declaration, expectedPrintRung, pxLength, ROOT_FONT_PX, ruleBody, selectorWeight } from "./helpers/css.mjs";
 import { installDocument, installInteractiveDocument } from "./helpers/dom.mjs";
+import { fakeProbe } from "./helpers/layout-probe.mjs";
 import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TRANSPARENT_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
 import { readSymbol } from "./helpers/qr-reader.mjs";
@@ -21,19 +22,24 @@ import { mountShell, renderRoute } from "../app/js/app/shell.js";
 import { copyControlClick, renderPaymentSection } from "../app/js/ui/payment-section.js";
 import { buildInvoiceViewModel, formatInvoiceDate, invoiceStatus, money } from "../app/js/ui/presentation.js";
 import { buildShareBundle, createShareDialog, openShareDialog } from "../app/js/ui/share.js";
-import { FIT_RUNGS } from "../app/js/ui/fit-value.js";
+import { FIT_LADDER } from "../app/js/ui/fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES } from "../app/js/ui/messages.js";
 import { CHAIN_NAMES, chainName, networkLabel, requireNamedNetworks } from "../app/js/ui/network-labels.js";
+import { createOverlay } from "../app/js/ui/overlay.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
+import { h } from "../app/js/util/dom.js";
 import { encodeQr } from "../app/js/util/qr.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
+/**
+ * The render options every case in this suite builds on: a renderer requires the release of what it subscribed to, and the cases that hold one override this placeholder with their own.
+ */
+const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null, onRelease: () => {} };
 
 function line(overrides = {}) {
 	return { description: "Design work", quantity: "2", unitPrice: "150", ...overrides };
@@ -68,7 +74,7 @@ function byText(node, tag, text) {
 	return findAll(node, (child) => child.tagName === tag && textOf(child) === text);
 }
 
-/** The print rungs an element carries, read off its class attribute: the fitter's print ladder, which is its own table rather than the screen's `FIT_RUNGS`. */
+/** The print rungs an element carries, read off its class attribute: the ladder's print rungs, which are their own table rather than the screen's. */
 function printRungs(node) {
 	return String(node.attributes.class ?? "")
 		.split(" ")
@@ -338,6 +344,76 @@ test("a rejected PDF export is reported through the notice, not thrown", async (
 	}
 });
 
+test("a render that throws after its payment section is built releases the section's fitting", () => {
+	const fake = installInteractiveDocument();
+	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
+	const createElement = document.createElement;
+	// The article is built after the payment section, so a document that refuses it is a render that throws with the section's fitting already taken and nothing ever mounted for a detach to release it.
+	document.createElement = (tag) => {
+		if (tag === "article") throw new Error("the article was refused");
+		return createElement.call(document, tag);
+	};
+	try {
+		assert.throws(() => renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder(), fit: probe }), /the article was refused/);
+		assert.ok(probe.targets.length > 0, "the section took a subscription for each value a wallet takes verbatim before the throw");
+		assert.deepEqual(probe.unsubscribed, probe.targets, "and the failed render hands every one of them back rather than leaving it watching a document it never built");
+	} finally {
+		document.createElement = createElement;
+		fake.restore();
+	}
+});
+
+test("the payer's document hands its fitting to the surface that replaces it", () => {
+	const fake = installInteractiveDocument();
+	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
+	try {
+		const releases = [];
+		renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder(), fit: probe, onRelease: (release) => releases.push(release) });
+		assert.equal(releases.length, 1, "the document registers one release for everything it subscribed to");
+		assert.ok(probe.targets.length > 0, "the section took a subscription for each value a wallet takes verbatim");
+		assert.deepEqual(probe.unsubscribed, [], "and holds them while the document stands");
+		releases[0]();
+		assert.deepEqual(probe.unsubscribed, probe.targets, "the surface that replaces the document hands every one of them back, with no layout report to wait for");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the shell releases the document it replaces, so no subscription outlives its route", () => {
+	const fake = installInteractiveDocument();
+	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
+	const outstanding = () => probe.targets.length - probe.unsubscribed.length;
+	try {
+		const shell = mountShell(document.createElement("div"));
+		renderRoute(shell, parseHash(`#/i/${encodeInvoice(invoiceFor())}`), { ...VIEW_OPTIONS, fit: probe });
+		assert.ok(probe.targets.length > 0, "the invoice document took a subscription for each value a wallet takes verbatim");
+		assert.equal(outstanding(), probe.targets.length, "and holds them while its route is on screen");
+
+		// A render that throws still takes the route container — the shell shows the failure in it — so the document it replaced is released on that path too, and so is the section the failed render built before it threw.
+		const createElement = document.createElement;
+		document.createElement = (tag) => {
+			if (tag === "article") throw new Error("the article was refused");
+			return createElement.call(document, tag);
+		};
+		try {
+			renderRoute(shell, parseHash(`#/i/${encodeInvoice(invoiceFor({ id: "INV-2" }))}`), { ...VIEW_OPTIONS, fit: probe });
+		} finally {
+			document.createElement = createElement;
+		}
+		assert.ok(probe.targets.length > 3, "the failed render had taken its own subscriptions before it threw");
+		assert.equal(outstanding(), 0, "and every subscription either render took is handed back rather than left on a document the page no longer holds");
+
+		const held = probe.targets.length;
+		renderRoute(shell, parseHash(`#/i/${encodeInvoice(invoiceFor({ id: "INV-3" }))}`), { ...VIEW_OPTIONS, fit: probe });
+		assert.ok(probe.targets.length > held, "a route rendered after a failure takes its own subscriptions");
+		assert.equal(outstanding(), probe.targets.length - held, "and holds them while it is on screen");
+		renderRoute(shell, parseHash("#/create"), { ...VIEW_OPTIONS, fit: probe });
+		assert.equal(outstanding(), 0, "and the create route hands them back as its own document takes the container");
+	} finally {
+		fake.restore();
+	}
+});
+
 test("the shell forwards the exportPdf and pay seams into the invoice view", () => {
 	const fake = installInteractiveDocument();
 	try {
@@ -531,6 +607,87 @@ test("the share dialog keeps Tab focus inside the modal", () => {
 	}
 });
 
+test("the overlay's Tab model counts a declared focus stop and no unreadable tabindex", () => {
+	// The Tab ring is the dialog's model of what a browser makes focusable, so a stop a page declares with a non-negative tabindex sits inside it, while a value the platform cannot read is no stop at all.
+	const fake = installInteractiveDocument();
+	try {
+		const overlay = createOverlay(() => ({
+			element: h(
+				"div",
+				{ class: "dialog" },
+				h("button", { type: "button", class: "tab-first" }, "First"),
+				h("span", { class: "tab-value", role: "group", "aria-label": "A value", tabindex: "0" }, "0xabc"),
+				h("button", { type: "button", class: "tab-last" }, "Last"),
+			),
+		}));
+		const first = findAll(overlay.element, (node) => hasClass(node, "tab-first"))[0];
+		const middle = findAll(overlay.element, (node) => hasClass(node, "tab-value"))[0];
+		const last = findAll(overlay.element, (node) => hasClass(node, "tab-last"))[0];
+
+		middle.focus();
+		overlay.element.dispatch("keydown", { type: "keydown", key: "Tab" });
+		assert.equal(document.activeElement, middle, "Tab forward from a declared stop is left to the browser, which is only true while the stop is inside the ring");
+		overlay.element.dispatch("keydown", { type: "keydown", key: "Tab", shiftKey: true });
+		assert.equal(document.activeElement, middle, "and backward too");
+		last.focus();
+		overlay.element.dispatch("keydown", { type: "keydown", key: "Tab" });
+		assert.equal(document.activeElement, first, "while Tab from the last control still wraps to the first");
+
+		// `tabindex=""` is what this model once read as a stop and a browser does not, and a negative one is programmatically focusable alone: a dialog holding those and one button has that button as its whole ring.
+		const unreadable = createOverlay(() => ({
+			element: h(
+				"div",
+				{ class: "dialog" },
+				h("button", { type: "button", class: "only-stop" }, "Only"),
+				h("span", { class: "empty-tabindex", tabindex: "" }, "no stop"),
+				h("span", { class: "negative-tabindex", tabindex: "-1" }, "programmatic only"),
+			),
+		}));
+		const only = findAll(unreadable.element, (node) => hasClass(node, "only-stop"))[0];
+		only.focus();
+		unreadable.element.dispatch("keydown", { type: "keydown", key: "Tab", shiftKey: true });
+		assert.equal(document.activeElement, only, "an empty or negative tabindex makes no stop, so a backward Tab from the dialog's only control wraps to itself rather than onto a value the browser would never stop at");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the overlay runs the release a dialog's builder returns as it closes", () => {
+	// A dialog's rows are released by the dialog itself, so the builder hands that release back beside its element rather than leaving it in a variable the caller assigns to; the overlay runs it once, on every dismissal path, beside the caller's own close.
+	const fake = installInteractiveDocument();
+	try {
+		const released = [];
+		const closed = [];
+		const overlay = createOverlay(
+			() => ({
+				element: h("div", { class: "dialog" }, h("button", { type: "button", class: "dialog-close" }, "Close")),
+				stop: () => released.push("dialog"),
+			}),
+			{ onClose: () => closed.push("caller") },
+		);
+		overlay.element.dispatch("keydown", { type: "keydown", key: "Escape" });
+		assert.deepEqual(released, ["dialog"], "the release the builder handed back runs as the dialog closes");
+		assert.deepEqual(closed, ["caller"], "beside the caller's own close");
+		overlay.close();
+		assert.deepEqual(released, ["dialog"], "and a second dismissal runs nothing a second time");
+
+		const afterThrow = [];
+		const failing = createOverlay(
+			() => ({
+				element: h("div", { class: "dialog" }),
+				stop: () => {
+					throw new Error("the release failed");
+				},
+			}),
+			{ onClose: () => afterThrow.push("caller") },
+		);
+		assert.throws(() => failing.close(), /the release failed/, "a release that fails is not swallowed");
+		assert.deepEqual(afterThrow, ["caller"], "and the caller's own close still runs behind it, so a dismissal cannot strand the half that unmounts the overlay");
+	} finally {
+		fake.restore();
+	}
+});
+
 test("openShareDialog mounts over the page, hides the background, and restores focus on close", () => {
 	const fake = installInteractiveDocument();
 	try {
@@ -668,7 +825,7 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
 		const printed = findAll(payment, (node) => hasClass(node, "payment-value-print"));
 		const amount = model.payment.find((term) => term.label === model.labels.amount).value;
-		assert.equal(amount.length, 79, "the amount fixture is 79 characters, inside the 7pt rung's own count");
+		assert.equal(amount.length, 79, "the amount fixture is 79 characters, inside the 9pt rung's own count");
 		assert.deepEqual(
 			printed.map((node) => textOf(node)),
 			[address, amount, model.paymentLink],
@@ -694,12 +851,9 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		assert.doesNotMatch(printCss, /\.payment-value\s*\{/, "while the plain values of terms no wallet takes verbatim stay in the printed document");
 
 		// The ladder: one rule per rung, the sizes descending to the 6pt floor, and no break allowed before it.
-		const rungSizes = [
-			["print-fit-1", "9pt"],
-			["print-fit-2", "8pt"],
-			["print-fit-3", "7pt"],
-			["print-fit-4", "6pt"],
-		];
+		// The rungs and their point sizes are read from the module's table, because a printed value is sized from that table and a rule resized on one side alone would leave the page laying out a rung at a size the choice did not assume.
+		const sizedPrint = FIT_LADDER.print.filter((entry) => !entry.wraps);
+		const rungSizes = sizedPrint.map((entry) => [entry.rung, `${entry.points}pt`]);
 		const points = [];
 		for (const [rung, size] of rungSizes) {
 			const body = ruleBody(printCss, `.payment-value-print.${rung}`);
@@ -711,11 +865,12 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		}
 		assert.deepEqual(points, [...points].sort((left, right) => right - left), "the rungs descend from the largest to the smallest");
 		assert.equal(points[points.length - 1], 6, "and stop at the 6pt floor, ordinary fine print");
-		const wrap = ruleBody(printCss, ".payment-value-print.print-fit-wrap");
+		const wrapRung = FIT_LADDER.print[FIT_LADDER.print.length - 1];
+		const wrap = ruleBody(printCss, `.payment-value-print.${wrapRung.rung}`);
 		assert.ok(wrap !== undefined, "and the last rung states what a value past the floor may do");
 		assert.equal(declaration(wrap, "white-space"), "normal");
 		assert.equal(declaration(wrap, "overflow-wrap"), "anywhere", "which is to break inside itself rather than overflow the page");
-		assert.equal(declaration(wrap, "font-size"), undefined, "with no size of its own, so the floor's face is the one it breaks at");
+		assert.equal(declaration(wrap, "font-size"), `${sizedPrint[sizedPrint.length - 1].points}pt`, "at the floor's own size, so the value breaks at the face both comments promise rather than at whatever face it would inherit");
 		// Every line rule in the print stylesheet belongs to a rung, so no other block in the document is held on a line or allowed to break by print.css.
 		for (const rule of cssRules(printCss)) {
 			for (const property of ["white-space", "overflow-wrap", "word-break"]) {
@@ -727,11 +882,22 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 			}
 		}
 
-		// The rungs the twins carry: a value past the floor wraps, and a 42-character address prints at the largest size the ladder states.
-		assert.deepEqual(printed.map(printRungs), [["print-fit-wrap"], ["print-fit-3"], ["print-fit-wrap"]], "the 311-character address and the 404-character link that carries it both wrap, and the 79-character amount is sized from its own length");
+		// The rungs the twins carry, derived from the page's own geometry — the @page block print.css declares, less its margin — rather than from the module's arithmetic, so a units error on the module's side fails here instead of being transcribed into the expectation.
+		assert.deepEqual(
+			printed.map(printRungs),
+			[address, amount, model.paymentLink].map((value) => [expectedPrintRung(printCss, FIT_LADDER, [...value].length)]),
+			"each twin carries the rung its length earns on the page print.css declares",
+		);
+		assert.deepEqual(printRungs(printed[0]), ["print-fit-wrap"], "the 311-character address is past the print floor and wraps");
+		assert.deepEqual(printRungs(printed[2]), ["print-fit-wrap"], "as is the 404-character link that carries it");
+		assert.deepEqual(printRungs(printed[1]), ["print-fit-1"], "while the 79-character amount fits the 9pt rung the page's geometry earns for it");
 		const evm = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
 		const evmTwins = findAll(evm, (node) => hasClass(node, "payment-value-print"));
-		assert.deepEqual(printRungs(evmTwins[0]), ["print-fit-1"], "while a 42-character EVM address prints at the ladder's largest rung");
+		assert.deepEqual(
+			printRungs(evmTwins[0]),
+			[expectedPrintRung(printCss, FIT_LADDER, PAYEE.length)],
+			"and a 42-character EVM address prints at the rung its length earns on the same page",
+		);
 
 		const screenTwin = ruleBody(readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8"), ".payment-value-print");
 		assert.ok(screenTwin !== undefined, "invoice.css declares the print presentation too, so the two are swapped rather than both drawn");
@@ -1506,12 +1672,10 @@ test("a verbatim payment row is no taller than the value it draws, and an empty 
 		fake.restore();
 	}
 
-	// The value is a scroll container, and its scrollbar is how an overflowing value says so: nothing hides it, and a row whose value fits reserves no height for one. The residual rung — the one state in which the value certainly does not fit — is where the ladder states the thin scrollbar both engines draw, so even there the row gains no more height than the thinnest bar makes.
+	// The value is a scroll container, and its scrollbar is how an overflowing value says so: nothing hides it, so a value that overflows before any script runs is visibly scrollable rather than silently clipped. The residual rung — the one state in which the value certainly does not fit — states that cue, and the ladder-agreement test holds its statement in both engines to the ladder.
 	assert.equal(declaration(value, "scrollbar-width"), undefined, "the base rule hides no scrollbar, so a value that overflows before any script runs is visibly scrollable rather than silently clipped");
 	assert.equal(declaration(value, "overflow-x"), "auto", "and the value scrolls its own overflow");
 	assert.equal(ruleBody(invoiceCss, ".payment-value::-webkit-scrollbar"), undefined, "no WebKit rule hides the scrollbar that overflow draws either");
-	assert.equal(appliedDeclaration(invoiceCss, ".payment-term.fit-residual .payment-value", "scrollbar-width"), "thin", "the residual rung states the visible thin scrollbar the ladder uses");
-	assert.equal(appliedDeclaration(invoiceCss, ".payment-term.fit-residual .payment-value::-webkit-scrollbar", "height"), "6px", "and the WebKit height of the same cue, so neither engine falls back to a full-height bar");
 
 	// Neither affordance is part of the text a payer selects, which is what makes a select-all of the section read one label and one value per line; both also keep their own width on the row rather than stretching.
 	for (const selector of [".payment-copy", ".payment-status"]) {
@@ -1628,12 +1792,10 @@ test("a verbatim payment value is a named focus stop with its own ring, and the 
 		/var\(--inv-accent, var\(--accent\)\)/,
 		"the ring's colour falls back to the root-scoped `--accent`, so it resolves on the create screen as well as the payer's document",
 	);
-	assert.match(appCss, /:root \{[^}]*--accent:/, "and that fallback is declared at the root, which every surface inherits");
-	// The cue that a value does not fit is its scrollbar rather than a mask or a fade: a hidden scrollbar would make the overflow a silent clip, so an overflowing value is visibly scrollable and the residual rung is the state that says so in both engines.
+	assert.ok(declaration(ruleBody(appCss, ":root"), "--accent") !== undefined, "and that fallback is the root's own accent token, which every surface inherits");
+	// The cue that a value does not fit is its scrollbar rather than a mask or a fade: a hidden scrollbar would make the overflow a silent clip, so an overflowing value is visibly scrollable, and the residual rung's own statement of that cue is held to the ladder by the ladder-agreement test.
 	assert.equal(ruleBody(invoiceCss, ".payment-term:hover .payment-value-verbatim"), undefined, "no hover-only rule stands in for the scrollbar a clipped value would otherwise show");
 	assert.doesNotMatch(invoiceCss, /mask-image/, "and no mask fades the value's edge in its place");
-	assert.equal(appliedDeclaration(invoiceCss, ".payment-term.fit-residual .payment-value", "scrollbar-width"), "thin", "the residual rung states the thin scrollbar the value scrolls behind");
-	assert.equal(appliedDeclaration(invoiceCss, ".payment-term.fit-residual .payment-value::-webkit-scrollbar", "height"), "6px", "in WebKit too, so neither engine falls back to a full-height bar");
 	assert.equal(ruleBody(invoiceCss, ".payment-value::-webkit-scrollbar"), undefined, "and the base rule hides no scrollbar for the engine that would draw one");
 
 	const fake = installInteractiveDocument();
@@ -1660,36 +1822,13 @@ test("a verbatim payment value is a named focus stop with its own ring, and the 
 	}
 });
 
-test("every screen rung invoice.css declares matches the module's ladder, and the sizes descend to the 10px floor", () => {
-	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
-	// A rung is a class the fitter writes and a size the stylesheet states; the module's list is what both sides are held to, so a rung added on one side alone fails here rather than being written onto a row no rule sizes.
-	const sizes = [];
-	for (const rung of FIT_RUNGS) {
-		const bodies = cssRules(invoiceCss).filter((rule) => rule.selectors.some((selector) => selector.includes(`.${rung} `)) && declaration(rule.body, "font-size") !== undefined);
-		assert.equal(bodies.length, 1, `invoice.css states the ${rung} rung's size exactly once`);
-		const size = declaration(bodies[0].body, "font-size");
-		assert.ok(String(size).endsWith("rem"), `${rung} states its size in rem, so it follows the root font size the page assumes`);
-		sizes.push({ rung, px: pxLength(size, rung) });
-	}
-	assert.deepEqual(sizes.map((entry) => entry.rung), [...FIT_RUNGS], "the stylesheet declares the ladder in the module's own order, so the rungs read from the largest to the residual one");
-	assert.deepEqual(sizes.slice(0, 4).map((entry) => entry.px), [13, 12, 11, 10], "the inline phase descends from the 13px base to the 10px floor");
-	assert.deepEqual(sizes.slice(4, 7).map((entry) => entry.px), [12, 11, 10], "the stacked phase descends from 12px to the same floor");
-	assert.equal(sizes[7].px, 10, "and the residual rung keeps the floor's own size, scrolling rather than shrinking past it");
-	// The floor is 10px monospace: below it a payer can no longer tell 0 from O or l from 1 in the address they are checking.
-	for (const entry of sizes) assert.ok(entry.px >= 10, `${entry.rung} is at or above the 10px floor`);
-	// Every surface that draws such a value is named in the one rule, so the size is stated here alone rather than repeated in `app.css` where it could drift.
-	const panelValue = cssRules(invoiceCss).find((rule) => declaration(rule.body, "font-size") === "0.8125rem" && rule.selectors.some((selector) => selector.includes(".fit-inline-13")));
-	assert.ok(panelValue.selectors.includes(".pay-term.fit-inline-13 .pay-term-value"), "the payment panel's own term is sized by the same rung");
-	assert.ok(panelValue.selectors.includes(".pay-account.fit-inline-13 .pay-account-value"), "as is the connected account");
-});
-
 test("a copy in flight does not write into a payment section the create screen has rebuilt", async () => {
 	// The create screen rebuilds the whole section with `replaceChildren` each time the form creates an invoice, so a confirmation or a pending clear left running in the discarded section must not write into its detached status.
 	const fake = installInteractiveDocument();
 	try {
 		const view = buildInvoiceViewModel(invoiceFor(), VIEW_OPTIONS.today);
 		const clipboard = { writeText: async () => {} };
-		const section = renderPaymentSection(view, clipboard);
+		const section = renderPaymentSection(view, clipboard).element;
 		document.body.append(section);
 		const status = findAll(section, (node) => hasClass(node, "payment-status"))[0];
 		const value = findAll(section, (node) => hasClass(node, "payment-value-verbatim"))[0];
@@ -1709,7 +1848,7 @@ test("a copy in flight does not write into a payment section the create screen h
 
 		// The section is rebuilt while the second copy's confirmation is still in flight.
 		click();
-		document.body.replaceChildren(renderPaymentSection(view, clipboard));
+		document.body.replaceChildren(renderPaymentSection(view, clipboard).element);
 		await drain();
 		await drain();
 		assert.equal(textOf(status), "", "the detached status is not written once its section is gone");

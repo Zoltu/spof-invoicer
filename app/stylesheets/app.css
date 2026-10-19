@@ -614,7 +614,19 @@ textarea:disabled {
 }
 
 /*
+ * A panel value is a keyboard-reachable scroll container, so it needs the ring `app.css` gives only form controls — the same ring the invoice's own payment values take — and the value is named for the term it holds, so a screen-reader user reaching the stop hears which value it carries.
+ * The stops are declared here beside the boxes they ring, and the scrollbar the residual rung draws is stated with the ladder in `invoice.css`.
+ */
+.pay-term-value:focus-visible,
+.pay-account-value:focus-visible,
+.pay-balance-value:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+/*
  * The stacked phase of a panel term: the label takes a line of its own so the value has the panel's whole width, which is the geometry the stacked rungs in `invoice.css` are measured against.
+ * The rungs are named here once more than `invoice.css` names them, because the row's own columns are this stylesheet's, so a test reads this list and holds it to the ladder the module declares.
  */
 .pay-term.fit-stacked-12,
 .pay-term.fit-stacked-11,
@@ -664,9 +676,11 @@ textarea:disabled {
 }
 
 /*
- * The connected account is a wallet's own address, which is the one value in its row that can outrun the panel: it takes the room the label leaves, scrolls its overflow, and never breaks.
+ * The connected account and the balance are strings the wallet reports, and either can outrun the panel: each takes the room its label leaves, scrolls its overflow, and never breaks.
+ * Both are keyboard-reachable scroll containers, so the focus ring above and the ladder in `invoice.css` apply to them exactly as they do to a term's value.
  */
-.pay-account-value {
+.pay-account-value,
+.pay-balance-value {
 	flex: 1 1 0;
 	min-width: 0;
 	white-space: nowrap;
@@ -675,26 +689,23 @@ textarea:disabled {
 }
 
 /*
- * The balance is one string from the wallet, so it stays on one line like the values around it and scrolls rather than widening the dialog when a wallet reports an extreme amount.
- */
-.pay-balance {
-	white-space: nowrap;
-	overflow-wrap: normal;
-	overflow-x: auto;
-}
-
-/*
- * The stacked phase of the connected account: the row wraps and the value takes the line below its label, which is the geometry the stacked rungs in `invoice.css` are measured against.
+ * The stacked phase of the connected account and of the balance: the row wraps and the value takes the line below its label, which is the geometry the stacked rungs in `invoice.css` are measured against.
  */
 .pay-account.fit-stacked-12,
 .pay-account.fit-stacked-11,
-.pay-account.fit-stacked-10 {
+.pay-account.fit-stacked-10,
+.pay-balance.fit-stacked-12,
+.pay-balance.fit-stacked-11,
+.pay-balance.fit-stacked-10 {
 	flex-wrap: wrap;
 }
 
 .pay-account.fit-stacked-12 .pay-account-value,
 .pay-account.fit-stacked-11 .pay-account-value,
-.pay-account.fit-stacked-10 .pay-account-value {
+.pay-account.fit-stacked-10 .pay-account-value,
+.pay-balance.fit-stacked-12 .pay-balance-value,
+.pay-balance.fit-stacked-11 .pay-balance-value,
+.pay-balance.fit-stacked-10 .pay-balance-value {
 	flex-basis: 100%;
 }
 

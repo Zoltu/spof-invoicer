@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
+import { fakeProbe } from "./helpers/layout-probe.mjs";
 import { ZEC_PAYEE, XMR_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
 import { readSymbol } from "./helpers/qr-reader.mjs";
@@ -49,7 +50,10 @@ import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 
-const TOTAL_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
+/**
+ * The render options every case in this suite builds on: a renderer requires the release of what it subscribed to, and the cases that hold one override this placeholder with their own.
+ */
+const TOTAL_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null, onRelease: () => {} };
 
 function line(overrides = {}) {
 	return { description: "Design work", quantity: "2", unitPrice: "150", ...overrides };
@@ -509,6 +513,31 @@ test("renderRoute switches views and keeps hostile share text inert", () => {
 	}
 });
 
+test("a release that throws neither strands the registration behind it nor undoes the render that replaced it", () => {
+	// The container promotes the registration it holds before it runs the dropped document's release, so a release that fails cannot leave the next document's release unpromoted — or run the failing one again — and the route that already rendered is not thrown away for a fault in the one it replaced.
+	const fake = installInteractiveDocument();
+	try {
+		const shell = mountShell(document.createElement("div"));
+		const released = [];
+		shell.setContent(document.createElement("p"));
+		shell.setContentRelease(() => {
+			throw new Error("the old document's release failed");
+		});
+		// The registration runs when the next document takes the container, so this render is the one that promotes the failing release into the live slot.
+		shell.setContent(document.createElement("p"));
+		shell.setContentRelease(() => released.push("second"));
+		const third = document.createElement("p");
+		assert.doesNotThrow(() => shell.setContent(third), "a release that fails is reported rather than thrown at the render that replaced it");
+		assert.equal(shell.content.children[0], third, "so the document the route just built is the one on screen");
+		assert.match(textOf(shell.notice), /Releasing the previous view failed: the old document's release failed/, "and the failure is named in the notice region");
+
+		shell.setContent(document.createElement("p"));
+		assert.deepEqual(released, ["second"], "the registration behind a failing release is still promoted, so it runs when the next route takes the container");
+	} finally {
+		fake.restore();
+	}
+});
+
 test("a view renderer that throws leaves a notice, not a blank or stale document", () => {
 	const fake = installInteractiveDocument();
 	try {
@@ -750,6 +779,52 @@ test("a normal invoice opens the share dialog with the URL and the blob", () => 
 	}
 });
 
+test("the create view hands back the section it drew, and a rebuild releases the one it replaced", () => {
+	// The section drawn for a created invoice outlives the submit that drew it, so this view is one of the owners that hands its fitting back: the surface replacing the view stops it, and a section a rebuild replaces is stopped as it goes, after its replacement exists.
+	const fake = installInteractiveDocument();
+	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
+	const outstanding = () => probe.targets.length - probe.unsubscribed.length;
+	try {
+		const releases = [];
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder(), fit: probe, onRelease: (release) => releases.push(release) });
+		assert.equal(releases.length, 1, "the view registers one release as it renders");
+		assert.equal(probe.targets.length, 0, "and has taken nothing before an invoice is built");
+		setControl(view, "payeeName", "Studio Example");
+		setControl(view, "payeeAddress", PAYEE);
+		setControl(view, "item-0-description", "Design work");
+		setControl(view, "item-0-quantity", "2");
+		setControl(view, "item-0-unitPrice", "150");
+		view.children[2].dispatch("submit");
+		const drawn = probe.targets.length;
+		assert.ok(drawn > 0, "the section drawn for the created invoice takes a subscription for each value a wallet takes verbatim");
+		assert.equal(outstanding(), drawn, "and holds all of them");
+
+		// A rebuild that throws before it has a section of its own leaves the one on screen exactly as it was: releasing the live section first would leave a visible, unfitted one behind, and the failure has to hand back what it took instead.
+		const createElement = document.createElement;
+		document.createElement = (tag) => {
+			if (tag === "footer") throw new Error("the section was refused");
+			return createElement.call(document, tag);
+		};
+		try {
+			assert.throws(() => view.children[2].dispatch("submit"), /the section was refused/, "a submit whose section cannot be drawn fails");
+		} finally {
+			document.createElement = createElement;
+		}
+		assert.equal(outstanding(), drawn, "the section on screen keeps every subscription it holds");
+		const failed = probe.targets.slice(drawn);
+		assert.ok(failed.length > 0, "while the failed build had taken some of its own");
+		for (const target of failed) assert.ok(probe.unsubscribed.includes(target), "and handed every one of them back");
+
+		const replaced = probe.targets.slice(0, drawn);
+		view.children[2].dispatch("submit");
+		for (const target of replaced) assert.ok(probe.unsubscribed.includes(target), "a rebuild that does draw one releases every subscription of the section it replaced");
+		assert.equal(outstanding(), drawn, "leaving only the subscriptions of the section now on screen");
+		releases[0]();
+		assert.equal(outstanding(), 0, "and the view's own release gives back the section still on screen");
+	} finally {
+		fake.restore();
+	}
+});
 test("an oversized invoice is refused with a notice instead of an uncaught throw", () => {
 	const fake = installInteractiveDocument();
 	try {

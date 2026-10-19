@@ -65,3 +65,49 @@ export function selectorWeight(selector) {
 	const elements = (selector.match(/(?:^|[\s>+~])[a-zA-Z][\w-]*/g) ?? []).length;
 	return classLike * 100 + elements;
 }
+
+/** The width of a U.S. Letter page, the one page size `print.css` declares, in inches. */
+const LETTER_WIDTH_IN = 8.5;
+
+/** The CSS pixels an inch the printed page assumes, which is the 96dpi reference the rest of the page is laid out against. */
+const CSS_PX_PER_IN = 96;
+
+/** CSS pixels per point at that reference, derived from the inch both geometries already share rather than stated as a fraction of its own: a point is 1/72in. */
+const PX_PER_POINT = CSS_PX_PER_IN / 72;
+
+/**
+ * The advance of one character in the widest common monospace face a printer substitutes, in em: Courier and DejaVu Mono are about 0.602em, so two decimal places bound them.
+ *
+ * It is the one figure of this reader no stylesheet states — a page's geometry is in `print.css`, but a typeface's advance is not — so it is this reader's own statement of the printed bound rather than a reading of the module's constant, and `printFitRung` is held to it from both sides at every rung: a value of exactly the characters this bound fits prints at that rung, and one character more does not.
+ */
+const PRINTED_MONO_ADVANCE_EM = 0.62;
+
+/**
+ * The width of the line a printed payment value is laid out on, in CSS pixels, read from a print stylesheet's own `@page` block: a Letter page's width less the margin the block declares on each side, at the CSS pixels an inch the page assumes.
+ */
+export function printedLinePx(printCss) {
+	const page = ruleBody(printCss, "@page");
+	assert.ok(page !== undefined, "print.css declares the page block a printed value is laid out in");
+	const size = String(declaration(page, "size") ?? "").trim();
+	assert.equal(size, "Letter", `print.css declares a page size this reader knows, not ${JSON.stringify(size)}`);
+	const margin = /^([\d.]+)in$/.exec(String(declaration(page, "margin") ?? "").trim());
+	assert.ok(margin !== null, "print.css states its page margin in inches, which is the geometry a printed value is sized against");
+	return (LETTER_WIDTH_IN - 2 * Number(margin[1])) * CSS_PX_PER_IN;
+}
+
+/** How many monospace characters a printed value set at `points` fits on that line: its width in CSS pixels against one character's advance, which is the em bound converted to pixels at the point size. */
+export function printedCharactersAt(printCss, points) {
+	return Math.floor(printedLinePx(printCss) / (points * PX_PER_POINT * PRINTED_MONO_ADVANCE_EM));
+}
+
+/**
+ * The print rung a value of `characters` length earns on the page `printCss` describes, walking the module's own `ladder`: the largest sized rung whose line holds the value, or the rung that wraps when even the last one does not.
+ * The break points come from the stylesheet's geometry rather than from the module's arithmetic, so a width or a unit stated wrongly on the module's side fails a suite rather than being transcribed into it.
+ */
+export function expectedPrintRung(printCss, ladder, characters) {
+	for (const rung of ladder.print) {
+		if (rung.wraps || characters > printedCharactersAt(printCss, rung.points)) continue;
+		return rung.rung;
+	}
+	return ladder.print[ladder.print.length - 1].rung;
+}

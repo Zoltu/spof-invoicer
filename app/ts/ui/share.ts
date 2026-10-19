@@ -140,14 +140,14 @@ export type ShareDialogHandle = OverlayHandle;
  * Every string is a text child, never markup.
  */
 export function createShareDialog(bundle: ShareBundle, options: ShareDialogOptions = {}): ShareDialogHandle {
-	return createOverlay((close) => buildShareDialog(bundle, options.clipboard ?? null, close), { onClose: options.onClose });
+	return createOverlay((close) => ({ element: buildShareDialog(bundle, options.clipboard ?? null, close) }), { onClose: options.onClose });
 }
 
 /**
  * Open the share dialog over the page: build it, mount it on `document.body`, hide the page behind it from assistive tech and pointer/keyboard focus, move focus into it, and on close remove it, un-hide the page, and return focus to whatever had it.
  */
 export function openShareDialog(bundle: ShareBundle, options: ShareDialogOptions = {}): ShareDialogHandle {
-	return openOverlay((close) => buildShareDialog(bundle, options.clipboard ?? null, close), { onClose: options.onClose });
+	return openOverlay((close) => ({ element: buildShareDialog(bundle, options.clipboard ?? null, close) }), { onClose: options.onClose });
 }
 
 /** The dialog's own element: its content, its labelled close control, and its Done control. */

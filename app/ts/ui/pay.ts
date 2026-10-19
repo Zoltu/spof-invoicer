@@ -4,14 +4,13 @@
  * The panel is the only place the wallet is reached from, and it holds the app's central guarantee: nothing touches a provider until the payer clicks.
  * The panel is refused — with a notice, touching no provider — when this window was opened by another page that still holds a handle to it, and when this invoice's payment has already been claimed, so a reopened panel cannot start a second broadcast.
  * The page may be displayed inside another page's frame on purpose, because some wallet hosts embed the invoice in their own page: framing is accepted as a risk rather than refused, and the payer's own click plus the per-invoice claim are what still bound a host that overlays or drives the Pay control.
- * The opener refusal is a client-side check on `window.opener`, an ordinary property a page can replace, so it is best-effort coverage of a cross-origin opener; what the confidentiality of the invoice fragment rests on is the dedicated-origin rule in README.md's "Open the app", not the refusal.
  * Opening the panel computes the transfer from the validated invoice and renders it — asset, amount, recipient, network — and that is all that happens on the Pay click; discovery, connection, the chain check, the balance read, and the transaction itself all wait for the payer's own "Connect wallet & pay".
  *
  * What the flow *does* lives in `ui/pay-flow.ts`, which is free of the DOM and driven directly by tests; this module owns only how each of its states is drawn and which control maps to which step.
  * A `failed` frame — nothing was broadcast — offers a full-flow "Try again", while the ambiguous `send-failed` frame offers a send-only "Try sending again" and an "I already sent it" exit that dismisses the panel without touching the wallet, so a retry after an unclear send cannot blindly re-run the whole flow.
  * Everything the panel shows comes from `wallet/payment.ts` and `wallet/eip1193.ts`: the amount is the model's own total, the recipient is the invoice's validated payee, and a wrong network stops the flow with guidance and a switch control rather than a transaction.
  * The network it names is spelled by `ui/network-labels.ts`'s `networkLabel`, the same spelling the payer's document and the flow's guidance use.
- * The recipient's address and the connected account are values a wallet takes verbatim, so each is handed to `ui/fit-value.ts` rather than left to wrap: that module holds the value on one line at the largest size of its ladder that fits the row, and the panel therefore never breaks or clips an address a payer is checking.
+ * The recipient's address, the connected account, and the wallet's balance are values a wallet states verbatim, so each is handed to `ui/fit-value.ts` rather than left to wrap: that module holds the value on one line at the largest size of its ladder that fits the row, and the panel therefore never breaks or clips an address a payer is checking.
  * All text is a text child of `util/dom.ts`'s `h()`, so no invoice field can become markup, and the transaction hash is shown as plain text with a copy control — the panel deliberately links to no block explorer, since resolving one would mean a network destination the app refuses to have.
  * A provider-derived string that reaches this panel — a wallet's announced label, whether on its own or echoed into a status line — is run through the same display-character pass the notices get, so it cannot carry bidi or invisible characters even if a future caller hands the panel one that `providerInfo` has not already cleaned.
  */
@@ -32,7 +31,7 @@ import {
 	type PaymentReceipt,
 } from "../wallet/payment.js";
 import { copyWithFallback, type ClipboardLike } from "./clipboard.js";
-import { browserLayoutProbe, fitValue, type LayoutProbe } from "./fit-value.js";
+import { fitValue, type LayoutProbe } from "./fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import type { NoticeApi, NoticeTone } from "./notice.js";
 import { openOverlay, type OverlayHandle } from "./overlay.js";
@@ -80,38 +79,41 @@ const REOPEN_MESSAGE = "A payment for this invoice was already attempted from th
 export { UNSUPPORTED_WALLET_MESSAGE };
 
 /**
- * True when another page opened this one and still holds a reference to it (`window.opener`).
- *
- * A same-origin opener can reach into the popup and drive its controls, so the panel is refused there.
- * `window.opener` is a replaceable property, so the check is best-effort and the dedicated-origin rule in README.md's "Open the app" remains the control.
- * A direct navigation — a modern `target="_blank"` link, a pasted URL, a bookmark — carries no opener, and a window with no `opener` at all (a test harness, a worker) is treated as unopened.
- */
-function isOpened(): boolean {
-	if (typeof window === "undefined") return false;
-	const opener = (window as { opener?: unknown }).opener;
-	return opener !== undefined && opener !== null;
-}
-
-/**
  * The refusal notice for a window another page opened, or `null` when the page stands alone.
  *
+ * A same-origin opener can reach into the popup and drive its controls, so the panel is refused there.
  * `window.opener` is an ordinary, replaceable window property, so this refusal is best-effort coverage of a cross-origin opener — one that cannot read the fragment but could drive the controls it holds — not a control an adversarial page is bound by; the load-bearing control remains the dedicated-origin rule in README.md's "Open the app".
+ * A direct navigation — a modern `target="_blank"` link, a pasted URL, a bookmark — carries no opener, and a window with no `opener` at all (a test harness, a worker) is treated as unopened.
  */
 function openerRefusal(): string | null {
-	if (isOpened()) return OPENED_MESSAGE;
-	return null;
+	if (typeof window === "undefined") return null;
+	const opener = (window as { opener?: unknown }).opener;
+	if (opener === undefined || opener === null) return null;
+	return OPENED_MESSAGE;
 }
 
 /** Everything the payment panel needs: where to report, how to copy, and how a value it states measures the box it is drawn in. */
 export interface PayPanelOptions {
 	readonly notice: NoticeApi;
 	readonly clipboard?: ClipboardLike | null;
+	/**
+	 * The probe the panel's fitted values measure the boxes they are drawn in through, or `null` to fit nothing.
+	 * An absent option fits nothing for the same reason: a panel handed no probe has no layout to measure, so its values keep the size the stylesheet states rather than a guess at the environment. The composition root supplies the browser's own probe.
+	 */
 	readonly fit?: LayoutProbe | null;
 }
 
-/** Where a built panel records the teardown of its current rows' fit subscriptions, so the overlay's close runs it. */
-interface PanelFits {
-	stop: () => void;
+/** A built dialog and the way to release the fitting its rows took: the shape `ui/payment-section.ts`'s own handle hands back, and the shape `ui/overlay.ts` takes from a dialog's builder, so a caller holds one kind of teardown from either surface. */
+interface PayDialog {
+	readonly element: HTMLElement;
+	/** Release every fit subscription the panel's rows took, and leave a snapshot that arrives afterwards nothing to rebuild into; a second call does nothing. */
+	stop(): void;
+}
+
+/** The fitting a term's value is handed to: the probe the panel measures through, `null` when the caller asked for none, and the collector the teardown is added to. */
+interface TermFitting {
+	readonly probe: LayoutProbe | null;
+	readonly stops: (() => void)[];
 }
 
 /** The mounted panel: the overlay element plus the one way to dismiss it. */
@@ -139,10 +141,9 @@ export function openPayPanel(invoice: Invoice, options: PayPanelOptions): PayPan
 		options.notice.showNotice(UNSUPPORTED_WALLET_MESSAGE, "error");
 		return null;
 	}
-	// The panel rebuilds its rows on every state change, so the teardown of the rows it holds now is kept where the overlay's close can run it.
-	const fits: PanelFits = { stop: () => {} };
+	// The panel rebuilds its rows on every state change, so the dialog hands back the teardown of the rows it holds: the dialog is what `openOverlay` builds, and the overlay's close runs that teardown as it dismisses.
 	try {
-		return openOverlay((close) => buildPayDialog(invoice, key, options, close, fits), { initialFocus: ".pay-connect", onClose: () => fits.stop() });
+		return openOverlay((close) => buildPayDialog(invoice, key, options, close), { initialFocus: ".pay-connect" });
 	} catch (error) {
 		// The typed refusal `buildPaymentPlan` raises for a family this flow cannot pay must not escape the panel entry; the gate above already covers it, and this keeps the guarantee if the two ever diverge.
 		if (error instanceof UnsupportedPaymentFamilyError) {
@@ -153,19 +154,22 @@ export function openPayPanel(invoice: Invoice, options: PayPanelOptions): PayPan
 	}
 }
 
-/** Build the panel's dialog element. Every wallet call below happens only from a click on its controls. */
-function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions, close: () => void, fits: PanelFits): HTMLElement {
+/** Build the panel's dialog. Every wallet call below happens only from a click on its controls. */
+function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions, close: () => void): PayDialog {
 	const plan = buildPaymentPlan(invoice);
 	const notice = options.notice;
 	const clipboard = options.clipboard ?? null;
-	const fit = options.fit ?? browserLayoutProbe;
+	const fit = options.fit ?? null;
 	// The rows a render builds are dropped by the next one, so the fit subscriptions taken for them are dropped with it rather than left watching a detached row; the summary's own row is built once and lives as long as the dialog, so its subscription is held apart and dropped when the panel closes.
 	const renderFits: (() => void)[] = [];
 	const dialogFits: (() => void)[] = [];
+	// Set by the overlay's close, so a snapshot a wallet call delivers under a dismissed panel rebuilds nothing and takes nothing.
+	let dismissed = false;
 	const stopRenderFits = (): void => {
 		for (const stop of renderFits.splice(0)) stop();
 	};
-	fits.stop = (): void => {
+	const stopFits = (): void => {
+		dismissed = true;
 		for (const stop of [...renderFits.splice(0), ...dialogFits.splice(0)]) stop();
 	};
 	const panelId = `pay-${(panelSequence += 1)}`;
@@ -184,23 +188,41 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 		claimSend: () => claimPayment(key, owner),
 	});
 
-	const dialog = h(
-		"div",
-		{
-			class: "dialog pay-dialog",
-			role: "dialog",
-			"aria-modal": "true",
-			"aria-label": payDialogTitle(plan.invoiceId),
-			tabindex: "-1",
-		},
-		payHeader(plan, close),
-		paySummary(plan, fit, dialogFits),
-		statusRegion,
-		dynamic,
-		h("p", { class: "field-hint" }, "Only your wallet is contacted while this panel is open."),
+	/**
+	 * Run `build`, and release every subscription this dialog has taken so far when it throws.
+	 *
+	 * A subscription is taken as each fitted row is built, so a row after the first that cannot be built — a summary term, an account line, a frame's body — would otherwise leave the rows built before it watching a dialog that is never mounted.
+	 */
+	const releaseOnThrow = <T>(build: () => T): T => {
+		try {
+			return build();
+		} catch (error) {
+			stopFits();
+			throw error;
+		}
+	};
+
+	const dialog = releaseOnThrow(() =>
+		h(
+			"div",
+			{
+				class: "dialog pay-dialog",
+				role: "dialog",
+				"aria-modal": "true",
+				"aria-label": payDialogTitle(plan.invoiceId),
+				tabindex: "-1",
+			},
+			payHeader(plan, close),
+			paySummary(plan, fit, dialogFits),
+			statusRegion,
+			dynamic,
+			h("p", { class: "field-hint" }, "Only your wallet is contacted while this panel is open."),
+		),
 	);
 
 	function render(): void {
+		// A snapshot that arrives after the panel was dismissed — a wallet call the payer closed the panel under — rebuilds nothing: those would be rows of a dialog the page no longer holds, and the fit subscriptions they took would have no path back.
+		if (dismissed) return;
 		stopRenderFits();
 		dynamic.replaceChildren();
 		append(dynamic, panelBody());
@@ -275,7 +297,11 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 	function accountLine(): DomChild {
 		const session = snapshot.session;
 		if (session === null) return null;
-		const value = h("span", { class: "pay-account-value mono" }, toChecksumAddress(session.account));
+		const value = h(
+			"span",
+			{ class: "pay-account-value mono", role: "group", "aria-label": "Connected account", tabindex: "0" },
+			toChecksumAddress(session.account),
+		);
 		const row = h(
 			"p",
 			{ class: "pay-account" },
@@ -286,14 +312,22 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 		return row;
 	}
 
+	/**
+	 * The wallet's balance, drawn as the line it reads as: the words that name it, then the amount and symbol the wallet reported.
+	 * The amount is a span of its own rather than part of the row's text, which is the one structural change a balance needs: a box cannot be a keyboard stop unless it is an element of its own, and a balance the panel cannot draw whole is only readable by arrowing along it.
+	 * The rest of its contract is the panel's other values': the fitted face and rung the ladder states for them, and the role and name that keep the stop meaningful, so the row is fitted exactly as its neighbours are.
+	 */
 	function balanceLine(): DomChild {
 		const balance = snapshot.balance;
 		if (balance === null) return null;
-		return h(
-			"p",
-			{ class: "pay-balance" },
-			`Wallet balance: ${fromBaseUnits(balance, plan.asset.decimals)} ${plan.asset.symbol}`,
+		const value = h(
+			"span",
+			{ class: "pay-balance-value mono", role: "group", "aria-label": "Wallet balance", tabindex: "0" },
+			`${fromBaseUnits(balance, plan.asset.decimals)} ${plan.asset.symbol}`,
 		);
+		const row = h("p", { class: "pay-balance" }, "Wallet balance: ", value);
+		renderFits.push(fitValue({ row, value }, fit));
+		return row;
 	}
 
 	function actionRow(...children: readonly DomChild[]): HTMLElement {
@@ -353,8 +387,8 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 		);
 	}
 
-	render();
-	return dialog;
+	releaseOnThrow(render);
+	return { element: dialog, stop: stopFits };
 }
 
 /**
@@ -384,12 +418,14 @@ function payHeader(plan: PaymentPlan, close: () => void): HTMLElement {
 
 /** What the transaction will send, read off the plan so the panel cannot disagree with the wallet. */
 function paySummary(plan: PaymentPlan, fit: LayoutProbe | null, stops: (() => void)[]): HTMLElement {
+	// The recipient is the summary's one value a wallet takes verbatim, and the probe is handed over as it stands: `null` fits nothing here exactly as it fits nothing in the rows around the summary.
+	const fitting: TermFitting = { probe: fit, stops };
 	return h(
 		"dl",
 		{ class: "pay-summary" },
 		payTerm("Amount due", `${plan.amountText} ${plan.asset.symbol}`, true),
 		payTerm("Asset", `${plan.asset.name} (${plan.asset.symbol})`),
-		payTerm("Recipient", toChecksumAddress(plan.recipient), true, { fit, stops }),
+		payTerm("Recipient", toChecksumAddress(plan.recipient), true, fitting),
 		payTerm("Network", networkLabel(plan.chainId)),
 	);
 }
@@ -397,21 +433,26 @@ function paySummary(plan: PaymentPlan, fit: LayoutProbe | null, stops: (() => vo
 /**
  * One summary term: its label and its value, in a monospace face when the value is one a wallet states — the recipient's address.
  *
- * The recipient's row is handed to `ui/fit-value.ts` together with the place its teardown is kept, because the address is the value a payer compares against their wallet and a run that does not fit its column would be clipped; every other term here is the panel's own reading of the plan and keeps the size the stylesheet states.
+ * The value is a keyboard-reachable scroll container named by its label, the contract `ui/payment-section.ts` gives the invoice's own payment values: a value wider than the panel's column scrolls inside its box and never breaks, focusing it is what lets a keyboard-only user arrow along to the tail, `ui/overlay.ts` counts it among the dialog's focus stops, and `app.css` rings it where the panel would otherwise leave a definition unringed.
+ * The recipient's row is handed to `ui/fit-value.ts` through the fitting it is given, together with the collector its teardown is added to, because the address is the value a payer compares against their wallet and a run that does not fit its column would be clipped; a term handed no fitting is the panel's own reading of the plan and keeps the size the stylesheet states.
  */
 function payTerm(
 	label: string,
 	value: string,
 	mono = false,
-	fitting: { readonly fit: LayoutProbe | null; readonly stops: (() => void)[] } | null = null,
+	fitting: TermFitting | null = null,
 ): HTMLElement {
-	const field = h("dd", { class: mono ? "pay-term-value mono" : "pay-term-value" }, value);
+	const field = h(
+		"dd",
+		{ class: mono ? "pay-term-value mono" : "pay-term-value", role: "group", "aria-label": label, tabindex: "0" },
+		value,
+	);
 	const row = h(
 		"div",
 		{ class: "pay-term" },
 		h("dt", { class: "pay-term-label" }, label),
 		field,
 	);
-	if (fitting !== null && fitting.fit !== null) fitting.stops.push(fitValue({ row, value: field }, fitting.fit));
+	if (fitting !== null) fitting.stops.push(fitValue({ row, value: field }, fitting.probe));
 	return row;
 }

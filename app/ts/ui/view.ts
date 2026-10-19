@@ -17,6 +17,7 @@ import { h } from "../util/dom.js";
 import { boundMessage, messageOf } from "../util/errors.js";
 import { isWalletPayable } from "../wallet/payment.js";
 import type { ClipboardLike } from "./clipboard.js";
+import type { LayoutProbe } from "./fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import type { NoticeApi } from "./notice.js";
 import { renderPaymentSection } from "./payment-section.js";
@@ -40,6 +41,15 @@ export interface ViewOptions {
 	readonly clipboard?: ClipboardLike | null;
 	readonly exportPdf?: ExportPdfHandler;
 	readonly pay?: PayHandler;
+	/**
+	 * The probe the document's fitted values measure through, or `null` to fit nothing and leave each value at the rung its stylesheet states; an absent option fits nothing for the same reason. The composition root supplies the browser's own probe.
+	 */
+	readonly fit?: LayoutProbe | null;
+	/**
+	 * Called once with the release of everything the rendered document subscribed to — the payment section's fitting — so the surface that replaces the document hands it back.
+	 * It is required, not optional: a subscription is not something a later layout report is promised to end, so the surface that drops this document is the only thing that can release it, and a renderer that returned a bare element without one would leave an observer nothing points at. The caller must honour the release it is handed.
+	 */
+	readonly onRelease: (release: () => void) => void;
 }
 
 /** Render the official invoice document. The invoice is validated; the DOM is built once, never from markup. */
@@ -164,25 +174,33 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): HTMLE
 				...view.notes.map((line) => h("p", { class: "note-line" }, line)),
 			);
 
-	const payment = renderPaymentSection(view, options.clipboard ?? null);
+	// The section's fitting is a subscription rather than something that ends by itself, so this document hands its release to the surface that replaces it, and releases it here when the render throws: neither a dropped document nor a failed one leaves an observer behind.
+	const payment = renderPaymentSection(view, options.clipboard ?? null, { fit: options.fit ?? null });
+	try {
+		// The item table can overflow a phone; making its scroll box a named, focusable region lets a keyboard-only user reach the clipped columns, which Safari's scroller auto-focus does not.
+		const document = h(
+			"article",
+			{ class: "invoice-document" },
+			letterhead,
+			parties,
+			h(
+				"div",
+				{ class: "invoice-items-scroll", role: "region", "aria-label": "Line items", tabindex: "0" },
+				itemsTable,
+			),
+			totalsBlock,
+			notes,
+			payment.element,
+		);
 
-	// The item table can overflow a phone; making its scroll box a named, focusable region lets a keyboard-only user reach the clipped columns, which Safari's scroller auto-focus does not.
-	const document = h(
-		"article",
-		{ class: "invoice-document" },
-		letterhead,
-		parties,
-		h(
-			"div",
-			{ class: "invoice-items-scroll", role: "region", "aria-label": "Line items", tabindex: "0" },
-			itemsTable,
-		),
-		totalsBlock,
-		notes,
-		payment,
-	);
-
-	return h("section", { class: "view view-invoice" }, documentActions(invoice, options), document);
+		const rendered = h("section", { class: "view view-invoice" }, documentActions(invoice, options), document);
+		// A caller outside this type system may omit the callback, and a missing release is not a reason to fail the document the payer is waiting for; every TypeScript caller is held to it by the option's type.
+		options.onRelease?.(payment.stop);
+		return rendered;
+	} catch (error) {
+		payment.stop();
+		throw error;
+	}
 }
 
 /**
