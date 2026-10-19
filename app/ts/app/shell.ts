@@ -7,6 +7,7 @@
  *
  * The route→render decision lives in {@link dispatchRoute}, which talks only to the {@link RouteEffects} it is handed and never to the DOM; {@link renderRoute} supplies a shell-backed implementation of those effects, and {@link createDispatcher} adds the memo that keeps a repeated route from rebuilding its view.
  * The view renderers those effects call are the shell's one seam that can throw — the payer's document is built from the invoice's payment link and its symbol — so each render runs behind the boundary `ui/view.ts`'s action runner already gives a click: a failure names itself in the notice region and in the route container rather than leaving the previous route's document, or an empty shell, on screen.
+ * Each renderer returns the document it built carrying the release of everything that document subscribed to (`ui/release.ts`), so the route container reads one value from the document it mounts and keeps no second channel for it.
  *
  * The invoice view's two outward seams — {@link ExportPdfHandler} (the pdf-lib renderer) and {@link PayHandler} (the wallet payment flow) — are carried through {@link BootOptions} and {@link RenderOptions}.
  * {@link viewOptions} supplies both defaults: the pdf-lib renderer bound to the boot's `today`, loaded lazily on the first export so its ~1.4 MB bundle stays out of first load, and the payment panel in ui/pay.ts, which reads nothing but the invoice until the payer clicks to pay, so wiring the default adds no wallet access on load or on render.
@@ -21,6 +22,7 @@ import type { LayoutProbe } from "../ui/fit-value.js";
 import type { NoticeApi, NoticeTone } from "../ui/notice.js";
 import { openPayPanel } from "../ui/pay.js";
 import { INVOICE_LABELS } from "../ui/presentation.js";
+import { NOTHING_TO_RELEASE, releasable, type ReleasableElement } from "../ui/release.js";
 import type { ClipboardLike } from "../ui/share.js";
 import { renderInvoiceView, type ExportPdfHandler, type PayHandler, type ViewOptions } from "../ui/view.js";
 import { h } from "../util/dom.js";
@@ -35,14 +37,14 @@ export interface AppShell extends NoticeApi {
 	readonly root: HTMLElement;
 	readonly notice: HTMLElement;
 	readonly content: HTMLElement;
-	setContent(node: Node): void;
 	/**
-	 * Take the release of the document a renderer is about to mount; it runs when {@link setContent} next takes the route container.
-	 * The container is what drops a document, so it is also what hands back what that document subscribed to, and nothing waits for a layout report to notice that the dropped rows are gone.
-	 * A render that throws never mounts, so its own release runs on its own failure path and the document still on screen keeps its subscriptions.
-	 * The registration is promoted into the live slot before the dropped document's release runs, so a release that fails — reported in the notice region rather than thrown at the renderer that replaced it — cannot strand the registration behind it.
+	 * Replace the route container's document, running the release the document it drops carries.
+	 *
+	 * The container is what drops a document, so it is also what ends what that document subscribed to, and nothing waits for a layout report to notice that the dropped rows are gone.
+	 * The incoming release is promoted into the one release slot before the dropped one runs, so a release that fails — reported in the notice region rather than thrown at the render that already replaced it, which must not be undone for a fault in what it displaced — can neither strand its successor unpromoted nor run a second time on the next route.
+	 * Only a document that reached this call has a release to run: a render that throws never gets here, because the renderer releases its own subscription in its own `catch` before {@link renderGuarded} mounts its error paragraph, whose release is `NOTHING_TO_RELEASE` and so ends nothing.
 	 */
-	setContentRelease(release: () => void): void;
+	setContent(node: ReleasableElement): void;
 	setActiveNav(name: string): void;
 	setOpenControl(node: Node): void;
 }
@@ -90,9 +92,8 @@ export function mountShell(root: HTMLElement): AppShell {
 	const notice = h("div", { class: "notice-region", role: "status" });
 	const content = h("main", { class: "app-content" });
 	root.replaceChildren(h("div", { class: "app" }, header, notice, content));
-	// What the document now in the route container subscribed to, and what the render about to mount registered: the first runs as the second's node takes the container.
-	let contentRelease = (): void => {};
-	let nextContentRelease = (): void => {};
+	// The one release slot: what the document now in the route container subscribed to.
+	let contentRelease = NOTHING_TO_RELEASE;
 
 	function showNotice(message: string, tone: NoticeTone = "info"): void {
 		notice.replaceChildren(
@@ -114,20 +115,16 @@ export function mountShell(root: HTMLElement): AppShell {
 		content,
 		showNotice,
 		clearNotice,
-		setContent(node: Node): void {
+		setContent(node: ReleasableElement): void {
 			content.replaceChildren(node);
-			// The registration is promoted before the dropped document's release runs, so a release that throws can neither keep its successor from being promoted nor be run a second time by the next render; a release that fails is reported in the notice region, because the render that replaced the document has already succeeded and must not be undone for it.
+			// The incoming release is promoted before the dropped document's release runs, so a release that throws can neither keep its successor from being promoted nor be run a second time by the next render; a release that fails is reported in the notice region, because the render that replaced the document has already succeeded and must not be undone for it.
 			const dropped = contentRelease;
-			contentRelease = nextContentRelease;
-			nextContentRelease = (): void => {};
+			contentRelease = node.release;
 			try {
 				dropped();
 			} catch (error) {
 				showNotice(boundMessage(`Releasing the previous view failed: ${messageOf(error)}`, NOTICE_MESSAGE_MAX), "error");
 			}
-		},
-		setContentRelease(release: () => void): void {
-			nextContentRelease = release;
 		},
 		setActiveNav(name: string): void {
 			if (name === "create") {
@@ -190,13 +187,14 @@ export function renderRoute(shell: AppShell, route: Route, options: RenderOption
  *
  * A renderer is a seam that can throw: `ui/presentation.ts`'s `buildInvoiceViewModel` builds the invoice's payment link through `payment/links.ts` and encodes its QR symbol through `util/qr.ts`, and each of those refuses an invoice its own validators do not admit, so a throw would otherwise escape the `hashchange` listener and the boot dispatch with the payer looking at whatever the previous route drew — or, at boot, at an empty container.
  * A failure replaces the route container with a statement of it and reaches the notice region as well, which is announced and is the one part of the chrome the shell always draws; the message is bounded and display-stripped by the notice boundary, exactly as every other notice is.
+ * The renderer that threw has already released what it took before the throw, so the paragraph mounted here subscribed to nothing and states that with `NOTHING_TO_RELEASE`; what the container drops on this path is the previous document, whose own release runs in {@link AppShell.setContent}.
  */
-function renderGuarded(shell: AppShell, label: string, build: () => Node): void {
+function renderGuarded(shell: AppShell, label: string, build: () => ReleasableElement): void {
 	try {
 		shell.setContent(build());
 	} catch (error) {
 		const message = boundMessage(`${label} failed: ${messageOf(error)}`, NOTICE_MESSAGE_MAX);
-		shell.setContent(h("p", { class: "notice notice-error" }, message));
+		shell.setContent(releasable(h("p", { class: "notice notice-error" }, message), NOTHING_TO_RELEASE));
 		shell.showNotice(message, "error");
 	}
 }
@@ -219,7 +217,6 @@ function createViewOptions(shell: AppShell, options: RenderOptions): CreateViewO
 		today: options.today,
 		clipboard: options.clipboard,
 		fit: options.fit,
-		onRelease: (release) => shell.setContentRelease(release),
 	};
 }
 
@@ -237,7 +234,6 @@ function viewOptions(shell: AppShell, options: RenderOptions): ViewOptions {
 		pay: options.pay ?? ((invoice) => {
 			openPayPanel(invoice, { notice: shell, clipboard: options.clipboard ?? null, fit: options.fit });
 		}),
-		onRelease: (release) => shell.setContentRelease(release),
 	};
 }
 

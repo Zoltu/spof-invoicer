@@ -22,6 +22,7 @@ import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import type { NoticeApi } from "./notice.js";
 import { renderPaymentSection } from "./payment-section.js";
 import { buildInvoiceViewModel, type InvoicePartyView } from "./presentation.js";
+import { releasable, type ReleasableElement } from "./release.js";
 import { buildShareBundle, openShareDialog } from "./share.js";
 
 /** The most of an action failure's rendered length the view carries into its notice. */
@@ -45,15 +46,14 @@ export interface ViewOptions {
 	 * The probe the document's fitted values measure through, or `null` to fit nothing and leave each value at the rung its stylesheet states; an absent option fits nothing for the same reason. The composition root supplies the browser's own probe.
 	 */
 	readonly fit?: LayoutProbe | null;
-	/**
-	 * Called once with the release of everything the rendered document subscribed to — the payment section's fitting — so the surface that replaces the document hands it back.
-	 * It is required, not optional: a subscription is not something a later layout report is promised to end, so the surface that drops this document is the only thing that can release it, and a renderer that returned a bare element without one would leave an observer nothing points at. The caller must honour the release it is handed.
-	 */
-	readonly onRelease: (release: () => void) => void;
 }
 
-/** Render the official invoice document. The invoice is validated; the DOM is built once, never from markup. */
-export function renderInvoiceView(invoice: Invoice, options: ViewOptions): HTMLElement {
+/**
+ * Render the official invoice document. The invoice is validated; the DOM is built once, never from markup.
+ *
+ * The element it returns carries the release of everything the document subscribed to — the payment section's fitting — so the surface that drops the document has that release in hand without being handed it separately (`ui/release.ts`).
+ */
+export function renderInvoiceView(invoice: Invoice, options: ViewOptions): ReleasableElement {
 	const view = buildInvoiceViewModel(invoice, options.today);
 
 	// A supplied icon replaces the default brand mark rather than accompanying it, so the letterhead draws exactly one of the two; the icon is the leaf's data URL in an image context, never the document's markup.
@@ -174,7 +174,7 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): HTMLE
 				...view.notes.map((line) => h("p", { class: "note-line" }, line)),
 			);
 
-	// The section's fitting is a subscription rather than something that ends by itself, so this document hands its release to the surface that replaces it, and releases it here when the render throws: neither a dropped document nor a failed one leaves an observer behind.
+	// The section's fitting is a subscription rather than something that ends by itself, so the document this returns carries its release, and releases it here when the render throws: neither a dropped document nor a failed one leaves an observer behind.
 	const payment = renderPaymentSection(view, options.clipboard ?? null, { fit: options.fit ?? null });
 	try {
 		// The item table can overflow a phone; making its scroll box a named, focusable region lets a keyboard-only user reach the clipped columns, which Safari's scroller auto-focus does not.
@@ -190,15 +190,13 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): HTMLE
 			),
 			totalsBlock,
 			notes,
-			payment.element,
+			payment,
 		);
 
 		const rendered = h("section", { class: "view view-invoice" }, documentActions(invoice, options), document);
-		// A caller outside this type system may omit the callback, and a missing release is not a reason to fail the document the payer is waiting for; every TypeScript caller is held to it by the option's type.
-		options.onRelease?.(payment.stop);
-		return rendered;
+		return releasable(rendered, payment.release);
 	} catch (error) {
-		payment.stop();
+		payment.release();
 		throw error;
 	}
 }

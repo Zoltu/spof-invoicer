@@ -37,8 +37,9 @@ import type { PayoutAddressForm } from "../wallet/payout-forms.js";
 import { ZCASH_ADDRESS_FORMS } from "../wallet/zcash-address.js";
 import type { LayoutProbe } from "./fit-value.js";
 import type { NoticeApi } from "./notice.js";
-import { renderPaymentSection, type PaymentSectionHandle } from "./payment-section.js";
+import { renderPaymentSection } from "./payment-section.js";
 import { buildInvoiceViewModel } from "./presentation.js";
+import { releasable, type ReleasableElement } from "./release.js";
 import { buildShareBundle, openShareDialog, type ClipboardLike, type ShareBundle } from "./share.js";
 
 /**
@@ -118,7 +119,7 @@ export interface TotalsDisplay {
 	readonly total: string;
 }
 
-/** The seams {@link renderCreateView} needs: a notice sink, the base URL share links are built against, today's date, an optional clipboard, and the surface that takes the view's own release. */
+/** The seams {@link renderCreateView} needs: a notice sink, the base URL share links are built against, today's date, an optional clipboard, and the probe the created invoice's section measures its values through. */
 export interface CreateViewOptions {
 	readonly notice: NoticeApi;
 	readonly baseUrl: string;
@@ -128,11 +129,6 @@ export interface CreateViewOptions {
 	 * The probe the created invoice's section measures its values through, or `null` to fit nothing and leave each value at the rung its stylesheet states; an absent option fits nothing for the same reason. The composition root supplies the browser's own probe.
 	 */
 	readonly fit?: LayoutProbe | null;
-	/**
-	 * Called once with the release of the created invoice's section, so the surface that replaces this view stops its fitting rather than leaving an observer on rows it dropped.
-	 * It is required, not optional: a subscription is not something a later layout report is promised to end, so the surface that drops this view is the only thing that can release it, and a renderer that returned a bare element without one would leave a section nothing points at. The caller must honour the release it is handed.
-	 */
-	readonly onRelease: (release: () => void) => void;
 }
 
 /** A fresh, empty line with a sensible starting quantity. */
@@ -612,8 +608,9 @@ type FormControl = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
  *
  * The DOM is built once; typing only updates the totals text, the line-amount cells, and the share-size note, never re-rendering the form.
  * Structural edits — add, remove, reorder — rebuild the item rows from the state.
+ * The element it returns carries the release of the section drawn for the invoice the payee last built (`ui/release.ts`).
  */
-export function renderCreateView(options: CreateViewOptions): HTMLElement {
+export function renderCreateView(options: CreateViewOptions): ReleasableElement {
 	let state = emptyFormState(options.today);
 	const errorsByKey = new Map<string, HTMLElement>();
 	const amountCells: HTMLElement[] = [];
@@ -662,7 +659,7 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	// The created invoice's section, drawn in this view rather than only in the share dialog: a payee who has just built an invoice can pay it, or copy its link, address, and amount, without opening their own share link.
 	const createdPayment = h("div", { class: "created-payment", hidden: true });
 	// The section drawn here last, so the next one stops its fitting instead of leaving an observer on rows this view has replaced.
-	let createdSection: PaymentSectionHandle | null = null;
+	let createdSection: ReleasableElement | null = null;
 
 	function syncTotals(): void {
 		const symbol = requireAsset(state.assetId).symbol;
@@ -797,9 +794,9 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	 */
 	function showCreatedPayment(invoice: Invoice): void {
 		const next = renderPaymentSection(buildInvoiceViewModel(invoice, options.today), options.clipboard ?? null, { fit: options.fit ?? null });
-		createdSection?.stop();
+		createdSection?.release();
 		createdSection = next;
-		createdPayment.replaceChildren(next.element);
+		createdPayment.replaceChildren(next);
 		createdPayment.removeAttribute("hidden");
 	}
 
@@ -1064,17 +1061,17 @@ export function renderCreateView(options: CreateViewOptions): HTMLElement {
 	sync();
 	syncPayoutWarning();
 	syncIconPreview();
-	// The created invoice's section outlives the submit that drew it, so this view hands back the way to release it: the surface that replaces this view stops the section's fitting instead of leaving an observer on rows it dropped.
-	// A caller outside this type system may omit the callback, and a missing release is not a reason to fail the view the payee is typing into; every TypeScript caller is held to it by the option's type.
-	options.onRelease?.(() => createdSection?.stop());
-
-	return h(
-		"section",
-		{ class: "view view-create" },
-		h("h1", { class: "view-title" }, "Create an invoice"),
-		h("p", { class: "view-intro" }, "Fill in your details and line items. Totals update as you type; the share link stays on this device."),
-		form,
-		createdPayment,
+	// The created invoice's section outlives the submit that drew it, so the element this returns carries the release of that section: the surface that replaces this view releases the fitting that would otherwise watch rows the page has dropped, and the release reads the section in hand when it runs, which is the one the payee built last.
+	return releasable(
+		h(
+			"section",
+			{ class: "view view-create" },
+			h("h1", { class: "view-title" }, "Create an invoice"),
+			h("p", { class: "view-intro" }, "Fill in your details and line items. Totals update as you type; the share link stays on this device."),
+			form,
+			createdPayment,
+		),
+		() => createdSection?.release(),
 	);
 }
 

@@ -4,9 +4,16 @@
  * A dialog module owns its own content; this module supplies the part every modal needs and no dialog should re-implement: the backdrop, dismissal on Escape, a click on the backdrop, Tab containment (`aria-modal`), hiding the page behind the dialog from assistive tech and from pointer/keyboard focus, and restoring focus afterwards.
  *
  * {@link createOverlay} builds and wires the overlay without mounting it, so a test can drive it against a fake document; {@link openOverlay} mounts it over the page and returns the handle whose `close()` undoes the mount and returns focus to whatever had it.
+ * A dialog reaches this module carrying its release (`ui/release.ts`), exactly as every other subscribing surface returns one, and the overlay runs it as the dialog closes.
  */
 
 import { h } from "../util/dom.js";
+import {
+	NOTHING_TO_RELEASE,
+	releasable,
+	type ReleasableElement,
+	type Release,
+} from "./release.js";
 
 /** How an overlay reports its own dismissal, once. */
 export interface OverlayOptions {
@@ -18,34 +25,24 @@ export interface OverlayOptions {
 	readonly initialFocus?: string;
 }
 
-/** A built (and possibly mounted) overlay: the element plus the one way to dismiss it. */
-export interface OverlayHandle {
-	readonly element: HTMLElement;
-	close(): void;
-}
-
 /**
- * A dialog an overlay wraps: its element, and the way to release whatever the dialog subscribed to while it was built.
+ * A built (and possibly mounted) overlay: the element plus the one way to dismiss it.
  *
- * The release is the dialog's own rather than something handed back through a variable its builder assigns to, so a dialog built behind an overlay cannot be dismissed with a subscription still watching a row the page has dropped.
+ * `element` carries the release of the dialog it wraps, the same value the dialog returned, so a caller whose mount never landed still holds the dialog's own release.
  */
-export interface OverlayDialog {
-	readonly element: HTMLElement;
-	/**
-	 * Stop everything the dialog subscribed to; the overlay runs it once, as the dialog closes.
-	 * A dialog that subscribed to nothing leaves it out. It is the same teardown shape the payment panel and the payment section hand back, so a caller of either holds one kind of release.
-	 */
-	readonly stop?: () => void;
+export interface OverlayHandle {
+	readonly element: ReleasableElement;
+	close(): void;
 }
 
 /**
  * Wrap a dialog in a backdrop and wire its dismissal and focus containment, without mounting it.
  *
- * `buildDialog` is handed the overlay's `close`, so a dialog's own close and done controls route through the same idempotent path as Escape and a backdrop click, and it hands back the dialog's own release beside its element.
+ * `buildDialog` is handed the overlay's `close`, so a dialog's own close and done controls route through the same idempotent path as Escape and a backdrop click, and it returns the dialog carrying the release of everything it subscribed to.
  * Tab is trapped inside the dialog so a keyboard user cannot reach the obscured page and then find Escape unresponsive.
  */
 export function createOverlay(
-	buildDialog: (close: () => void) => OverlayDialog,
+	buildDialog: (close: () => void) => ReleasableElement,
 	options: OverlayOptions = {},
 ): OverlayHandle {
 	let closed = false;
@@ -54,13 +51,21 @@ export function createOverlay(
 		if (closed) return;
 		closed = true;
 		try {
-			dialog.stop?.();
+			dialog.release();
 		} finally {
 			options.onClose?.();
 		}
 	};
 	const dialog = buildDialog(close);
-	const element = h("div", { class: "dialog-backdrop", role: "presentation" }, dialog.element);
+	let backdrop: HTMLElement;
+	try {
+		backdrop = h("div", { class: "dialog-backdrop", role: "presentation" }, dialog);
+	} catch (error) {
+		// The dialog exists before the backdrop that wraps it, so a backdrop that cannot be built would leave a dialog nothing ever dismisses: its release runs here rather than on a surface that is never returned.
+		dialog.release();
+		throw error;
+	}
+	const element = releasable(backdrop, dialog.release);
 
 	element.addEventListener("click", (event) => {
 		if (event.target === element) close();
@@ -70,7 +75,7 @@ export function createOverlay(
 			close();
 			return;
 		}
-		if (event.key === "Tab") trapFocus(event, dialog.element);
+		if (event.key === "Tab") trapFocus(event, dialog);
 	});
 
 	return { element, close };
@@ -81,23 +86,30 @@ export function createOverlay(
  * Closing removes it, un-hides the page, and returns focus to whatever had it.
  */
 export function openOverlay(
-	buildDialog: (close: () => void) => OverlayDialog,
+	buildDialog: (close: () => void) => ReleasableElement,
 	options: OverlayOptions = {},
 ): OverlayHandle {
-	let teardown = (): void => {};
+	let teardown: Release = NOTHING_TO_RELEASE;
 	const handle = createOverlay(buildDialog, {
 		onClose: () => {
 			teardown();
 			options.onClose?.();
 		},
 	});
-	teardown = mountOverlay(handle.element);
-	focusFirst(handle.element, options.initialFocus);
+	try {
+		teardown = mountOverlay(handle.element);
+		focusFirst(handle.element, options.initialFocus);
+	} catch (error) {
+		// A dialog built behind an overlay that never mounted is a dialog no dismissal will ever reach, so this window releases what it built — the undo of whatever part of the mount landed, then the dialog's own release — before the failure reaches the caller that asked to open it.
+		teardown();
+		handle.element.release();
+		throw error;
+	}
 	return handle;
 }
 
 /** Append the overlay to the page and return the undo: un-hide the background, remove it, refocus. */
-function mountOverlay(element: HTMLElement): () => void {
+function mountOverlay(element: HTMLElement): Release {
 	const previouslyFocused = activeElement();
 	if (typeof document !== "undefined") document.body?.append(element);
 	const restoreBackground = hideBackground(element);
@@ -186,10 +198,10 @@ function focusFirst(element: HTMLElement, selector?: string): void {
  * Hide every body child but `overlay` from assistive tech and from focus, for as long as the dialog is open.
  * Returns the undo: each element's previous `aria-hidden` is restored and the temporary `inert` is dropped, so a background element that was already hidden (or already inert) keeps its state.
  */
-function hideBackground(overlay: HTMLElement): () => void {
-	if (typeof document === "undefined") return () => {};
+function hideBackground(overlay: HTMLElement): Release {
+	if (typeof document === "undefined") return NOTHING_TO_RELEASE;
 	const body = document.body ?? null;
-	if (body === null) return () => {};
+	if (body === null) return NOTHING_TO_RELEASE;
 	const previous: {
 		readonly element: HTMLElement;
 		readonly ariaHidden: string | null;

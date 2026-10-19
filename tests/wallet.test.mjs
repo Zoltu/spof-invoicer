@@ -52,10 +52,8 @@ const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 const PAYEE_LOWER = PAYEE.toLowerCase();
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const USDC_TOTAL = 357000000n;
-/**
- * The render options every case in this suite builds on: a renderer requires the release of what it subscribed to, and the cases that hold one override this placeholder with their own.
- */
-const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null, onRelease: () => {} };
+/** The render options every case in this suite builds on: the base URL, the invoice date, and no clipboard. */
+const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
 
 /**
  * Every call mints a distinct invoice id, so the in-memory payment latch — keyed by invoice content — does not silently carry between tests as it would not across a page reload.

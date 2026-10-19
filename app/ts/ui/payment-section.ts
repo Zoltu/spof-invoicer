@@ -6,7 +6,7 @@
  *
  * The amount, the address, and the link are values a wallet takes verbatim, so each is drawn as ordinary text with an exact-copy control beside it: a payer selects and copies the value the way they would any other text on the page — one term per block, so selecting the whole section yields a label and a value per line — while one click on the control hands the clipboard that string itself rather than whatever a selection happened to span.
  * The stylesheet holds each value on one run, so neither the layout nor a text selection can put a line break inside a value that has none, and because a run that does not fit its column would be clipped, each verbatim value is handed to `ui/fit-value.ts`: that module sets the value at the largest rung of its size ladder that holds it on one line, and leaves the residual rung's visible scrollbar for a value no rung holds.
- * The fitting is a subscription of its own, so the section hands back the way to drop it, and the surface that mounted the section is what calls it: a surface that replaces the section — the create screen rebuilding it for the next invoice — stops the one it is about to discard, and a surface that drops the whole document, as the router replaces the payer's document, stops the section as it hands its own teardown over. Nothing here waits for a later layout report to notice that the rows are gone, because no probe promises one.
+ * The fitting is a subscription of its own, so the section returns the `<footer>` it built carrying that release (`ui/release.ts`), and the surface that mounted the section is what runs it: a surface that replaces the section — the create screen rebuilding it for the next invoice — releases the one it is about to discard, and a surface that drops the whole document, as the router replaces the payer's document, carries the section's release on the document it returns. Nothing here waits for a later layout report to notice that the rows are gone, because no probe promises one.
  * The control's confirmation is a status line with a lifecycle: it is cleared after a pause so the section returns to its uniform resting height, and a repeated copy of the same value blanks the line first and re-sets it, so the change is one an assistive technology announces rather than an identical rewrite it may pass over.
  *
  * The print path is given a second presentation of the same string.
@@ -20,6 +20,7 @@ import type { QrMatrix } from "../util/qr.js";
 import { copyWithFallback, type ClipboardLike, type CopyStatus } from "./clipboard.js";
 import { fitValue, printFitRung, type LayoutProbe } from "./fit-value.js";
 import type { InvoicePaymentTermView, InvoiceViewModel } from "./presentation.js";
+import { releasable, type ReleasableElement } from "./release.js";
 
 /**
  * The pause a copy confirmation stays up before its status clears, so a copied term's row returns to the height of the plain rows beside it rather than keeping the confirmation's line for the rest of the session.
@@ -103,29 +104,22 @@ export interface PaymentSectionOptions {
 	readonly fit?: LayoutProbe | null;
 }
 
-/** A rendered payment section: the element to mount, and the way to release the fitting its values took. */
-export interface PaymentSectionHandle {
-	readonly element: HTMLElement;
-	/** Stop fitting every value in the section, so no observer outlives it; a second call does nothing. */
-	stop(): void;
-}
-
 /**
  * The section the view model describes: its payment title, one term per entry in the model's own list, and the symbol of the link those terms state.
  *
  * The symbol is drawn under the terms that state the same URI, never as a second statement of it: the link text the term above it draws is what a screen reader reads and a payer can select.
  * Every value a wallet takes verbatim is fitted through the probe the options state, and a caller that wires none — or hands `null` — keeps the size the stylesheet states.
- * The section hands back the release of that fitting, and its callers own it from then on: a build that throws part-way — a term that cannot be drawn, a symbol the encoder refuses — releases the subscriptions the terms built before it, and a caller releases the section's own fitting when it drops the section, so no observer outlives the rows it was taken for.
+ * The `<footer>` this returns carries the release of that fitting, and its callers run it from then on: a build that throws part-way — a term that cannot be drawn, a symbol the encoder refuses — releases the subscriptions the terms built before it, and a caller releases the section's fitting when it drops the section, so no observer outlives the rows it was taken for.
  */
 export function renderPaymentSection(
 	view: InvoiceViewModel,
 	clipboard: ClipboardLike | null,
 	options: PaymentSectionOptions = {},
-): PaymentSectionHandle {
+): ReleasableElement {
 	const fit = options.fit ?? null;
 	const fits: (() => void)[] = [];
-	const stop = (): void => {
-		for (const release of fits.splice(0)) release();
+	const release = (): void => {
+		for (const stop of fits.splice(0)) stop();
 	};
 	try {
 		const element = h(
@@ -135,9 +129,9 @@ export function renderPaymentSection(
 			h("dl", { class: "payment-list" }, ...view.payment.map((term) => paymentTerm(term, clipboard, fit, fits))),
 			qrBlock(view.paymentQr),
 		);
-		return { element, stop };
+		return releasable(element, release);
 	} catch (error) {
-		stop();
+		release();
 		throw error;
 	}
 }
@@ -146,7 +140,7 @@ export function renderPaymentSection(
  * One payment-details term: its label and, in the `<dd>`, the value {@link paymentValue} renders, in a monospace face when the term is one a wallet takes verbatim.
  *
  * A verbatim value is fitted with the row it is drawn in, because the row is the layout the choice is measured against — the label's rail, the value's column, and the copy control all decide how much width the run has — and the row is also the element the chosen rung's class is written on.
- * The value element is the one {@link paymentValue} just built and handed back, so the fit is taken against the element itself rather than a search of the row for a class name that could be renamed out from under it; the teardown of that fit is added to `fits`, which the section's own handle drains.
+ * The value element is the one {@link paymentValue} just built and handed back, so the fit is taken against the element itself rather than a search of the row for a class name that could be renamed out from under it; the teardown of that fit is added to `fits`, which the section's own release drains.
  */
 function paymentTerm(
 	term: InvoicePaymentTermView,

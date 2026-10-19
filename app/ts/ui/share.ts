@@ -9,6 +9,8 @@
  * {@link createShareDialog} builds the overlay without mounting it, so the dialog is testable without a browser; {@link openShareDialog} mounts it over the page.
  * Every string reaches the page as a text child of `util/dom.ts`'s `h()`, so a share payload can never become markup.
  *
+ * The dialog subscribes to nothing, so it states that with `NOTHING_TO_RELEASE` rather than leaving a release out: the overlay takes a dialog of the same shape every other subscribing surface returns (`ui/release.ts`).
+ *
  * The clipboard helper is `ui/clipboard.ts`'s, re-exported here so this module's callers keep a single import site.
  */
 
@@ -18,6 +20,7 @@ import { buildShareUrl } from "../invoice/share.js";
 import { h } from "../util/dom.js";
 import { copyText, copyWithFallback, type ClipboardLike } from "./clipboard.js";
 import { createOverlay, openOverlay, type OverlayHandle } from "./overlay.js";
+import { NOTHING_TO_RELEASE, releasable, type ReleasableElement } from "./release.js";
 
 /** The clipboard write helper and its `ClipboardLike` shape, re-exported from the neutral `ui/clipboard.ts` module. */
 export { copyText, type ClipboardLike };
@@ -140,18 +143,18 @@ export type ShareDialogHandle = OverlayHandle;
  * Every string is a text child, never markup.
  */
 export function createShareDialog(bundle: ShareBundle, options: ShareDialogOptions = {}): ShareDialogHandle {
-	return createOverlay((close) => ({ element: buildShareDialog(bundle, options.clipboard ?? null, close) }), { onClose: options.onClose });
+	return createOverlay((close) => buildShareDialog(bundle, options.clipboard ?? null, close), { onClose: options.onClose });
 }
 
 /**
  * Open the share dialog over the page: build it, mount it on `document.body`, hide the page behind it from assistive tech and pointer/keyboard focus, move focus into it, and on close remove it, un-hide the page, and return focus to whatever had it.
  */
 export function openShareDialog(bundle: ShareBundle, options: ShareDialogOptions = {}): ShareDialogHandle {
-	return openOverlay((close) => ({ element: buildShareDialog(bundle, options.clipboard ?? null, close) }), { onClose: options.onClose });
+	return openOverlay((close) => buildShareDialog(bundle, options.clipboard ?? null, close), { onClose: options.onClose });
 }
 
-/** The dialog's own element: its content, its labelled close control, and its Done control. */
-function buildShareDialog(bundle: ShareBundle, clipboard: ClipboardLike | null, close: () => void): HTMLElement {
+/** The dialog's own element: its content, its labelled close control, and its Done control. It subscribes to nothing, so it states `NOTHING_TO_RELEASE` rather than leaving a release out. */
+function buildShareDialog(bundle: ShareBundle, clipboard: ClipboardLike | null, close: () => void): ReleasableElement {
 	const body = h("div", { class: "dialog-body" });
 	renderShareOptions(body, bundle, clipboard);
 
@@ -160,12 +163,15 @@ function buildShareDialog(bundle: ShareBundle, clipboard: ClipboardLike | null, 
 	const done = h("button", { type: "button", class: "btn btn-primary" }, "Done");
 	done.addEventListener("click", close);
 
-	return h(
-		"div",
-		{ class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": "Share this invoice" },
-		h("div", { class: "dialog-header" }, h("h2", { class: "dialog-title" }, "Share this invoice"), closeButton),
-		body,
-		h("p", { class: "field-hint" }, "Nothing leaves this page — both options are generated on your device."),
-		h("div", { class: "dialog-footer" }, done),
+	return releasable(
+		h(
+			"div",
+			{ class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": "Share this invoice" },
+			h("div", { class: "dialog-header" }, h("h2", { class: "dialog-title" }, "Share this invoice"), closeButton),
+			body,
+			h("p", { class: "field-hint" }, "Nothing leaves this page — both options are generated on your device."),
+			h("div", { class: "dialog-footer" }, done),
+		),
+		NOTHING_TO_RELEASE,
 	);
 }

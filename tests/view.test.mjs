@@ -21,12 +21,13 @@ import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
 import { copyControlClick, renderPaymentSection } from "../app/js/ui/payment-section.js";
 import { buildInvoiceViewModel, formatInvoiceDate, invoiceStatus, money } from "../app/js/ui/presentation.js";
+import { NOTHING_TO_RELEASE, releasable } from "../app/js/ui/release.js";
 import { buildShareBundle, createShareDialog, openShareDialog } from "../app/js/ui/share.js";
 import { FIT_LADDER } from "../app/js/ui/fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES } from "../app/js/ui/messages.js";
 import { CHAIN_NAMES, chainName, networkLabel, requireNamedNetworks } from "../app/js/ui/network-labels.js";
-import { createOverlay } from "../app/js/ui/overlay.js";
-import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
+import { createOverlay, openOverlay } from "../app/js/ui/overlay.js";
+import { openPayPanel, UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
 import { h } from "../app/js/util/dom.js";
@@ -36,10 +37,8 @@ import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/**
- * The render options every case in this suite builds on: a renderer requires the release of what it subscribed to, and the cases that hold one override this placeholder with their own.
- */
-const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null, onRelease: () => {} };
+/** The render options every case in this suite builds on: the base URL, the invoice date, and no clipboard. */
+const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
 
 function line(overrides = {}) {
 	return { description: "Design work", quantity: "2", unitPrice: "150", ...overrides };
@@ -363,17 +362,50 @@ test("a render that throws after its payment section is built releases the secti
 	}
 });
 
-test("the payer's document hands its fitting to the surface that replaces it", () => {
+test("the invoice view's element releases the payment section's fitting, and leaves no observer behind", () => {
 	const fake = installInteractiveDocument();
 	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
 	try {
-		const releases = [];
-		renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder(), fit: probe, onRelease: (release) => releases.push(release) });
-		assert.equal(releases.length, 1, "the document registers one release for everything it subscribed to");
+		const view = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder(), fit: probe });
+		assert.equal(typeof view.release, "function", "the document hands back the release it carries");
 		assert.ok(probe.targets.length > 0, "the section took a subscription for each value a wallet takes verbatim");
 		assert.deepEqual(probe.unsubscribed, [], "and holds them while the document stands");
-		releases[0]();
+		view.release();
 		assert.deepEqual(probe.unsubscribed, probe.targets, "the surface that replaces the document hands every one of them back, with no layout report to wait for");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("every surface that subscribes hands its release back on the element it built", () => {
+	// The release travels on the element the surface returns, so a surface that forgot to attach one would leave a live subscription nothing points at: each surface below is asked only for its element, and released through that element.
+	const fake = installInteractiveDocument();
+	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
+	const outstanding = () => probe.targets.length - probe.unsubscribed.length;
+	const assertReleased = (label, element) => {
+		assert.equal(typeof element.release, "function", `${label} hands back the release it carries`);
+		assert.ok(outstanding() > 0, `${label} took a subscription`);
+		element.release();
+		assert.equal(outstanding(), 0, `${label}'s release hands every one of them back`);
+	};
+	try {
+		const model = buildInvoiceViewModel(invoiceFor(), VIEW_OPTIONS.today);
+		assertReleased("the payment section", renderPaymentSection(model, null, { fit: probe }));
+
+		// The panel latch records a send by invoice content for the whole run, so this case opens a panel for an invoice no other case pays.
+		const panel = openPayPanel(invoiceFor({ id: "INV-RELEASE" }), { notice: noticeRecorder(), clipboard: null, fit: probe });
+		assert.ok(panel !== null, "the panel opens for an invoice a wallet can pay");
+		assertReleased("the payment panel", panel.element);
+		panel.close();
+
+		assertReleased("the invoice view", renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder(), fit: probe }));
+
+		const share = createShareDialog(buildShareBundle(invoiceFor(), VIEW_OPTIONS.baseUrl), { clipboard: null });
+		assert.equal(share.element.release, NOTHING_TO_RELEASE, "the share dialog subscribes to nothing and states that rather than leaving a release out");
+		share.element.release();
+
+		const wrapped = createOverlay(() => releasable(h("div", { class: "dialog" }), NOTHING_TO_RELEASE));
+		assert.equal(typeof wrapped.element.release, "function", "an overlay's element carries the release of the dialog it wraps");
 	} finally {
 		fake.restore();
 	}
@@ -611,15 +643,18 @@ test("the overlay's Tab model counts a declared focus stop and no unreadable tab
 	// The Tab ring is the dialog's model of what a browser makes focusable, so a stop a page declares with a non-negative tabindex sits inside it, while a value the platform cannot read is no stop at all.
 	const fake = installInteractiveDocument();
 	try {
-		const overlay = createOverlay(() => ({
-			element: h(
-				"div",
-				{ class: "dialog" },
-				h("button", { type: "button", class: "tab-first" }, "First"),
-				h("span", { class: "tab-value", role: "group", "aria-label": "A value", tabindex: "0" }, "0xabc"),
-				h("button", { type: "button", class: "tab-last" }, "Last"),
+		const overlay = createOverlay(() =>
+			releasable(
+				h(
+					"div",
+					{ class: "dialog" },
+					h("button", { type: "button", class: "tab-first" }, "First"),
+					h("span", { class: "tab-value", role: "group", "aria-label": "A value", tabindex: "0" }, "0xabc"),
+					h("button", { type: "button", class: "tab-last" }, "Last"),
+				),
+				NOTHING_TO_RELEASE,
 			),
-		}));
+		);
 		const first = findAll(overlay.element, (node) => hasClass(node, "tab-first"))[0];
 		const middle = findAll(overlay.element, (node) => hasClass(node, "tab-value"))[0];
 		const last = findAll(overlay.element, (node) => hasClass(node, "tab-last"))[0];
@@ -634,15 +669,18 @@ test("the overlay's Tab model counts a declared focus stop and no unreadable tab
 		assert.equal(document.activeElement, first, "while Tab from the last control still wraps to the first");
 
 		// `tabindex=""` is what this model once read as a stop and a browser does not, and a negative one is programmatically focusable alone: a dialog holding those and one button has that button as its whole ring.
-		const unreadable = createOverlay(() => ({
-			element: h(
-				"div",
-				{ class: "dialog" },
-				h("button", { type: "button", class: "only-stop" }, "Only"),
-				h("span", { class: "empty-tabindex", tabindex: "" }, "no stop"),
-				h("span", { class: "negative-tabindex", tabindex: "-1" }, "programmatic only"),
+		const unreadable = createOverlay(() =>
+			releasable(
+				h(
+					"div",
+					{ class: "dialog" },
+					h("button", { type: "button", class: "only-stop" }, "Only"),
+					h("span", { class: "empty-tabindex", tabindex: "" }, "no stop"),
+					h("span", { class: "negative-tabindex", tabindex: "-1" }, "programmatic only"),
+				),
+				NOTHING_TO_RELEASE,
 			),
-		}));
+		);
 		const only = findAll(unreadable.element, (node) => hasClass(node, "only-stop"))[0];
 		only.focus();
 		unreadable.element.dispatch("keydown", { type: "keydown", key: "Tab", shiftKey: true });
@@ -652,40 +690,90 @@ test("the overlay's Tab model counts a declared focus stop and no unreadable tab
 	}
 });
 
-test("the overlay runs the release a dialog's builder returns as it closes", () => {
-	// A dialog's rows are released by the dialog itself, so the builder hands that release back beside its element rather than leaving it in a variable the caller assigns to; the overlay runs it once, on every dismissal path, beside the caller's own close.
+test("closing an overlay runs its dialog's release exactly once, even when the release throws", () => {
+	// A dialog's rows are released by the dialog itself, so the builder returns its element carrying that release rather than handing it back through a variable the caller assigns to; the overlay runs it once, on every dismissal path, beside the caller's own close.
 	const fake = installInteractiveDocument();
 	try {
 		const released = [];
 		const closed = [];
 		const overlay = createOverlay(
-			() => ({
-				element: h("div", { class: "dialog" }, h("button", { type: "button", class: "dialog-close" }, "Close")),
-				stop: () => released.push("dialog"),
-			}),
+			() => releasable(
+				h("div", { class: "dialog" }, h("button", { type: "button", class: "dialog-close" }, "Close")),
+				() => released.push("dialog"),
+			),
 			{ onClose: () => closed.push("caller") },
 		);
 		overlay.element.dispatch("keydown", { type: "keydown", key: "Escape" });
-		assert.deepEqual(released, ["dialog"], "the release the builder handed back runs as the dialog closes");
+		assert.deepEqual(released, ["dialog"], "the release the dialog carries runs as the dialog closes");
 		assert.deepEqual(closed, ["caller"], "beside the caller's own close");
 		overlay.close();
 		assert.deepEqual(released, ["dialog"], "and a second dismissal runs nothing a second time");
 
 		const afterThrow = [];
+		let runs = 0;
 		const failing = createOverlay(
-			() => ({
-				element: h("div", { class: "dialog" }),
-				stop: () => {
-					throw new Error("the release failed");
-				},
+			() => releasable(h("div", { class: "dialog" }), () => {
+				runs += 1;
+				throw new Error("the release failed");
 			}),
 			{ onClose: () => afterThrow.push("caller") },
 		);
 		assert.throws(() => failing.close(), /the release failed/, "a release that fails is not swallowed");
+		assert.equal(runs, 1, "and it runs exactly once even though it threw");
 		assert.deepEqual(afterThrow, ["caller"], "and the caller's own close still runs behind it, so a dismissal cannot strand the half that unmounts the overlay");
 	} finally {
 		fake.restore();
 	}
+});
+
+test("an overlay whose backdrop cannot be built releases the dialog it already built", () => {
+	// The dialog exists before the backdrop that wraps it, so a backdrop that cannot be built would leave a dialog nothing ever dismisses: its release runs on that failure rather than on a surface never returned.
+	const fake = installInteractiveDocument();
+	const createElement = document.createElement;
+	let created = 0;
+	document.createElement = (tag) => {
+		created += 1;
+		// The dialog's own element is the first one built; the backdrop that wraps it is the second.
+		if (created === 2) throw new Error("the backdrop was refused");
+		return createElement.call(document, tag);
+	};
+	const released = [];
+	try {
+		assert.throws(() => createOverlay(() => releasable(h("div", { class: "dialog" }), () => released.push("dialog"))), /the backdrop was refused/);
+	} finally {
+		document.createElement = createElement;
+		fake.restore();
+	}
+	assert.deepEqual(released, ["dialog"], "the dialog's own release runs on the failed build");
+});
+
+test("an overlay that cannot mount releases the dialog it built, without reporting a dismissal", () => {
+	// A dialog built behind an overlay that never mounted is a dialog no dismissal will ever reach, so the open window runs the release itself; the caller's close is not reported, because no overlay was ever on the page to be dismissed.
+	const fake = installInteractiveDocument();
+	const released = [];
+	let closed = 0;
+	const append = document.body.append.bind(document.body);
+	document.body.append = () => {
+		throw new Error("the body refused the backdrop");
+	};
+	try {
+		assert.throws(
+			() => openOverlay(
+				(close) => {
+					const done = h("button", { type: "button" }, "Done");
+					done.addEventListener("click", close);
+					return releasable(h("div", { class: "dialog" }, done), () => released.push("dialog"));
+				},
+				{ onClose: () => { closed += 1; } },
+			),
+			/the body refused the backdrop/,
+		);
+	} finally {
+		document.body.append = append;
+		fake.restore();
+	}
+	assert.deepEqual(released, ["dialog"], "the dialog's release runs on the failed mount");
+	assert.equal(closed, 0, "and the caller's close is not reported for an overlay that never opened");
 });
 
 test("openShareDialog mounts over the page, hides the background, and restores focus on close", () => {
@@ -1828,7 +1916,7 @@ test("a copy in flight does not write into a payment section the create screen h
 	try {
 		const view = buildInvoiceViewModel(invoiceFor(), VIEW_OPTIONS.today);
 		const clipboard = { writeText: async () => {} };
-		const section = renderPaymentSection(view, clipboard).element;
+		const section = renderPaymentSection(view, clipboard);
 		document.body.append(section);
 		const status = findAll(section, (node) => hasClass(node, "payment-status"))[0];
 		const value = findAll(section, (node) => hasClass(node, "payment-value-verbatim"))[0];
@@ -1848,7 +1936,7 @@ test("a copy in flight does not write into a payment section the create screen h
 
 		// The section is rebuilt while the second copy's confirmation is still in flight.
 		click();
-		document.body.replaceChildren(renderPaymentSection(view, clipboard).element);
+		document.body.replaceChildren(renderPaymentSection(view, clipboard));
 		await drain();
 		await drain();
 		assert.equal(textOf(status), "", "the detached status is not written once its section is gone");

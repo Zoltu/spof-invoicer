@@ -37,6 +37,7 @@ import type { NoticeApi, NoticeTone } from "./notice.js";
 import { openOverlay, type OverlayHandle } from "./overlay.js";
 import { createPayFlow, type PayFlowSnapshot } from "./pay-flow.js";
 import { networkLabel } from "./network-labels.js";
+import { releasable, type ReleasableElement } from "./release.js";
 
 let panelSequence = 0;
 
@@ -103,13 +104,6 @@ export interface PayPanelOptions {
 	readonly fit?: LayoutProbe | null;
 }
 
-/** A built dialog and the way to release the fitting its rows took: the shape `ui/payment-section.ts`'s own handle hands back, and the shape `ui/overlay.ts` takes from a dialog's builder, so a caller holds one kind of teardown from either surface. */
-interface PayDialog {
-	readonly element: HTMLElement;
-	/** Release every fit subscription the panel's rows took, and leave a snapshot that arrives afterwards nothing to rebuild into; a second call does nothing. */
-	stop(): void;
-}
-
 /** The fitting a term's value is handed to: the probe the panel measures through, `null` when the caller asked for none, and the collector the teardown is added to. */
 interface TermFitting {
 	readonly probe: LayoutProbe | null;
@@ -141,7 +135,7 @@ export function openPayPanel(invoice: Invoice, options: PayPanelOptions): PayPan
 		options.notice.showNotice(UNSUPPORTED_WALLET_MESSAGE, "error");
 		return null;
 	}
-	// The panel rebuilds its rows on every state change, so the dialog hands back the teardown of the rows it holds: the dialog is what `openOverlay` builds, and the overlay's close runs that teardown as it dismisses.
+	// The panel rebuilds its rows on every state change, so the dialog returns the release of the rows it holds on its own element, and the overlay's close runs it as it dismisses the panel (`ui/release.ts`).
 	try {
 		return openOverlay((close) => buildPayDialog(invoice, key, options, close), { initialFocus: ".pay-connect" });
 	} catch (error) {
@@ -154,8 +148,12 @@ export function openPayPanel(invoice: Invoice, options: PayPanelOptions): PayPan
 	}
 }
 
-/** Build the panel's dialog. Every wallet call below happens only from a click on its controls. */
-function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions, close: () => void): PayDialog {
+/**
+ * Build the panel's dialog. Every wallet call below happens only from a click on its controls.
+ *
+ * The element it returns carries the release of every fit subscription its rows took, so the overlay it is handed to runs that release as it dismisses the panel.
+ */
+function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions, close: () => void): ReleasableElement {
 	const plan = buildPaymentPlan(invoice);
 	const notice = options.notice;
 	const clipboard = options.clipboard ?? null;
@@ -388,7 +386,7 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 	}
 
 	releaseOnThrow(render);
-	return { element: dialog, stop: stopFits };
+	return releasable(dialog, stopFits);
 }
 
 /**

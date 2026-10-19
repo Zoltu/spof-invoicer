@@ -512,11 +512,11 @@ test("the payment section asks the fitting module about every value a wallet tak
 		const model = buildInvoiceViewModel(evmInvoice(), VIEW_OPTIONS.today);
 		const probe = fakeProbe(() => ({ content: 120, box: 240 }));
 		const section = renderPaymentSection(model, null, { fit: probe });
-		document.body.append(section.element);
+		document.body.append(section);
 		// A document lays a section out only once it is in the page, so the resize a real observer would deliver is the one the test delivers here.
 		probe.fire();
 
-		const rows = findAll(section.element, (node) => hasClass(node, "payment-term"));
+		const rows = findAll(section, (node) => hasClass(node, "payment-term"));
 		assert.equal(rows.length, model.payment.length, "every payment term is one row");
 		assert.deepEqual(
 			rows.map(rungsOf),
@@ -524,11 +524,11 @@ test("the payment section asks the fitting module about every value a wallet tak
 			"each value a wallet takes verbatim is fitted on its own row, and no row of a value it does not take carries a rung",
 		);
 		assert.equal(rows.filter((row) => hasClass(row, "payment-term") && rungsOf(row).length > 0).length, 3, "the amount, the address, and the link");
-		assert.deepEqual(paymentValues(section.element), model.payment.filter((term) => term.verbatim === true).map((term) => term.value), "and the values the copy controls read are unchanged by the fit");
+		assert.deepEqual(paymentValues(section), model.payment.filter((term) => term.verbatim === true).map((term) => term.value), "and the values the copy controls read are unchanged by the fit");
 
 		// The fitting outlives the render that started it, so the section hands back the way to drop it: a create screen rebuilding the section would otherwise leave one observer per fitted row watching a dropped subtree.
 		assert.equal(probe.unsubscribed.length, 0, "the section holds its subscriptions while it is mounted");
-		section.stop();
+		section.release();
 		assert.equal(probe.unsubscribed.length, probe.targets.length, "and its own teardown hands every one of them back");
 	} finally {
 		fake.restore();
@@ -554,21 +554,21 @@ test("a payment section rendered with no layout probe keeps the base rung", () =
 	try {
 		const model = buildInvoiceViewModel(evmInvoice(), VIEW_OPTIONS.today);
 		const section = renderPaymentSection(model, null);
-		document.body.append(section.element);
-		const rows = findAll(section.element, (node) => hasClass(node, "payment-term"));
+		document.body.append(section);
+		const rows = findAll(section, (node) => hasClass(node, "payment-term"));
 		assert.deepEqual(rows.map(rungsOf), rows.map(() => []), "with nothing able to measure the page, every row keeps the size the stylesheet states");
 		assert.equal(rows[0].attributes.class, "payment-term", "no rung class is written when no measurement can be taken");
 
 		// `fit: null` is how a caller asks for no fitting at all, so it takes no probe and no subscription rather than falling back to the browser's.
 		const unfitted = renderPaymentSection(model, null, { fit: null });
-		document.body.append(unfitted.element);
+		document.body.append(unfitted);
 		assert.deepEqual(
-			findAll(unfitted.element, (node) => hasClass(node, "payment-term")).map(rungsOf),
+			findAll(unfitted, (node) => hasClass(node, "payment-term")).map(rungsOf),
 			rows.map(() => []),
 			"and asking for no fitting leaves the stylesheet's rung alone just as a layout-less page does",
 		);
-		section.stop();
-		unfitted.stop();
+		section.release();
+		unfitted.release();
 	} finally {
 		fake.restore();
 	}
@@ -579,13 +579,13 @@ test("each print twin carries the rung its length earns", () => {
 	try {
 		const wide = unifiedOfBytes(189);
 		assert.equal(wide.length, MAX_ZCASH_ADDRESS_LENGTH, "the fixture is the widest address the Zcash validator accepts");
-		const zec = renderPaymentSection(buildInvoiceViewModel(zecInvoice(wide), VIEW_OPTIONS.today), null).element;
+		const zec = renderPaymentSection(buildInvoiceViewModel(zecInvoice(wide), VIEW_OPTIONS.today), null);
 		const zecTwins = findAll(zec, (node) => hasClass(node, "payment-value-print"));
 		assert.equal(textOf(zecTwins[0]), wide, "the address's print twin is the address itself");
 		assert.deepEqual(printRungsOf(zecTwins[0]), [expectedPrintRung(PRINT_CSS, FIT_LADDER, wide.length)], "a value past the print floor takes the one rung that wraps");
 		assert.equal(printRungsOf(zecTwins[1]).length, 1, "the amount's twin is sized from its own length");
 
-		const evm = renderPaymentSection(buildInvoiceViewModel(evmInvoice(), VIEW_OPTIONS.today), null).element;
+		const evm = renderPaymentSection(buildInvoiceViewModel(evmInvoice(), VIEW_OPTIONS.today), null);
 		const evmTwins = findAll(evm, (node) => hasClass(node, "payment-value-print"));
 		assert.equal(textOf(evmTwins[0]), PAYEE, "a 42-character address carries its own twin");
 		assert.deepEqual(
