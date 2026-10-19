@@ -793,7 +793,7 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 	 * The replacement is built before the section it replaces is released, so a build that throws leaves the section on screen — its fitting included — exactly as it was, rather than releasing the live section and leaving a visible one unfitted.
 	 */
 	function showCreatedPayment(invoice: Invoice): void {
-		const next = renderPaymentSection(buildInvoiceViewModel(invoice, options.today), options.clipboard ?? null, { fit: options.fit ?? null });
+		const next = renderPaymentSection(buildInvoiceViewModel(invoice, options.today), { clipboard: options.clipboard ?? null, fit: options.fit ?? null });
 		createdSection?.release();
 		createdSection = next;
 		createdPayment.replaceChildren(next);

@@ -464,37 +464,24 @@
 }
 
 /*
- * The value ladder: a value a wallet takes verbatim is set at the largest rung of this ladder that holds it on one line, and `ui/fit-value.ts` writes that rung's class on the row the value sits in.
- * The sizes are stated here once for every surface that draws such a value — the invoice's payment section, the payment panel's own terms, the connected account, and the wallet's balance — because a rung is one size wherever it is applied and a second statement of it in `app.css` could drift from this one.
- * The module keeps the same ladder, names and sizes, because its search prices a rung from the size instead of measuring each one, so a test reads `FIT_LADDER` from `ui/fit-value.ts` and holds these rules to it.
+ * The payment section's value ladder: a value a wallet takes verbatim is set at the largest rung of this ladder that holds it on one line, and `ui/fit-value.ts` writes that rung's class on the row the value sits in.
+ * This stylesheet states the rungs of the section's own values, beside the rows they are drawn in; the payment panel's values take their rung sizes in `app.css`, beside the panel row geometry those rungs are measured against, and `ui/fit-value.ts`'s `FIT_LADDER` is the one statement both stylesheets are held to.
  * The inline phase keeps the label, the value, and the copy control on one row, which is the geometry the base rung and the three sizes below it are measured against; the stacked phase gives the value the row's whole width at the cost of a line for the label; and the residual rung is what a value that fits nowhere takes, at the floor and scrolling rather than shrinking past it.
  * The floor is 10px: below it a monospace face stops separating 0 from O and l from 1 at the default zoom, which is a hazard for a value a payer checks by eye rather than a matter of taste.
  */
-.payment-term.fit-inline-13 .payment-value,
-.pay-term.fit-inline-13 .pay-term-value,
-.pay-account.fit-inline-13 .pay-account-value,
-.pay-balance.fit-inline-13 .pay-balance-value {
+.payment-term.fit-inline-13 .payment-value {
 	font-size: 0.8125rem;
 }
 
-.payment-term.fit-inline-12 .payment-value,
-.pay-term.fit-inline-12 .pay-term-value,
-.pay-account.fit-inline-12 .pay-account-value,
-.pay-balance.fit-inline-12 .pay-balance-value {
+.payment-term.fit-inline-12 .payment-value {
 	font-size: 0.75rem;
 }
 
-.payment-term.fit-inline-11 .payment-value,
-.pay-term.fit-inline-11 .pay-term-value,
-.pay-account.fit-inline-11 .pay-account-value,
-.pay-balance.fit-inline-11 .pay-balance-value {
+.payment-term.fit-inline-11 .payment-value {
 	font-size: 0.6875rem;
 }
 
-.payment-term.fit-inline-10 .payment-value,
-.pay-term.fit-inline-10 .pay-term-value,
-.pay-account.fit-inline-10 .pay-account-value,
-.pay-balance.fit-inline-10 .pay-balance-value {
+.payment-term.fit-inline-10 .payment-value {
 	font-size: 0.625rem;
 }
 
@@ -508,24 +495,15 @@
 	grid-template-columns: 1fr;
 }
 
-.payment-term.fit-stacked-12 .payment-value,
-.pay-term.fit-stacked-12 .pay-term-value,
-.pay-account.fit-stacked-12 .pay-account-value,
-.pay-balance.fit-stacked-12 .pay-balance-value {
+.payment-term.fit-stacked-12 .payment-value {
 	font-size: 0.75rem;
 }
 
-.payment-term.fit-stacked-11 .payment-value,
-.pay-term.fit-stacked-11 .pay-term-value,
-.pay-account.fit-stacked-11 .pay-account-value,
-.pay-balance.fit-stacked-11 .pay-balance-value {
+.payment-term.fit-stacked-11 .payment-value {
 	font-size: 0.6875rem;
 }
 
-.payment-term.fit-stacked-10 .payment-value,
-.pay-term.fit-stacked-10 .pay-term-value,
-.pay-account.fit-stacked-10 .pay-account-value,
-.pay-balance.fit-stacked-10 .pay-balance-value {
+.payment-term.fit-stacked-10 .payment-value {
 	font-size: 0.625rem;
 }
 
@@ -533,18 +511,12 @@
  * The residual rung: no rung of either phase holds the value, so it keeps the floor's face and scrolls its overflow, and the scrollbar is what tells a payer the tail is there.
  * `scrollbar-width: thin` and the WebKit height are the ladder's own size for that cue, so the row gains no more height than the thinnest scrollbar either engine draws.
  */
-.payment-term.fit-residual .payment-value,
-.pay-term.fit-residual .pay-term-value,
-.pay-account.fit-residual .pay-account-value,
-.pay-balance.fit-residual .pay-balance-value {
+.payment-term.fit-residual .payment-value {
 	font-size: 0.625rem;
 	scrollbar-width: thin;
 }
 
-.payment-term.fit-residual .payment-value::-webkit-scrollbar,
-.pay-term.fit-residual .pay-term-value::-webkit-scrollbar,
-.pay-account.fit-residual .pay-account-value::-webkit-scrollbar,
-.pay-balance.fit-residual .pay-balance-value::-webkit-scrollbar {
+.payment-term.fit-residual .payment-value::-webkit-scrollbar {
 	height: 6px;
 }
 

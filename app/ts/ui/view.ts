@@ -175,7 +175,7 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
 			);
 
 	// The section's fitting is a subscription rather than something that ends by itself, so the document this returns carries its release, and releases it here when the render throws: neither a dropped document nor a failed one leaves an observer behind.
-	const payment = renderPaymentSection(view, options.clipboard ?? null, { fit: options.fit ?? null });
+	const payment = renderPaymentSection(view, { clipboard: options.clipboard ?? null, fit: options.fit ?? null });
 	try {
 		// The item table can overflow a phone; making its scroll box a named, focusable region lets a keyboard-only user reach the clipped columns, which Safari's scroller auto-focus does not.
 		const document = h(

@@ -390,7 +390,7 @@ test("every surface that subscribes hands its release back on the element it bui
 	};
 	try {
 		const model = buildInvoiceViewModel(invoiceFor(), VIEW_OPTIONS.today);
-		assertReleased("the payment section", renderPaymentSection(model, null, { fit: probe }));
+		assertReleased("the payment section", renderPaymentSection(model, { fit: probe }));
 
 		// The panel latch records a send by invoice content for the whole run, so this case opens a panel for an invoice no other case pays.
 		const panel = openPayPanel(invoiceFor({ id: "INV-RELEASE" }), { notice: noticeRecorder(), clipboard: null, fit: probe });
@@ -1916,7 +1916,7 @@ test("a copy in flight does not write into a payment section the create screen h
 	try {
 		const view = buildInvoiceViewModel(invoiceFor(), VIEW_OPTIONS.today);
 		const clipboard = { writeText: async () => {} };
-		const section = renderPaymentSection(view, clipboard);
+		const section = renderPaymentSection(view, { clipboard });
 		document.body.append(section);
 		const status = findAll(section, (node) => hasClass(node, "payment-status"))[0];
 		const value = findAll(section, (node) => hasClass(node, "payment-value-verbatim"))[0];
@@ -1936,7 +1936,7 @@ test("a copy in flight does not write into a payment section the create screen h
 
 		// The section is rebuilt while the second copy's confirmation is still in flight.
 		click();
-		document.body.replaceChildren(renderPaymentSection(view, clipboard));
+		document.body.replaceChildren(renderPaymentSection(view, { clipboard }));
 		await drain();
 		await drain();
 		assert.equal(textOf(status), "", "the detached status is not written once its section is gone");

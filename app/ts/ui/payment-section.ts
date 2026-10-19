@@ -98,6 +98,10 @@ export function copyControlClick(
 /** Everything the section needs beyond the view model: how to copy, and the probe its fitted values measure through. */
 export interface PaymentSectionOptions {
 	/**
+	 * The clipboard each term's copy control hands its value to, or `null` when the page has none and the control falls back to selecting the value for the payer to copy by hand.
+	 */
+	readonly clipboard?: ClipboardLike | null;
+	/**
 	 * The probe the section's fitted values measure through, or `null` to fit nothing and leave each value at the rung its stylesheet states.
 	 * An absent option fits nothing for the same reason: a surface handed no probe has no layout to measure, and the only fail-safe reading of that is the rung the stylesheet already states rather than a guess at the environment. The composition root supplies the browser's own probe.
 	 */
@@ -111,11 +115,8 @@ export interface PaymentSectionOptions {
  * Every value a wallet takes verbatim is fitted through the probe the options state, and a caller that wires none — or hands `null` — keeps the size the stylesheet states.
  * The `<footer>` this returns carries the release of that fitting, and its callers run it from then on: a build that throws part-way — a term that cannot be drawn, a symbol the encoder refuses — releases the subscriptions the terms built before it, and a caller releases the section's fitting when it drops the section, so no observer outlives the rows it was taken for.
  */
-export function renderPaymentSection(
-	view: InvoiceViewModel,
-	clipboard: ClipboardLike | null,
-	options: PaymentSectionOptions = {},
-): ReleasableElement {
+export function renderPaymentSection(view: InvoiceViewModel, options: PaymentSectionOptions = {}): ReleasableElement {
+	const clipboard = options.clipboard ?? null;
 	const fit = options.fit ?? null;
 	const fits: (() => void)[] = [];
 	const release = (): void => {

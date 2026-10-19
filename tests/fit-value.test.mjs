@@ -119,8 +119,9 @@ function fittedRung(inlineBox, stackedBox) {
 
 /**
  * A row with the two attribute methods the fitter uses, and a record of every class list it writes, because the row is the only element the fitter may touch.
+ * `onWrite` runs after every write, which is how a test hands the row the layout report a rewritten box causes.
  */
-function fakeRow(classes = "payment-term") {
+function fakeRow(classes = "payment-term", onWrite = null) {
 	const attributes = { class: classes };
 	const classWrites = [];
 	return {
@@ -132,6 +133,7 @@ function fakeRow(classes = "payment-term") {
 		setAttribute(name, value) {
 			attributes[name] = String(value);
 			classWrites.push(String(value));
+			if (onWrite !== null) onWrite();
 		},
 		get className() {
 			return attributes.class ?? "";
@@ -285,42 +287,56 @@ test("the print ladder's break points follow print.css's own page geometry", () 
 	assert.equal(printFitRung(""), "print-fit-1", "an empty value needs no shrinking");
 });
 
-/** Every surface a fitted value is drawn on: the row a rung's class is written on, and the element inside that row which carries the value. */
+/**
+ * Every surface a fitted value is drawn on: the row a rung's class is written on, the element inside that row which carries the value, and the stylesheet that draws that surface, because a surface's row geometry and its rungs are stated in one file.
+ */
 const VALUE_SURFACES = [
-	{ row: ".payment-term", value: ".payment-value" },
-	{ row: ".pay-term", value: ".pay-term-value" },
-	{ row: ".pay-account", value: ".pay-account-value" },
-	{ row: ".pay-balance", value: ".pay-balance-value" },
+	{ row: ".payment-term", value: ".payment-value", stylesheet: "invoice.css" },
+	{ row: ".pay-term", value: ".pay-term-value", stylesheet: "app.css" },
+	{ row: ".pay-account", value: ".pay-account-value", stylesheet: "app.css" },
+	{ row: ".pay-balance", value: ".pay-balance-value", stylesheet: "app.css" },
 ];
 
-test("every screen rung invoice.css declares matches the module's ladder, and the sizes descend to the 10px floor", () => {
-	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
-	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
-	// A rung is a class the fitter writes and a size the stylesheet states; the ladder the module publishes is what both sides are held to, so a rung added on one side alone fails here rather than being written onto a row no rule sizes.
-	const rules = cssRules(invoiceCss);
-	const sizes = [];
-	for (const { rung, phase, sizeRem } of FIT_LADDER.screen) {
-		const bodies = rules.filter((rule) => rule.selectors.some((selector) => selector.includes(`.${rung} `)) && declaration(rule.body, "font-size") !== undefined);
-		assert.equal(bodies.length, 1, `invoice.css states the ${rung} rung's size exactly once`);
-		const size = declaration(bodies[0].body, "font-size");
-		assert.ok(String(size).endsWith("rem"), `${rung} states its size in rem, so it follows the root font size the page assumes`);
-		assert.equal(pxLength(size, rung), sizeRem * 16, `${rung} is the size the fitter prices it at`);
-		// Every surface that draws a fitted value is named in the rung's own rule: a rung that sizes the invoice's terms but not the panel's leaves a surface at a face the fitter never chose, and a dropped selector shows up nowhere but the browser.
-		for (const { row, value } of VALUE_SURFACES) {
-			assert.ok(bodies[0].selectors.includes(`${row}.${rung} ${value}`), `the ${rung} rung sizes ${row}'s value, so every surface is held to the rung the fitter writes`);
-		}
-		sizes.push({ rung, phase, px: pxLength(size, rung) });
-	}
-	// The order the rungs' rules appear in, read off the stylesheet rather than restated from the module's own list, so the claim that the ladder reads top to bottom here is checked rather than assumed.
-	const declared = [];
-	for (const rule of rules) {
-		if (declaration(rule.body, "font-size") === undefined) continue;
-		for (const { rung } of FIT_LADDER.screen) {
-			if (declared.includes(rung) || !rule.selectors.some((selector) => selector.includes(`.${rung} `))) continue;
-			declared.push(rung);
+test("every screen rung both stylesheets state matches the module's ladder, one rule per rung for each surface", () => {
+	const stylesheetNames = ["invoice.css", "app.css"];
+	const stylesheets = Object.fromEntries(stylesheetNames.map((name) => [name, readFileSync(join(root, `app/stylesheets/${name}`), "utf8")]));
+	const rules = Object.fromEntries(stylesheetNames.map((name) => [name, cssRules(stylesheets[name])]));
+	// A rung's size rule is the one rule in a stylesheet whose selector list names that row, rung, and value and states a font size, so a second statement of the size and a missing one are both visible here.
+	const sizeRules = (name, selector) => rules[name].filter((rule) => rule.selectors.includes(selector) && declaration(rule.body, "font-size") !== undefined);
+	for (const { rung, sizeRem } of FIT_LADDER.screen) {
+		for (const { row, value, stylesheet } of VALUE_SURFACES) {
+			const selector = `${row}.${rung} ${value}`;
+			// The stylesheet that draws the surface states its rung once, and the other states nothing for it: a rung added on one side alone would be written onto a row no rule sizes, and a second statement of the same size could drift.
+			for (const name of stylesheetNames) {
+				const mine = name === stylesheet;
+				assert.equal(
+					sizeRules(name, selector).length,
+					mine ? 1 : 0,
+					mine ? `${name} states the ${rung} rung for ${row} exactly once` : `${name} states no ${rung} rung for ${row}, whose face is ${stylesheet}'s to state`,
+				);
+			}
+			const size = declaration(sizeRules(stylesheet, selector)[0].body, "font-size");
+			assert.ok(String(size).endsWith("rem"), `${rung} states its size in rem, so it follows the root font size the page assumes`);
+			assert.equal(pxLength(size, rung), sizeRem * 16, `${rung} is the size the fitter prices it at`);
 		}
 	}
-	assert.deepEqual(declared, FIT_LADDER.screen.map((entry) => entry.rung), "invoice.css declares the rungs in the ladder's own order, so the ladder reads from the base rung to the residual one");
+	// The pixels each rung states, read off the payment section's own rules once per rung, so the descent below is read from the stylesheet rather than restated from the module's list.
+	const sizes = FIT_LADDER.screen.map(({ rung, phase }) => {
+		const size = declaration(sizeRules("invoice.css", `.payment-term.${rung} .payment-value`)[0].body, "font-size");
+		return { rung, phase, px: pxLength(size, rung) };
+	});
+	// The order each stylesheet states its rungs in, read off the stylesheet itself, so the claim that each ladder reads top to bottom is checked rather than assumed.
+	for (const name of stylesheetNames) {
+		const declared = [];
+		for (const rule of rules[name]) {
+			if (declaration(rule.body, "font-size") === undefined) continue;
+			for (const { rung } of FIT_LADDER.screen) {
+				if (declared.includes(rung) || !rule.selectors.some((selector) => selector.includes(`.${rung} `))) continue;
+				declared.push(rung);
+			}
+		}
+		assert.deepEqual(declared, FIT_LADDER.screen.map((entry) => entry.rung), `${name} states the rungs it draws in the ladder's own order, so its ladder reads from the base rung to the residual one`);
+	}
 	assert.deepEqual(sizes.filter((entry) => entry.phase === "inline").map((entry) => entry.px), [13, 12, 11, 10], "the inline phase descends from the 13px base to the 10px floor");
 	assert.deepEqual(sizes.filter((entry) => entry.phase === "stacked").map((entry) => entry.px), [12, 11, 10], "the stacked phase descends from 12px to the same floor");
 	const residual = sizes[sizes.length - 1];
@@ -328,18 +344,17 @@ test("every screen rung invoice.css declares matches the module's ladder, and th
 	assert.equal(residual.px, 10, "which keeps the floor's own size, scrolling rather than shrinking past it");
 	// The floor is 10px monospace: below it a payer can no longer tell 0 from O or l from 1 in the address they are checking.
 	for (const entry of sizes) assert.ok(entry.px >= 10, `${entry.rung} is at or above the 10px floor`);
-	// The residual rung's cue is the scrollbar it states rather than a smaller face: the standard property carries it wherever a thin bar is drawn, and the engine rule below carries it where a full-height bar would otherwise appear.
-	assert.equal(appliedDeclaration(invoiceCss, `.payment-term.${residual.rung} .payment-value`, "scrollbar-width"), "thin", "the residual rung states the visible thin scrollbar rather than hiding the overflow");
-	// That engine rule also names the same four surfaces as the rung's size does, so a surface left out falls back to a full-height bar the ladder never priced.
-	const residualBar = rules.filter((rule) => rule.selectors.some((selector) => selector.endsWith("::-webkit-scrollbar")) && declaration(rule.body, "height") === "6px");
-	assert.equal(residualBar.length, 1, "invoice.css states the residual rung's scrollbar once");
-	for (const { row, value } of VALUE_SURFACES) {
-		assert.ok(residualBar[0].selectors.includes(`${row}.${residual.rung} ${value}::-webkit-scrollbar`), `the residual rung's scrollbar is stated for ${row}'s value too`);
+	// The residual rung's cue is the scrollbar it states rather than a smaller face: the standard property carries it wherever a thin bar is drawn, and the engine rule carries it where a full-height bar would otherwise appear.
+	for (const { row, value, stylesheet } of VALUE_SURFACES) {
+		const selector = `${row}.${residual.rung} ${value}`;
+		assert.equal(appliedDeclaration(stylesheets[stylesheet], selector, "scrollbar-width"), "thin", `${stylesheet} gives ${row} the residual rung's visible thin scrollbar rather than hiding the overflow`);
+		const bars = rules[stylesheet].filter((rule) => rule.selectors.includes(`${selector}::-webkit-scrollbar`) && declaration(rule.body, "height") === "6px");
+		assert.equal(bars.length, 1, `${stylesheet} states ${row}'s residual scrollbar once, in the engine rule the thin cue needs`);
 	}
 
 	// The stacked phase buys the value the row's whole width, and invoice.css is where the invoice's own row states that geometry: the one rule must name exactly the stacked rungs, because a rung left out sizes the value for a full row while the row still draws the label's rail.
 	const stacked = FIT_LADDER.screen.filter((entry) => entry.phase === "stacked").map((entry) => entry.rung);
-	const stackedRules = rules.filter((rule) => declaration(rule.body, "grid-template-columns") === "1fr");
+	const stackedRules = rules["invoice.css"].filter((rule) => declaration(rule.body, "grid-template-columns") === "1fr");
 	assert.equal(stackedRules.length, 1, "invoice.css states the invoice row's stacked columns once");
 	assert.deepEqual(
 		stackedRules[0].selectors.slice().sort(),
@@ -349,24 +364,17 @@ test("every screen rung invoice.css declares matches the module's ladder, and th
 
 	// The size a value is drawn at before any script runs is the ladder's base rung, and each surface states it in its own base rule rather than in a rung class, so those two declarations are held to the same ladder: a base size changed on one side alone would draw a value at a size no rung prices.
 	const base = FIT_LADDER.screen[0].sizeRem;
-	const baseRung = FIT_LADDER.screen[0].rung;
-	const invoiceBase = ruleBody(invoiceCss, ".payment-term dd.mono");
+	const invoiceBase = ruleBody(stylesheets["invoice.css"], ".payment-term dd.mono");
 	assert.ok(invoiceBase !== undefined, "invoice.css states the face a payment value is drawn at before a fit");
 	assert.equal(pxLength(declaration(invoiceBase, "font-size"), ".payment-term dd.mono"), base * 16, "which is the ladder's base rung");
-	const dialogBase = ruleBody(appCss, ".pay-dialog .mono");
+	const dialogBase = ruleBody(stylesheets["app.css"], ".pay-dialog .mono");
 	assert.ok(dialogBase !== undefined, "app.css states the face the payment panel's verbatim values are drawn at before a fit");
 	assert.equal(pxLength(declaration(dialogBase, "font-size"), ".pay-dialog .mono"), base * 16, "which is the same base rung");
 
-	// Every surface that draws such a value is named in the one rule, so the size is stated here alone rather than repeated in `app.css` where it could drift.
-	const panelValue = rules.find((rule) => declaration(rule.body, "font-size") === `${base}rem` && rule.selectors.some((selector) => selector.includes(`.${baseRung}`)));
-	assert.ok(panelValue !== undefined, "the ladder's base rung sizes every surface that draws such a value");
-	assert.ok(panelValue.selectors.includes(`.pay-term.${baseRung} .pay-term-value`), "the payment panel's own term is sized by the same rung");
-	assert.ok(panelValue.selectors.includes(`.pay-account.${baseRung} .pay-account-value`), "as is the connected account");
-	assert.ok(panelValue.selectors.includes(`.pay-balance.${baseRung} .pay-balance-value`), "and the wallet's balance");
 	// The panel's rows change their own columns in the stacked phase, and app.css is where that geometry is stated, so the ladder the module declares is held against that statement too: a rung the stylesheet left out would leave a stacked panel row in inline geometry the fitter had already priced the value out of.
 	for (const row of [".pay-term", ".pay-account", ".pay-balance"]) {
 		const named = new Set();
-		for (const rule of cssRules(appCss)) {
+		for (const rule of rules["app.css"]) {
 			for (const selector of rule.selectors) {
 				if (!selector.startsWith(`${row}.`)) continue;
 				const rung = selector.slice(row.length + 1).split(/[\s.]/)[0];
@@ -425,6 +433,28 @@ test("a hidden or detached box leaves the current rung alone", () => {
 	stopAdapter();
 });
 
+test("the first fit runs before the call returns for a mounted value, and on the first report after mount for a detached one", () => {
+	const mountedRow = fakeRow("payment-term");
+	const mountedProbe = fakeProbe(() => ({ content: DEMAND.inline, box: 400 }));
+	const stopMounted = fitValue({ row: mountedRow, value: fakeValue() }, mountedProbe);
+	assert.deepEqual(mountedRow.rungs, [phaseRungs("inline")[0]], "a value the document holds is fitted before the call returns, so its rung is in place before the page draws it");
+	assert.equal(mountedProbe.targets.length, 1, "and the subscription is taken for the reports that follow");
+	stopMounted();
+
+	// A value built into a subtree nothing has mounted yet has no layout to measure, so the call fits nothing; the subscription is taken all the same, and its first report is what fits the value once it is mounted.
+	const detachedRow = fakeRow("payment-term");
+	const detachedValue = fakeValue();
+	detachedValue.isConnected = false;
+	const detachedProbe = fakeProbe(() => ({ content: DEMAND.inline, box: 400 }));
+	const stopDetached = fitValue({ row: detachedRow, value: detachedValue }, detachedProbe);
+	assert.deepEqual(detachedRow.classWrites, [], "a value the document does not hold is not fitted when the fit is taken");
+	assert.equal(detachedProbe.targets.length, 1, "though the subscription that would fit it is taken at once");
+	detachedValue.isConnected = true;
+	detachedProbe.fire();
+	assert.deepEqual(detachedRow.rungs, [phaseRungs("inline")[0]], "and the first layout report after the value is mounted is what fits it");
+	stopDetached();
+});
+
 test("a resize re-fits upward and downward", () => {
 	const row = fakeRow("pay-term");
 	let box = 400;
@@ -447,18 +477,62 @@ test("a resize re-fits upward and downward", () => {
 	stop();
 });
 
-test("a fit's own class write does not wake another fit", () => {
-	const row = fakeRow("payment-term");
+/**
+ * How many reports the model delivers before it stops: a fit that re-entered itself on the report its own write caused would never return, so the cap turns that into an assertion this suite reports rather than a recursion that ends the run.
+ */
+const REPORT_CAP = 32;
+
+/**
+ * A probe whose reports arrive when the layout does: `fire` is the report the page itself causes, and a write to the row causes one too, delivered at once while the fit that wrote it is still running — the case the fitter must not re-enter itself on.
+ * `delivered` counts every report handed to the fit and `measured` every measurement it took, so a fit that started a second fit inside the first shows up as both climbing past the bounds the module documents.
+ */
+function synchronousProbe(measure) {
+	const runs = [];
+	const probe = {
+		delivered: 0,
+		measured: 0,
+		measure(value) {
+			probe.measured += 1;
+			return measure(value);
+		},
+		onResize(target, run) {
+			runs.push(run);
+			return () => {};
+		},
+		/** Deliver one report to every subscription, at once, as a box the page has laid out again reports itself. */
+		fire() {
+			for (const run of runs) run();
+		},
+		/** Deliver the report a write to the row causes, inside the write, for as long as the cap holds. */
+		report() {
+			for (const run of runs) {
+				if (probe.delivered >= REPORT_CAP) return;
+				probe.delivered += 1;
+				run();
+			}
+		},
+	};
+	return probe;
+}
+
+test("a report that lands while a fit is running does not re-enter it", () => {
+	// The row reports every write through the probe built beneath it: its callback runs only when a fit writes, which is after both stand, and each report lands inside the fit that caused it.
 	let box = 400;
-	const probe = fakeProbe(() => ({ content: DEMAND[phaseOf(row.rungs[0])], box }));
+	const row = fakeRow("payment-term", () => probe.report());
+	const probe = synchronousProbe(() => ({ content: DEMAND[phaseOf(row.rungs[0])], box }));
 	const stop = fitValue({ row, value: fakeValue() }, probe);
-	assert.deepEqual(row.rungs, [phaseRungs("inline")[0]], "the first fit writes the largest rung that holds the value");
-	const writes = row.classWrites.length;
-	probe.fire();
-	assert.equal(row.classWrites.length, writes, "a layout report that lands on the rung already applied writes nothing, so a fit cannot wake itself through the class it wrote");
+	assert.deepEqual(row.rungs, [phaseRungs("inline")[0]], "the first fit settles the value while the row stands at the base rung");
+
+	const measured = probe.measured;
 	box = 280;
 	probe.fire();
-	assert.deepEqual(row.rungs, [phaseRungs("inline")[1]], "while a box that really moved is fitted again");
+	assert.deepEqual(row.rungs, [phaseRungs("inline")[1]], "a narrower box steps the face down to the largest rung that holds the value");
+	assert.equal(probe.delivered, 1, "and the write that stepped it down causes one report, which arrives while the fit is still running");
+	assert.ok(
+		probe.measured - measured <= 6,
+		"so the fit is not re-entered by it: one run measures a phase at most three times, and a run started inside it would measure the value again and again",
+	);
+	assert.equal(row.classWrites.length, 2, "the two fits write one rung each, so neither rewrites the rung its row already carries");
 	stop();
 });
 
@@ -511,7 +585,7 @@ test("the payment section asks the fitting module about every value a wallet tak
 	try {
 		const model = buildInvoiceViewModel(evmInvoice(), VIEW_OPTIONS.today);
 		const probe = fakeProbe(() => ({ content: 120, box: 240 }));
-		const section = renderPaymentSection(model, null, { fit: probe });
+		const section = renderPaymentSection(model, { fit: probe });
 		document.body.append(section);
 		// A document lays a section out only once it is in the page, so the resize a real observer would deliver is the one the test delivers here.
 		probe.fire();
@@ -541,7 +615,7 @@ test("a payment section that throws part-way releases the values it had already 
 		const model = buildInvoiceViewModel(evmInvoice(), VIEW_OPTIONS.today);
 		const probe = fakeProbe(() => ({ content: 120, box: 240 }));
 		// The symbol is built after the terms, so a view model whose symbol cannot be drawn is a build that throws with the terms' subscriptions already taken.
-		assert.throws(() => renderPaymentSection({ ...model, paymentQr: {} }, null, { fit: probe }), "the symbol is refused");
+		assert.throws(() => renderPaymentSection({ ...model, paymentQr: {} }, { fit: probe }), "the symbol is refused");
 		assert.equal(probe.targets.length, 3, "the three verbatim terms had taken their subscriptions before the throw");
 		assert.deepEqual(probe.unsubscribed, probe.targets, "and the section hands every one of them back rather than leaving them on rows it never returned");
 	} finally {
@@ -553,14 +627,14 @@ test("a payment section rendered with no layout probe keeps the base rung", () =
 	const fake = installInteractiveDocument();
 	try {
 		const model = buildInvoiceViewModel(evmInvoice(), VIEW_OPTIONS.today);
-		const section = renderPaymentSection(model, null);
+		const section = renderPaymentSection(model);
 		document.body.append(section);
 		const rows = findAll(section, (node) => hasClass(node, "payment-term"));
 		assert.deepEqual(rows.map(rungsOf), rows.map(() => []), "with nothing able to measure the page, every row keeps the size the stylesheet states");
 		assert.equal(rows[0].attributes.class, "payment-term", "no rung class is written when no measurement can be taken");
 
 		// `fit: null` is how a caller asks for no fitting at all, so it takes no probe and no subscription rather than falling back to the browser's.
-		const unfitted = renderPaymentSection(model, null, { fit: null });
+		const unfitted = renderPaymentSection(model, { fit: null });
 		document.body.append(unfitted);
 		assert.deepEqual(
 			findAll(unfitted, (node) => hasClass(node, "payment-term")).map(rungsOf),
@@ -579,13 +653,13 @@ test("each print twin carries the rung its length earns", () => {
 	try {
 		const wide = unifiedOfBytes(189);
 		assert.equal(wide.length, MAX_ZCASH_ADDRESS_LENGTH, "the fixture is the widest address the Zcash validator accepts");
-		const zec = renderPaymentSection(buildInvoiceViewModel(zecInvoice(wide), VIEW_OPTIONS.today), null);
+		const zec = renderPaymentSection(buildInvoiceViewModel(zecInvoice(wide), VIEW_OPTIONS.today));
 		const zecTwins = findAll(zec, (node) => hasClass(node, "payment-value-print"));
 		assert.equal(textOf(zecTwins[0]), wide, "the address's print twin is the address itself");
 		assert.deepEqual(printRungsOf(zecTwins[0]), [expectedPrintRung(PRINT_CSS, FIT_LADDER, wide.length)], "a value past the print floor takes the one rung that wraps");
 		assert.equal(printRungsOf(zecTwins[1]).length, 1, "the amount's twin is sized from its own length");
 
-		const evm = renderPaymentSection(buildInvoiceViewModel(evmInvoice(), VIEW_OPTIONS.today), null);
+		const evm = renderPaymentSection(buildInvoiceViewModel(evmInvoice(), VIEW_OPTIONS.today));
 		const evmTwins = findAll(evm, (node) => hasClass(node, "payment-value-print"));
 		assert.equal(textOf(evmTwins[0]), PAYEE, "a 42-character address carries its own twin");
 		assert.deepEqual(
@@ -599,7 +673,7 @@ test("each print twin carries the rung its length earns", () => {
 	}
 });
 
-test("the payment panel fits its recipient and the connected account with one class per row", async () => {
+test("the payment panel fits the amount and the recipient with one class per row", async () => {
 	const fake = installInteractiveDocument();
 	// A wallet on another chain stops the flow at the network check with the account connected and nothing sent, which is the state the panel's own rows are read in.
 	const provider = mockProvider({ chainId: "0x5" });
@@ -615,13 +689,15 @@ test("the payment panel fits its recipient and the connected account with one cl
 		const dialog = findAll(handle.element, (node) => hasClass(node, "pay-dialog"))[0];
 		const recipient = payTermRow(dialog, "Recipient");
 		const amount = payTermRow(dialog, "Amount due");
+		const asset = payTermRow(dialog, "Asset");
 		const account = findAll(dialog, (node) => hasClass(node, "pay-account"))[0];
 		assert.ok(recipient !== undefined && amount !== undefined, "the summary keeps its recipient and amount rows");
 		assert.ok(account !== undefined, "and the connected account is shown once the wallet has handed one over");
 
-		assert.deepEqual(rungsOf(recipient), [phaseRungs("inline")[0]], "the recipient is fitted against the panel's own column");
-		assert.deepEqual(rungsOf(amount), [], "a term the panel reads off its own plan is not fitted, so the row keeps its declared size");
+		assert.deepEqual(rungsOf(amount), [phaseRungs("inline")[0]], "the amount due is fitted against the panel's own column, the row a legal maximal amount would otherwise scroll in");
+		assert.deepEqual(rungsOf(recipient), [phaseRungs("inline")[0]], "the recipient is fitted against that same column");
 		assert.deepEqual(rungsOf(account), [phaseRungs("inline")[0]], "and the connected account's row is fitted the same way");
+		assert.deepEqual(rungsOf(asset), [], "while the asset's name is the panel's own reading of the plan and keeps the size the stylesheet states");
 
 		// A panel value is a scroll container inside a modal, so it carries the contract the invoice's own payment values carry: a named focus stop, because Tab cannot reach an unnamed box and a value wider than its column is only readable by arrowing along it.
 		const recipientValue = findAll(recipient, (node) => hasClass(node, "pay-term-value"))[0];
@@ -670,11 +746,11 @@ test("the wallet's balance is a named focus stop the ladder fits", async () => {
 		const row = findAll(handle.element, (node) => hasClass(node, "pay-balance"))[0];
 		assert.ok(row !== undefined, "the panel draws the balance the wallet reported");
 		assert.deepEqual(rungsOf(row), [phaseRungs("inline")[0]], "and fits it the way it fits its other verbatim values");
-		// Each rebuild drops the rows it replaced, so what is outstanding is exactly the fitted rows on screen: the summary's recipient, the connected account, and the balance.
+		// Each rebuild drops the rows it replaced, so what is outstanding is exactly the fitted rows on screen: the summary's amount and recipient, the connected account, and the balance.
 		assert.deepEqual(
 			fittedRows(handle.element).map((row) => String(row.attributes.class).split(" ")[0]).sort(),
-			["pay-account", "pay-balance", "pay-term"],
-			"the rows the panel holds a subscription for are the recipient's, the account's, and the balance's",
+			["pay-account", "pay-balance", "pay-term", "pay-term"],
+			"the rows the panel holds a subscription for are the amount's, the recipient's, the account's, and the balance's",
 		);
 		assert.equal(
 			probe.targets.length - probe.unsubscribed.length,
@@ -739,7 +815,7 @@ test("a payment panel that throws while it builds releases the rows it had alrea
 	const provider = mockProvider();
 	const installed = installWindow({ ethereum: provider });
 	const createElement = document.createElement;
-	// The summary is built once its recipient term has taken its subscription, so a document that refuses it is a panel build that throws with that subscription already taken.
+	// The summary is built once its amount and recipient terms have taken their subscriptions, so a document that refuses it is a panel build that throws with those subscriptions already taken.
 	document.createElement = (tag) => {
 		if (tag === "dl") throw new Error("the summary was refused");
 		return createElement.call(document, tag);
@@ -747,8 +823,8 @@ test("a payment panel that throws while it builds releases the rows it had alrea
 	try {
 		const probe = fakeProbe(() => ({ content: 120, box: 240 }));
 		assert.throws(() => openPayPanel(evmInvoice({ id: "INV-REFUSED" }), { notice: noticeRecorder(), clipboard: null, fit: probe }), /the summary was refused/);
-		assert.equal(probe.targets.length, 1, "the recipient's row had taken its subscription before the throw");
-		assert.deepEqual(probe.unsubscribed, probe.targets, "and the panel hands it back rather than leaving it on a dialog it never returned");
+		assert.equal(probe.targets.length, 2, "the amount's row and the recipient's had taken theirs before the throw");
+		assert.deepEqual(probe.unsubscribed, probe.targets, "and the panel hands them back rather than leaving them on a dialog it never returned");
 	} finally {
 		document.createElement = createElement;
 		installed.restore();

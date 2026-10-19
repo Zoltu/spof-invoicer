@@ -10,7 +10,7 @@
  * A `failed` frame — nothing was broadcast — offers a full-flow "Try again", while the ambiguous `send-failed` frame offers a send-only "Try sending again" and an "I already sent it" exit that dismisses the panel without touching the wallet, so a retry after an unclear send cannot blindly re-run the whole flow.
  * Everything the panel shows comes from `wallet/payment.ts` and `wallet/eip1193.ts`: the amount is the model's own total, the recipient is the invoice's validated payee, and a wrong network stops the flow with guidance and a switch control rather than a transaction.
  * The network it names is spelled by `ui/network-labels.ts`'s `networkLabel`, the same spelling the payer's document and the flow's guidance use.
- * The recipient's address, the connected account, and the wallet's balance are values a wallet states verbatim, so each is handed to `ui/fit-value.ts` rather than left to wrap: that module holds the value on one line at the largest size of its ladder that fits the row, and the panel therefore never breaks or clips an address a payer is checking.
+ * The amount due, the recipient's address, the connected account, and the wallet's balance are values a wallet takes verbatim, so each is handed to `ui/fit-value.ts` rather than left to wrap: that module holds the value on one line at the largest size of its ladder that fits the row, and the panel therefore never breaks or clips an address a payer is checking.
  * All text is a text child of `util/dom.ts`'s `h()`, so no invoice field can become markup, and the transaction hash is shown as plain text with a copy control — the panel deliberately links to no block explorer, since resolving one would mean a network destination the app refuses to have.
  * A provider-derived string that reaches this panel — a wallet's announced label, whether on its own or echoed into a status line — is run through the same display-character pass the notices get, so it cannot carry bidi or invisible characters even if a future caller hands the panel one that `providerInfo` has not already cleaned.
  */
@@ -158,7 +158,7 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 	const notice = options.notice;
 	const clipboard = options.clipboard ?? null;
 	const fit = options.fit ?? null;
-	// The rows a render builds are dropped by the next one, so the fit subscriptions taken for them are dropped with it rather than left watching a detached row; the summary's own row is built once and lives as long as the dialog, so its subscription is held apart and dropped when the panel closes.
+	// The rows a render builds are dropped by the next one, so the fit subscriptions taken for them are dropped with it rather than left watching a detached row; the summary's own rows are built once and live as long as the dialog, so their subscriptions are held apart and dropped when the panel closes.
 	const renderFits: (() => void)[] = [];
 	const dialogFits: (() => void)[] = [];
 	// Set by the overlay's close, so a snapshot a wallet call delivers under a dismissed panel rebuilds nothing and takes nothing.
@@ -416,12 +416,11 @@ function payHeader(plan: PaymentPlan, close: () => void): HTMLElement {
 
 /** What the transaction will send, read off the plan so the panel cannot disagree with the wallet. */
 function paySummary(plan: PaymentPlan, fit: LayoutProbe | null, stops: (() => void)[]): HTMLElement {
-	// The recipient is the summary's one value a wallet takes verbatim, and the probe is handed over as it stands: `null` fits nothing here exactly as it fits nothing in the rows around the summary.
 	const fitting: TermFitting = { probe: fit, stops };
 	return h(
 		"dl",
 		{ class: "pay-summary" },
-		payTerm("Amount due", `${plan.amountText} ${plan.asset.symbol}`, true),
+		payTerm("Amount due", `${plan.amountText} ${plan.asset.symbol}`, true, fitting),
 		payTerm("Asset", `${plan.asset.name} (${plan.asset.symbol})`),
 		payTerm("Recipient", toChecksumAddress(plan.recipient), true, fitting),
 		payTerm("Network", networkLabel(plan.chainId)),
@@ -429,10 +428,11 @@ function paySummary(plan: PaymentPlan, fit: LayoutProbe | null, stops: (() => vo
 }
 
 /**
- * One summary term: its label and its value, in a monospace face when the value is one a wallet states — the recipient's address.
+ * One summary term: its label and its value, in a monospace face when the value is one a wallet takes verbatim — the amount due and the recipient's address.
  *
  * The value is a keyboard-reachable scroll container named by its label, the contract `ui/payment-section.ts` gives the invoice's own payment values: a value wider than the panel's column scrolls inside its box and never breaks, focusing it is what lets a keyboard-only user arrow along to the tail, `ui/overlay.ts` counts it among the dialog's focus stops, and `app.css` rings it where the panel would otherwise leave a definition unringed.
- * The recipient's row is handed to `ui/fit-value.ts` through the fitting it is given, together with the collector its teardown is added to, because the address is the value a payer compares against their wallet and a run that does not fit its column would be clipped; a term handed no fitting is the panel's own reading of the plan and keeps the size the stylesheet states.
+ * A value a wallet takes verbatim is handed to `ui/fit-value.ts` through the fitting it is given, together with the collector its teardown is added to, because a run that does not fit its column would be clipped: the panel fits the amount and the address the payer's document fits, so a legal maximal amount is one size on both surfaces rather than a fitted value on one and an unfitted scroll box on the other.
+ * The amount's string carries the asset's symbol, so a symbol the row cannot hold shrinks that row rather than wrapping it, which is the trade a value that may not wrap makes. The asset's name and the network's label are the panel's own readings of the plan and keep the size the stylesheet states.
  */
 function payTerm(
 	label: string,
