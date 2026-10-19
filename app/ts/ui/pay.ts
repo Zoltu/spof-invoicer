@@ -2,8 +2,9 @@
  * The payment panel: what will be sent, and the payer's explicit route to sending it.
  *
  * The panel is the only place the wallet is reached from, and it holds the app's central guarantee: nothing touches a provider until the payer clicks.
- * The panel is itself refused — with a notice, touching no provider — when the document is displayed inside another page's frame or opened in a window another page still holds, either of which lets that page overlay or drive the Pay control, and when this invoice's payment has already been claimed, so a reopened panel cannot start a second broadcast.
- * That refusal is a client-side check on `window.top` and `window.opener`, ordinary properties a page can replace, so it is best-effort coverage of a cross-origin framer or opener; the load-bearing control for the confidentiality it is meant to protect is the dedicated-origin deployment rule (see the README's "Deploying to IPFS"), not the refusal.
+ * The panel is refused — with a notice, touching no provider — when this window was opened by another page that still holds a handle to it, and when this invoice's payment has already been claimed, so a reopened panel cannot start a second broadcast.
+ * The page may be displayed inside another page's frame on purpose, because some wallet hosts embed the invoice in their own page: framing is accepted as a risk rather than refused, and the payer's own click plus the per-invoice claim are what still bound a host that overlays or drives the Pay control.
+ * The opener refusal is a client-side check on `window.opener`, an ordinary property a page can replace, so it is best-effort coverage of a cross-origin opener; what the confidentiality of the invoice fragment rests on is the dedicated-origin rule in README.md's "Open the app", not the refusal.
  * Opening the panel computes the transfer from the validated invoice and renders it — asset, amount, recipient, network — and that is all that happens on the Pay click; discovery, connection, the chain check, the balance read, and the transaction itself all wait for the payer's own "Connect wallet & pay".
  *
  * What the flow *does* lives in `ui/pay-flow.ts`, which is free of the DOM and driven directly by tests; this module owns only how each of its states is drawn and which control maps to which step.
@@ -69,9 +70,6 @@ function claimPayment(key: string, owner: object): boolean {
 	return true;
 }
 
-/** Shown when the panel is refused because the page is displayed inside another page's frame. */
-const FRAMED_MESSAGE = "This page is displayed inside another page, so the payment panel is blocked. Open the invoice at its own address to pay.";
-
 /** Shown when the panel is refused because another page opened this one and still holds a handle to it. */
 const OPENED_MESSAGE = "This page was opened by another page, which could drive the payment controls. Open the invoice at its own address to pay.";
 
@@ -82,23 +80,10 @@ const REOPEN_MESSAGE = "A payment for this invoice was already attempted from th
 export { UNSUPPORTED_WALLET_MESSAGE };
 
 /**
- * True when this document is displayed inside another page's frame.
- *
- * A meta CSP cannot carry `frame-ancestors` and a static gateway sends no headers, so a framing page could otherwise overlay the app's own Pay control; the panel is refused there instead.
- * `window.top` is a replaceable property, so this is a best-effort check rather than an enforceable control; it is the dedicated-origin deployment rule, not this test, that keeps the fragment from another page.
- * A window with no `top` — a test harness, a worker — is treated as unframed.
- */
-function isFramed(): boolean {
-	if (typeof window === "undefined") return false;
-	const top = (window as { top?: unknown }).top;
-	return top !== undefined && top !== window;
-}
-
-/**
  * True when another page opened this one and still holds a reference to it (`window.opener`).
  *
- * A same-origin opener can reach into the popup and drive its controls, so the panel is refused there for the same reason it is refused when framed.
- * Like `window.top`, `window.opener` is a replaceable property, so the check is best-effort and the dedicated-origin deployment rule remains the control.
+ * A same-origin opener can reach into the popup and drive its controls, so the panel is refused there.
+ * `window.opener` is a replaceable property, so the check is best-effort and the dedicated-origin rule in README.md's "Open the app" remains the control.
  * A direct navigation — a modern `target="_blank"` link, a pasted URL, a bookmark — carries no opener, and a window with no `opener` at all (a test harness, a worker) is treated as unopened.
  */
 function isOpened(): boolean {
@@ -108,12 +93,11 @@ function isOpened(): boolean {
 }
 
 /**
- * The refusal notice for a context where another page could drive the panel, or `null` when the page stands alone.
+ * The refusal notice for a window another page opened, or `null` when the page stands alone.
  *
- * `window.top` and `window.opener` are ordinary, replaceable window properties, so this refusal is best-effort coverage of a cross-origin framer or opener — one that cannot read the fragment but could overlay or drive the controls it holds — not a control an adversarial embedder is bound by; the load-bearing control remains the dedicated-origin deployment rule.
+ * `window.opener` is an ordinary, replaceable window property, so this refusal is best-effort coverage of a cross-origin opener — one that cannot read the fragment but could drive the controls it holds — not a control an adversarial page is bound by; the load-bearing control remains the dedicated-origin rule in README.md's "Open the app".
  */
-function embeddingRefusal(): string | null {
-	if (isFramed()) return FRAMED_MESSAGE;
+function openerRefusal(): string | null {
 	if (isOpened()) return OPENED_MESSAGE;
 	return null;
 }
@@ -137,11 +121,11 @@ export type PayPanelHandle = OverlayHandle;
  * Open the payment panel over the page, or refuse it with a notice.
  *
  * Nothing but the invoice is read until the payer asks to pay.
- * The panel is refused when the document is framed or opened in a window another page still holds, either of which could overlay or drive the app's Pay control, and when this page has already claimed a payment for the same invoice content, so a reopened panel — including one reopened by navigating back to the same fragment — cannot begin a second broadcast.
+ * The panel is refused when another page opened this window and still holds a handle to it, and when this page has already claimed a payment for the same invoice content, so a reopened panel — including one reopened by navigating back to the same fragment — cannot begin a second broadcast.
  * It is refused too for an invoice whose asset belongs to a family no injected wallet pays, read through `wallet/payment.ts`'s own `isWalletPayable`; the same typed refusal `buildPaymentPlan` raises is caught here as well, so a privacy-chain invoice can never let that error escape this entry uncaught.
  */
 export function openPayPanel(invoice: Invoice, options: PayPanelOptions): PayPanelHandle | null {
-	const refusal = embeddingRefusal();
+	const refusal = openerRefusal();
 	if (refusal !== null) {
 		options.notice.showNotice(refusal, "error");
 		return null;

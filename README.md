@@ -34,6 +34,7 @@ There is nothing to install and no account to create.
 - The app has no way to reach an outside server, so it never contacts a tracking service.
 - The app refuses to hand the payment to the crypto wallet unless the wallet reports the invoice's own network.
 - Nothing touches your wallet until you click Connect wallet & pay.
+- The page can be embedded by another page on purpose, because some wallets show the invoice inside their own frame: the payment panel still needs your own click and still refuses a window another page opened, but an embedding host could overlay the controls, and that is a risk this app accepts.
 - Invoice text is always shown as plain text, so a link cannot add code to the page.
 - Payee entered text never turns into bold or italics, because a link can come from anyone.
 - You get the transaction hash, the code the wallet gives back for the payment, instead of an external link that looks up the payment.
@@ -44,6 +45,7 @@ All three links open the same app, so pick the one that suits how you browse.
 IPFS is a network that serves files from many computers rather than one company.
 If you do not know what IPFS is, use the hosted link below; it opens like any other website.
 The long code starting `bafybei…` names the same content in all three, so the copy you are served can be checked against it.
+The app expects to be served from its own origin: the invoice lives in the URL fragment, and anything else sharing that origin would share the trust the fragment's confidentiality rests on.
 
 - **Most people:** <https://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.zoltu.io/> works in any browser, because a public gateway serves it for you; that gateway is run by someone else and could change the files before serving them, so trust it only as far as you trust its operator.
 - **Already use IPFS:** <ipfs://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4> opens the same app through your own IPFS software.

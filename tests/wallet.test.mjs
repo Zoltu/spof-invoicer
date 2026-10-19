@@ -1,4 +1,4 @@
-/** The suite for the wallet layer and the payment panel: transaction building, chain checks, EIP-6963 and `window.ethereum` discovery, the pay flow, and the framed and duplicate-payment refusals. */
+/** The suite for the wallet layer and the payment panel: transaction building, chain checks, EIP-6963 and `window.ethereum` discovery, the pay flow, and the opener and duplicate-payment refusals. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -985,7 +985,7 @@ test("eth_call refuses an oversized reply before scanning it and admits a genero
 	assert.equal(data.length, 2 + 2048 * 2, "a generous reply is still accepted");
 });
 
-test("the payment panel is refused while the document is framed", async () => {
+test("the payment panel opens inside a frame and still contacts no wallet until the click", async () => {
 	const fake = installInteractiveDocument();
 	const provider = mockProvider();
 	const framed = { ethereum: provider, top: {} };
@@ -993,10 +993,12 @@ test("the payment panel is refused while the document is framed", async () => {
 	try {
 		const notices = noticeRecorder();
 		const handle = openPayPanel(usdcInvoice(), { notice: notices, clipboard: null });
-		assert.equal(handle, null, "no panel is presented inside a frame");
-		assert.match(notices.calls.at(-1).message, /inside another page/);
-		assert.equal(notices.calls.at(-1).tone, "error");
-		assert.equal(provider.calls.length, 0, "refusing the panel contacts no wallet");
+		assert.ok(handle, "the panel is presented inside a frame");
+		assert.equal(notices.calls.filter((call) => call.tone === "error").length, 0, "no refusal is raised");
+		assert.equal(provider.calls.length, 0, "opening the panel inside a frame contacts no wallet");
+		click(byText(handle.element, "button", "Connect wallet & pay")[0]);
+		await drain();
+		assert.equal(hashOf(handle.element), TX_HASH, "the payer's own click is the only route to the provider");
 	} finally {
 		installed.restore();
 		fake.restore();

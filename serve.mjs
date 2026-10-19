@@ -52,20 +52,18 @@ async function serveFile(request) {
 	if (!(await file.exists())) {
 		return notFound();
 	}
-	// A meta CSP ignores frame-ancestors, so the served document carries the anti-framing directive as a header instead, with X-Frame-Options for clients that predate CSP frame-ancestors.
+	// Framing is permitted on purpose — some wallet hosts embed the invoice in their own page — so no frame-ancestors or X-Frame-Options header is sent; no-store and nosniff are the headers that remain, and nothing else in the header set changed.
 	return new Response(file, {
 		headers: {
 			"cache-control": "no-store",
 			"x-content-type-options": "nosniff",
-			"x-frame-options": "DENY",
-			"content-security-policy": "frame-ancestors 'none'",
 		},
 	});
 }
 
 /**
  * Create the static server over `app/`, bound to loopback by default; `options` overrides the host and port.
- * It sends the anti-framing CSP header a static gateway cannot, alongside no-store and nosniff.
+ * It sends no-store and nosniff, and deliberately sends no anti-framing header: the page may be embedded by a wallet host.
  */
 export function createStaticServer(options = {}) {
 	return Bun.serve({
