@@ -38,7 +38,7 @@ There is nothing to install and no account to create.
 - Invoice text is always shown as plain text, so a link cannot add code to the page.
 - Payee entered text never turns into bold or italics, because a link can come from anyone.
 - You get the transaction hash, the code the wallet gives back for the payment, instead of an external link that looks up the payment.
-- The [payment safety memo](docs/design/payment-safety-memo.md) records the address-check and double-payment options, with the evidence and what was deliberately not built.
+- The [payment safety memo](docs/design/payment-safety-memo.md) records the address-check and double-payment options, with the evidence and what was deliberately not built, why blockies avatars are decoration rather than a safeguard, why an address book would need a readable per-payee record this app does not keep, and the embedding risk this app accepts.
 
 ## Open the app
 
