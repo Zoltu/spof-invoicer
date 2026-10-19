@@ -600,10 +600,26 @@ textarea:disabled {
 	color: var(--ink-muted);
 }
 
+/*
+ * A term's value is what the panel states and what a wallet takes: the recipient's address is the one a payer compares against their wallet by eye, so it is held on one line and never broken, and a value wider than the panel's column scrolls inside its own box rather than escaping the dialog.
+ * The face follows the ladder `invoice.css` states for every surface that draws such a value; a row no rung class is written on keeps the size this panel gives it.
+ */
 .pay-term-value {
 	margin: 0;
-	overflow-wrap: anywhere;
+	min-width: 0;
+	white-space: nowrap;
+	overflow-wrap: normal;
+	overflow-x: auto;
 	font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The stacked phase of a panel term: the label takes a line of its own so the value has the panel's whole width, which is the geometry the stacked rungs in `invoice.css` are measured against.
+ */
+.pay-term.fit-stacked-12,
+.pay-term.fit-stacked-11,
+.pay-term.fit-stacked-10 {
+	grid-template-columns: 1fr;
 }
 
 .pay-dialog .mono {
@@ -644,7 +660,42 @@ textarea:disabled {
 	gap: 0.5rem;
 	align-items: baseline;
 	font-size: 0.875rem;
-	overflow-wrap: anywhere;
+	min-width: 0;
+}
+
+/*
+ * The connected account is a wallet's own address, which is the one value in its row that can outrun the panel: it takes the room the label leaves, scrolls its overflow, and never breaks.
+ */
+.pay-account-value {
+	flex: 1 1 0;
+	min-width: 0;
+	white-space: nowrap;
+	overflow-wrap: normal;
+	overflow-x: auto;
+}
+
+/*
+ * The balance is one string from the wallet, so it stays on one line like the values around it and scrolls rather than widening the dialog when a wallet reports an extreme amount.
+ */
+.pay-balance {
+	white-space: nowrap;
+	overflow-wrap: normal;
+	overflow-x: auto;
+}
+
+/*
+ * The stacked phase of the connected account: the row wraps and the value takes the line below its label, which is the geometry the stacked rungs in `invoice.css` are measured against.
+ */
+.pay-account.fit-stacked-12,
+.pay-account.fit-stacked-11,
+.pay-account.fit-stacked-10 {
+	flex-wrap: wrap;
+}
+
+.pay-account.fit-stacked-12 .pay-account-value,
+.pay-account.fit-stacked-11 .pay-account-value,
+.pay-account.fit-stacked-10 .pay-account-value {
+	flex-basis: 100%;
 }
 
 .pay-account-label {

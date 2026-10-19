@@ -5,11 +5,11 @@
  * Every string and every module comes from `ui/presentation.ts`'s frozen view model, so the two surfaces cannot word, order, or encode the payment differently, and neither of them recomputes a value the model already states.
  *
  * The amount, the address, and the link are values a wallet takes verbatim, so each is drawn as ordinary text with an exact-copy control beside it: a payer selects and copies the value the way they would any other text on the page — one term per block, so selecting the whole section yields a label and a value per line — while one click on the control hands the clipboard that string itself rather than whatever a selection happened to span.
- * The stylesheet holds each value on one run, so neither the layout nor a text selection can put a line break inside a value that has none.
+ * The stylesheet holds each value on one run, so neither the layout nor a text selection can put a line break inside a value that has none, and because a run that does not fit its column would be clipped, each verbatim value is handed to `ui/fit-value.ts`: that module sets the value at the largest rung of its size ladder that holds it on one line, and leaves the residual rung's visible scrollbar for a value no rung holds.
  * The control's confirmation is a status line with a lifecycle: it is cleared after a pause so the section returns to its uniform resting height, and a repeated copy of the same value blanks the line first and re-sets it, so the change is one an assistive technology announces rather than an identical rewrite it may pass over.
  *
  * The print path is given a second presentation of the same string.
- * A print engine cannot be trusted with the on-screen run — it is not allowed to wrap, and the copy control beside it is chrome the print path hides — so each copyable term also carries a print-only twin of its value: the same string as a text node, which `print.css` swaps in for the value and lets wrap, so a printed invoice carries the complete amount, payee address, and payment link of every legal invoice.
+ * A print engine cannot be trusted with the on-screen run — it is not allowed to wrap, and the copy control beside it is chrome the print path hides — so each copyable term also carries a print-only twin of its value: the same string as a text node, which `print.css` swaps in for the value, sizes by the value's own length, and only past its floor lets wrap, so a printed invoice carries the complete amount, payee address, and payment link of every legal invoice.
  *
  * The symbol is one element per module through `util/dom.ts`'s `h()`: no markup is built from a string, and no `data:` URL or canvas is reachable under the page's policy.
  */
@@ -17,6 +17,12 @@
 import { h, type DomChild } from "../util/dom.js";
 import type { QrMatrix } from "../util/qr.js";
 import { copyWithFallback, type ClipboardLike, type CopyStatus } from "./clipboard.js";
+import {
+	browserLayoutProbe,
+	fitValue,
+	printFitRung,
+	type LayoutProbe,
+} from "./fit-value.js";
 import type { InvoicePaymentTermView, InvoiceViewModel } from "./presentation.js";
 
 /**
@@ -92,29 +98,44 @@ export function copyControlClick(
 	};
 }
 
+/** Everything the section needs beyond the view model: how to copy, and how a fitted value measures the box it is drawn in. */
+export interface PaymentSectionOptions {
+	readonly fit?: LayoutProbe | null;
+}
+
 /**
  * The section the view model describes: its payment title, one term per entry in the model's own list, and the symbol of the link those terms state.
  *
  * The symbol is drawn under the terms that state the same URI, never as a second statement of it: the link text the term above it draws is what a screen reader reads and a payer can select.
+ * Every value a wallet takes verbatim is fitted through the options' probe, which defaults to the browser's own: a fake document, or a caller that wants no fitting, hands in a probe of its own and the section keeps the size the stylesheet states.
  */
-export function renderPaymentSection(view: InvoiceViewModel, clipboard: ClipboardLike | null): HTMLElement {
+export function renderPaymentSection(view: InvoiceViewModel, clipboard: ClipboardLike | null, options: PaymentSectionOptions = {}): HTMLElement {
+	const fit = options.fit ?? browserLayoutProbe;
 	return h(
 		"footer",
 		{ class: "invoice-payment" },
 		h("h2", { class: "section-title" }, view.labels.paymentTitle),
-		h("dl", { class: "payment-list" }, ...view.payment.map((term) => paymentTerm(term, clipboard))),
+		h("dl", { class: "payment-list" }, ...view.payment.map((term) => paymentTerm(term, clipboard, fit))),
 		qrBlock(view.paymentQr),
 	);
 }
 
-/** One payment-details term: its label and, in the `<dd>`, the value {@link paymentValue} renders, in a monospace face when the term is one a wallet takes verbatim. */
-function paymentTerm(term: InvoicePaymentTermView, clipboard: ClipboardLike | null): HTMLElement {
-	return h(
+/**
+ * One payment-details term: its label and, in the `<dd>`, the value {@link paymentValue} renders, in a monospace face when the term is one a wallet takes verbatim.
+ *
+ * A verbatim value is fitted with the row it is drawn in, because the row is the layout the choice is measured against — the label's rail, the value's column, and the copy control all decide how much width the run has — and the row is also the element the chosen rung's class is written on.
+ * The value is looked up in the row rather than returned alongside it, the way `ui/pay.ts` finds its own rows, so {@link paymentValue} keeps one return shape whether or not the term is fitted.
+ */
+function paymentTerm(term: InvoicePaymentTermView, clipboard: ClipboardLike | null, fit: LayoutProbe | null): HTMLElement {
+	const row = h(
 		"div",
 		{ class: "payment-term" },
 		h("dt", {}, term.label),
 		h("dd", { class: term.verbatim === true ? "mono" : undefined }, ...paymentValue(term, clipboard)),
 	);
+	const value = row.querySelector<HTMLElement>(".payment-value-verbatim");
+	if (value !== null) fitValue({ row, value }, fit);
+	return row;
 }
 
 /**
@@ -122,10 +143,10 @@ function paymentTerm(term: InvoicePaymentTermView, clipboard: ClipboardLike | nu
  *
  * The value is a text node rather than a form control, so a payer reads, selects, and copies it as they would any other text on the page, and a selection that spans the whole section yields one label and value per line rather than a control's value.
  * The copy control hands over the term's own string rather than the span of that selection, and the run the stylesheet draws the value in does not wrap, so the layout cannot break a value that breaks nowhere either.
- * A verbatim value is a keyboard-focusable scroll container: a value wider than its column overflows it, and focusing the value is what lets a keyboard-only user arrow along it to the tail the copy control also hands over whole.
+ * A verbatim value is a keyboard-focusable scroll container: a value wider than its column overflows it, and focusing the value is what lets a keyboard-only user arrow along it to the tail the copy control also hands over whole, while the rung the fitter chooses is what normally keeps the whole value in view with no scrolling at all.
  * Being focusable and a scroll container of its own, the value is a named `group`: ARIA 1.2 does not let an author name a bare generic element, and the role is what lets `aria-label` tell a screen-reader user which value the focus stop holds, while `invoice.css` rings the stop where `app.css` would leave a span unringed.
  * The print-only twin is that same term as the printed page presents it: the on-screen run does not wrap, a print engine would lay it out on one line and clip it at the column's edge, and the copy control — the one complete-copy affordance — is hidden in print, so a value longer than the column, a Zcash unified address of up to 311 characters or the payment link carrying it, would otherwise reach paper as the prefix that fitted.
- * The twin is a text node rather than a control's value, which is what lets `print.css` wrap it; on screen it is hidden and the value with its copy control is the presentation.
+ * The twin is a text node rather than a control's value, which is what lets `print.css` size it and, past its floor, break it; the rung it carries is the one `ui/fit-value.ts` computes from the value's own length, because a printed page's geometry is fixed and cannot be measured from script, and on screen the twin is hidden while the value with its copy control is the presentation.
  * The verbatim value carries its own class because the print swap drops that value alone: the terms no wallet takes verbatim have no twin, and their text stays in the printed document.
  * The write goes through `ui/clipboard.ts`, the seam the share dialog and the payment panel use: the two outcomes are spelled there once, and when the clipboard is unavailable or refuses the write the value's own contents are selected and the status tells the payer to copy by hand.
  * The button's accessible name carries the term's label, so two controls reading "Copy" on one document are still told apart.
@@ -140,7 +161,7 @@ function paymentValue(term: InvoicePaymentTermView, clipboard: ClipboardLike | n
 		{ class: "payment-value payment-value-verbatim", role: "group", "aria-label": term.label, tabindex: "0" },
 		term.value,
 	);
-	const printed = h("span", { class: "payment-value-print" }, term.value);
+	const printed = h("span", { class: `payment-value-print ${printFitRung(term.value)}` }, term.value);
 	// The status is built with no children at all rather than an empty string: `h()` turns a string child into a text node, and the stylesheet's `:empty` rule — what takes the status's reserved full-width row out of flow while it is silent — need not match an element holding one.
 	const status = h("span", { class: "payment-status no-print", role: "status" });
 	const copy = h("button", { type: "button", class: "btn btn-secondary payment-copy no-print", "aria-label": `Copy ${term.label}` }, "Copy");

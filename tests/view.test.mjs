@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { appliedDeclaration, cssRules, declaration, pxLength, ROOT_FONT_PX, ruleBody, selectorWeight } from "./helpers/css.mjs";
 import { installDocument, installInteractiveDocument } from "./helpers/dom.mjs";
 import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TRANSPARENT_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
@@ -20,6 +21,7 @@ import { mountShell, renderRoute } from "../app/js/app/shell.js";
 import { copyControlClick, renderPaymentSection } from "../app/js/ui/payment-section.js";
 import { buildInvoiceViewModel, formatInvoiceDate, invoiceStatus, money } from "../app/js/ui/presentation.js";
 import { buildShareBundle, createShareDialog, openShareDialog } from "../app/js/ui/share.js";
+import { FIT_RUNGS } from "../app/js/ui/fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES } from "../app/js/ui/messages.js";
 import { CHAIN_NAMES, chainName, networkLabel, requireNamedNetworks } from "../app/js/ui/network-labels.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
@@ -64,6 +66,13 @@ function noticeRecorder() {
 
 function byText(node, tag, text) {
 	return findAll(node, (child) => child.tagName === tag && textOf(child) === text);
+}
+
+/** The print rungs an element carries, read off its class attribute: the fitter's print ladder, which is its own table rather than the screen's `FIT_RUNGS`. */
+function printRungs(node) {
+	return String(node.attributes.class ?? "")
+		.split(" ")
+		.filter((name) => name.startsWith("print-fit-"));
 }
 
 function dialogNode(handle) {
@@ -642,7 +651,7 @@ test("print.css gates itself to print and keeps the document whole", () => {
 	assert.ok(!/Cmd\/Ctrl\+P/.test(printCss), "the comment must not mistake Save as PDF for browser print");
 });
 
-test("a printed payment value is the whole value, wrapped rather than clipped", () => {
+test("a printed payment value is the whole value, sized by its length and wrapped only past the floor", () => {
 	// The print path is the one surface where a payment value can reach paper shortened: the on-screen value is held on one non-wrapping run, which a print engine clips at the column's edge, and the copy control beside it — the only affordance that hands over the complete string — is chrome print.css hides, so a Zcash unified address or the link carrying it would print as the prefix that fitted.
 	const address = unifiedOfBytes(189);
 	assert.equal(address.length, MAX_ZCASH_ADDRESS_LENGTH, "the fixture is the widest address the Zcash validator accepts");
@@ -659,6 +668,7 @@ test("a printed payment value is the whole value, wrapped rather than clipped", 
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
 		const printed = findAll(payment, (node) => hasClass(node, "payment-value-print"));
 		const amount = model.payment.find((term) => term.label === model.labels.amount).value;
+		assert.equal(amount.length, 79, "the amount fixture is 79 characters, inside the 7pt rung's own count");
 		assert.deepEqual(
 			printed.map((node) => textOf(node)),
 			[address, amount, model.paymentLink],
@@ -674,22 +684,56 @@ test("a printed payment value is the whole value, wrapped rather than clipped", 
 			assert.equal(textOf(node), values[index], "the print presentation is the value's own string, not a second rendering of it");
 		});
 
-		// The swap is the stylesheets' whole contract for the print surface, so both halves are asserted where a print engine reads them: the value is dropped and the twin is shown with a property that lets a value longer than the column break inside itself.
+		// The swap is the stylesheets' whole contract for the print surface, so both halves are asserted where a print engine reads them: the value is dropped, and the twin is shown in its place on a row of its own.
 		const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
-		const dropped = /\.payment-value-verbatim \{([^}]*)\}/.exec(printCss)?.[1];
-		assert.ok(dropped !== undefined, "print.css states what happens to the on-screen value a print engine would clip");
-		assert.match(dropped, /display:\s*none/, "and drops it, so no printed value is a clipped run");
-		assert.doesNotMatch(printCss, /\.payment-value\s*\{/, "while the plain values of terms no wallet takes verbatim stay in the printed document");
-		const twin = /\.payment-value-print \{([^}]*)\}/.exec(printCss)?.[1];
+		assert.match(ruleBody(printCss, ".payment-value-verbatim"), /display:\s*none/, "print.css drops the on-screen value, so no printed value is a clipped run");
+		const twin = ruleBody(printCss, ".payment-value-print");
 		assert.ok(twin !== undefined, "print.css states how the print presentation is shown");
-		assert.match(twin, /display:\s*(?:block|inline)/, "and shows it in the dropped value's place");
-		assert.match(
-			twin,
-			/overflow-wrap:\s*(?:anywhere|break-word)|word-break:\s*break-all/,
-			"with the property that breaks a value wider than the column inside itself rather than overflowing it",
-		);
-		assert.doesNotMatch(twin, /white-space:\s*nowrap|overflow(?:-[xy])?\s*:\s*(?:hidden|clip)/, "and with nothing that holds it on one line or clips it");
-		const screenTwin = /\.payment-value-print \{([^}]*)\}/.exec(readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8"))?.[1];
+		assert.match(twin, /display:\s*(?:block|inline)/, "in the dropped value's place");
+		assert.doesNotMatch(twin, /white-space|overflow-wrap|word-break/, "with no line rule of its own: the rung the twin carries is what decides whether the value may break");
+		assert.doesNotMatch(printCss, /\.payment-value\s*\{/, "while the plain values of terms no wallet takes verbatim stay in the printed document");
+
+		// The ladder: one rule per rung, the sizes descending to the 6pt floor, and no break allowed before it.
+		const rungSizes = [
+			["print-fit-1", "9pt"],
+			["print-fit-2", "8pt"],
+			["print-fit-3", "7pt"],
+			["print-fit-4", "6pt"],
+		];
+		const points = [];
+		for (const [rung, size] of rungSizes) {
+			const body = ruleBody(printCss, `.payment-value-print.${rung}`);
+			assert.ok(body !== undefined, `print.css states the ${rung} rung`);
+			assert.equal(declaration(body, "font-size"), size, `${rung} is set at ${size}`);
+			assert.equal(declaration(body, "white-space"), "nowrap", `${rung} holds the value on one line`);
+			assert.equal(declaration(body, "overflow-wrap"), undefined, `${rung} never breaks the value`);
+			points.push(Number(size.slice(0, -2)));
+		}
+		assert.deepEqual(points, [...points].sort((left, right) => right - left), "the rungs descend from the largest to the smallest");
+		assert.equal(points[points.length - 1], 6, "and stop at the 6pt floor, ordinary fine print");
+		const wrap = ruleBody(printCss, ".payment-value-print.print-fit-wrap");
+		assert.ok(wrap !== undefined, "and the last rung states what a value past the floor may do");
+		assert.equal(declaration(wrap, "white-space"), "normal");
+		assert.equal(declaration(wrap, "overflow-wrap"), "anywhere", "which is to break inside itself rather than overflow the page");
+		assert.equal(declaration(wrap, "font-size"), undefined, "with no size of its own, so the floor's face is the one it breaks at");
+		// Every line rule in the print stylesheet belongs to a rung, so no other block in the document is held on a line or allowed to break by print.css.
+		for (const rule of cssRules(printCss)) {
+			for (const property of ["white-space", "overflow-wrap", "word-break"]) {
+				if (declaration(rule.body, property) === undefined) continue;
+				assert.ok(
+					rule.selectors.every((selector) => selector.startsWith(".payment-value-print.print-fit-")),
+					`print.css declares ${property} only for a payment value's print rung, not for ${rule.selectors.join(", ")}`,
+				);
+			}
+		}
+
+		// The rungs the twins carry: a value past the floor wraps, and a 42-character address prints at the largest size the ladder states.
+		assert.deepEqual(printed.map(printRungs), [["print-fit-wrap"], ["print-fit-3"], ["print-fit-wrap"]], "the 311-character address and the 404-character link that carries it both wrap, and the 79-character amount is sized from its own length");
+		const evm = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const evmTwins = findAll(evm, (node) => hasClass(node, "payment-value-print"));
+		assert.deepEqual(printRungs(evmTwins[0]), ["print-fit-1"], "while a 42-character EVM address prints at the ladder's largest rung");
+
+		const screenTwin = ruleBody(readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8"), ".payment-value-print");
 		assert.ok(screenTwin !== undefined, "invoice.css declares the print presentation too, so the two are swapped rather than both drawn");
 		assert.match(screenTwin, /display:\s*none/, "which is hidden on screen, where the value and its copy control are the presentation");
 	} finally {
@@ -1381,12 +1425,12 @@ test("a contact value's own spacing is drawn as the payee typed it on the page a
 		"pre-wrap",
 		"the block that draws the contact lines preserves their whitespace, as the note lines' own block already does",
 	);
-	// The print stylesheet recolours the same element and is loaded instead of the screen's, so it is the one place a re-collapse could hide: it must declare no `white-space` for these lines or any other.
-	assert.doesNotMatch(
-		readFileSync(join(root, "app/stylesheets/print.css"), "utf8"),
-		/white-space/,
-		"the print path prints the contact lines under the document's own declaration rather than one that would collapse their spaces",
-	);
+	// The print stylesheet recolours the same element and is loaded instead of the screen's, so it is the one place a re-collapse could hide: it must declare no `white-space` for these lines, or for the note lines that preserve their own spacing.
+	const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
+	for (const rule of cssRules(printCss)) {
+		if (!rule.selectors.some((selector) => selector === ".party-detail" || selector === ".note-line")) continue;
+		assert.equal(declaration(rule.body, "white-space"), undefined, "the print path prints the contact lines under the document's own declaration rather than one that would collapse their spaces");
+	}
 
 	const fake = installInteractiveDocument();
 	try {
@@ -1462,11 +1506,12 @@ test("a verbatim payment row is no taller than the value it draws, and an empty 
 		fake.restore();
 	}
 
-	// The value is a scroll container, so the scrollbar its overflow would otherwise draw must carry no layout height: a classic scrollbar's height would make the one overflowing row — the 404-byte Zcash payment link — taller than its neighbours, which is the non-uniform rhythm this presentation exists to remove.
-	assert.equal(declaration(value, "scrollbar-width"), "none", "the value reserves no layout height for the classic scrollbar its overflow would otherwise draw");
-	const webkitScrollbar = ruleBody(invoiceCss, ".payment-value::-webkit-scrollbar");
-	assert.ok(webkitScrollbar !== undefined, "invoice.css hides the value's WebKit scrollbar too");
-	assert.equal(declaration(webkitScrollbar, "display"), "none", "and hides it, so neither engine adds a scrollbar's height to that row");
+	// The value is a scroll container, and its scrollbar is how an overflowing value says so: nothing hides it, and a row whose value fits reserves no height for one. The residual rung — the one state in which the value certainly does not fit — is where the ladder states the thin scrollbar both engines draw, so even there the row gains no more height than the thinnest bar makes.
+	assert.equal(declaration(value, "scrollbar-width"), undefined, "the base rule hides no scrollbar, so a value that overflows before any script runs is visibly scrollable rather than silently clipped");
+	assert.equal(declaration(value, "overflow-x"), "auto", "and the value scrolls its own overflow");
+	assert.equal(ruleBody(invoiceCss, ".payment-value::-webkit-scrollbar"), undefined, "no WebKit rule hides the scrollbar that overflow draws either");
+	assert.equal(appliedDeclaration(invoiceCss, ".payment-term.fit-residual .payment-value", "scrollbar-width"), "thin", "the residual rung states the visible thin scrollbar the ladder uses");
+	assert.equal(appliedDeclaration(invoiceCss, ".payment-term.fit-residual .payment-value::-webkit-scrollbar", "height"), "6px", "and the WebKit height of the same cue, so neither engine falls back to a full-height bar");
 
 	// Neither affordance is part of the text a payer selects, which is what makes a select-all of the section read one label and one value per line; both also keep their own width on the row rather than stretching.
 	for (const selector of [".payment-copy", ".payment-status"]) {
@@ -1571,10 +1616,10 @@ test("each copy status is a live region that stays in the document before it has
 	}
 });
 
-test("a verbatim payment value is a named focus stop with its own ring and a layout-neutral clip cue", () => {
+test("a verbatim payment value is a named focus stop with its own ring, and the residual rung is the visible cue that it scrolls", () => {
 	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
 	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
-	// A value wider than its column is a keyboard-reachable scroll container whose scrollbar is hidden, so it needs both the ring `app.css` gives only form controls and a name that tells a screen-reader user which value the stop holds.
+	// A value wider than its column is a keyboard-reachable scroll container, so it needs both the ring `app.css` gives only form controls and a name that tells a screen-reader user which value the stop holds.
 	const ring = declaration(ruleBody(invoiceCss, ".payment-value-verbatim:focus-visible"), "outline");
 	assert.ok(ring !== undefined, "a focusable value needs a visible focus indicator, the one `app.css` does not give a span");
 	// The payee's create screen draws this same section under `.created-payment`, with no `.view-invoice` ancestor to declare `--inv-accent`, so a bare `--inv-accent` would leave the outline's shorthand invalid there and the ring gone. The outline therefore carries a fallback to the root-scoped token `app.css`'s own ring uses.
@@ -1584,12 +1629,12 @@ test("a verbatim payment value is a named focus stop with its own ring and a lay
 		"the ring's colour falls back to the root-scoped `--accent`, so it resolves on the create screen as well as the payer's document",
 	);
 	assert.match(appCss, /:root \{[^}]*--accent:/, "and that fallback is declared at the root, which every surface inherits");
-	// The cue that a value is clipped has to paint without reserving a box, so it is a mask rather than a property that would change the row's resting height.
-	const cue = ruleBody(invoiceCss, ".payment-term:hover .payment-value-verbatim");
-	assert.ok(cue !== undefined, "the stylesheet cues a clipped value while the row is pointed at");
-	for (const line of cue.split("\n").map((entry) => entry.trim()).filter((entry) => entry !== "")) {
-		assert.match(line, /^(-webkit-)?mask(?:-image)?:/, `the cue paints with a mask rather than reserving layout: ${line}`);
-	}
+	// The cue that a value does not fit is its scrollbar rather than a mask or a fade: a hidden scrollbar would make the overflow a silent clip, so an overflowing value is visibly scrollable and the residual rung is the state that says so in both engines.
+	assert.equal(ruleBody(invoiceCss, ".payment-term:hover .payment-value-verbatim"), undefined, "no hover-only rule stands in for the scrollbar a clipped value would otherwise show");
+	assert.doesNotMatch(invoiceCss, /mask-image/, "and no mask fades the value's edge in its place");
+	assert.equal(appliedDeclaration(invoiceCss, ".payment-term.fit-residual .payment-value", "scrollbar-width"), "thin", "the residual rung states the thin scrollbar the value scrolls behind");
+	assert.equal(appliedDeclaration(invoiceCss, ".payment-term.fit-residual .payment-value::-webkit-scrollbar", "height"), "6px", "in WebKit too, so neither engine falls back to a full-height bar");
+	assert.equal(ruleBody(invoiceCss, ".payment-value::-webkit-scrollbar"), undefined, "and the base rule hides no scrollbar for the engine that would draw one");
 
 	const fake = installInteractiveDocument();
 	try {
@@ -1613,6 +1658,29 @@ test("a verbatim payment value is a named focus stop with its own ring and a lay
 	} finally {
 		fake.restore();
 	}
+});
+
+test("every screen rung invoice.css declares matches the module's ladder, and the sizes descend to the 10px floor", () => {
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	// A rung is a class the fitter writes and a size the stylesheet states; the module's list is what both sides are held to, so a rung added on one side alone fails here rather than being written onto a row no rule sizes.
+	const sizes = [];
+	for (const rung of FIT_RUNGS) {
+		const bodies = cssRules(invoiceCss).filter((rule) => rule.selectors.some((selector) => selector.includes(`.${rung} `)) && declaration(rule.body, "font-size") !== undefined);
+		assert.equal(bodies.length, 1, `invoice.css states the ${rung} rung's size exactly once`);
+		const size = declaration(bodies[0].body, "font-size");
+		assert.ok(String(size).endsWith("rem"), `${rung} states its size in rem, so it follows the root font size the page assumes`);
+		sizes.push({ rung, px: pxLength(size, rung) });
+	}
+	assert.deepEqual(sizes.map((entry) => entry.rung), [...FIT_RUNGS], "the stylesheet declares the ladder in the module's own order, so the rungs read from the largest to the residual one");
+	assert.deepEqual(sizes.slice(0, 4).map((entry) => entry.px), [13, 12, 11, 10], "the inline phase descends from the 13px base to the 10px floor");
+	assert.deepEqual(sizes.slice(4, 7).map((entry) => entry.px), [12, 11, 10], "the stacked phase descends from 12px to the same floor");
+	assert.equal(sizes[7].px, 10, "and the residual rung keeps the floor's own size, scrolling rather than shrinking past it");
+	// The floor is 10px monospace: below it a payer can no longer tell 0 from O or l from 1 in the address they are checking.
+	for (const entry of sizes) assert.ok(entry.px >= 10, `${entry.rung} is at or above the 10px floor`);
+	// Every surface that draws such a value is named in the one rule, so the size is stated here alone rather than repeated in `app.css` where it could drift.
+	const panelValue = cssRules(invoiceCss).find((rule) => declaration(rule.body, "font-size") === "0.8125rem" && rule.selectors.some((selector) => selector.includes(".fit-inline-13")));
+	assert.ok(panelValue.selectors.includes(".pay-term.fit-inline-13 .pay-term-value"), "the payment panel's own term is sized by the same rung");
+	assert.ok(panelValue.selectors.includes(".pay-account.fit-inline-13 .pay-account-value"), "as is the connected account");
 });
 
 test("a copy in flight does not write into a payment section the create screen has rebuilt", async () => {
@@ -1651,62 +1719,3 @@ test("a copy in flight does not write into a payment section the create screen h
 		fake.restore();
 	}
 });
-
-/** Every rule of a stylesheet, as the selector list its header names and the body its braces hold, with its comments dropped first because a rule's text reaches back to the previous closing brace and a comment above it carries commas of its own. */
-function cssRules(css) {
-	return [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((rule) => ({
-		selectors: rule[1].split(",").map((entry) => entry.trim()),
-		body: rule[2],
-	}));
-}
-
-/**
- * The declarations of the one rule a stylesheet declares under `selector` alone, or `undefined` when it declares none.
- *
- * A rule's selector list is read entry by entry — split on its commas and trimmed — so the block this returns is the one whose whole list is that selector, and a combined block that lists it beside another selector is not mistaken for the sole-selector rule the way a search for the selector's own line would.
- * Every stylesheet here writes one declaration per line, which is the shape this reads, and writes each selector this asks about as the sole selector of its rule.
- */
-function ruleBody(css, selector) {
-	const rule = cssRules(css).find((candidate) => candidate.selectors.length === 1 && candidate.selectors[0] === selector);
-	return rule?.body;
-}
-
-/** The value of one `property` declaration in a rule body, or `undefined` when the rule declares none. */
-function declaration(body, property) {
-	const line = String(body ?? "")
-		.split("\n")
-		.map((entry) => entry.trim())
-		.find((entry) => entry.startsWith(property + ": "));
-	return line === undefined ? undefined : line.slice(property.length + 2, -1);
-}
-
-/**
- * The value `property` resolves to for `selector`, or `undefined` when no rule naming it declares the property.
- *
- * A selector need not sit alone in a rule's list: `print.css`'s ink block names `.party-detail` beside a dozen others, and `.payment-status` is named by that shared affordance block and by its own full-width rule, so this reads every rule whose selector list names it rather than one literal block and takes the last declaration, the one the cascade applies at equal specificity within one stylesheet.
- */
-function appliedDeclaration(css, selector, property) {
-	const values = cssRules(css)
-		.filter((rule) => rule.selectors.includes(selector))
-		.map((rule) => declaration(rule.body, property))
-		.filter((value) => value !== undefined);
-	return values.length === 0 ? undefined : values[values.length - 1];
-}
-
-/** The 16px root font size a rem resolves against, which the page declares no font size of its own to change. */
-const ROOT_FONT_PX = 16;
-
-/** The pixels a stylesheet's `rem` or `px` length states, with the unit required so a length in another unit cannot pass as one. */
-function pxLength(length, where) {
-	const text = String(length).trim();
-	if (text.endsWith("rem")) return Number(text.slice(0, -3)) * ROOT_FONT_PX;
-	assert.ok(text.endsWith("px"), `${where} states its length in rem or px, not ${text}`);
-	return Number(text.slice(0, -2));
-}
-
-/** The specificity weight of a selector written with classes, attributes, pseudo-classes, and elements: enough to compare the single-class `.btn` with the scoped `.payment-term .payment-copy`, where a class-like token outweighs an element and no id is in play. */
-function selectorWeight(selector) {
-	const classLike = (selector.match(/\.[\w-]+|\[[^\]]*\]|::?[\w-]+(?:\([^)]*\))?/g) ?? []).length;
-	const elements = (selector.match(/(?:^|[\s>+~])[a-zA-Z][\w-]*/g) ?? []).length;
-	return classLike * 100 + elements;
-}

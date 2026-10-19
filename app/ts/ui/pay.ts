@@ -10,6 +10,7 @@
  * A `failed` frame — nothing was broadcast — offers a full-flow "Try again", while the ambiguous `send-failed` frame offers a send-only "Try sending again" and an "I already sent it" exit that dismisses the panel without touching the wallet, so a retry after an unclear send cannot blindly re-run the whole flow.
  * Everything the panel shows comes from `wallet/payment.ts` and `wallet/eip1193.ts`: the amount is the model's own total, the recipient is the invoice's validated payee, and a wrong network stops the flow with guidance and a switch control rather than a transaction.
  * The network it names is spelled by `ui/network-labels.ts`'s `networkLabel`, the same spelling the payer's document and the flow's guidance use.
+ * The recipient's address and the connected account are values a wallet takes verbatim, so each is handed to `ui/fit-value.ts` rather than left to wrap: that module holds the value on one line at the largest size of its ladder that fits the row, and the panel therefore never breaks or clips an address a payer is checking.
  * All text is a text child of `util/dom.ts`'s `h()`, so no invoice field can become markup, and the transaction hash is shown as plain text with a copy control — the panel deliberately links to no block explorer, since resolving one would mean a network destination the app refuses to have.
  * A provider-derived string that reaches this panel — a wallet's announced label, whether on its own or echoed into a status line — is run through the same display-character pass the notices get, so it cannot carry bidi or invisible characters even if a future caller hands the panel one that `providerInfo` has not already cleaned.
  */
@@ -30,6 +31,7 @@ import {
 	type PaymentReceipt,
 } from "../wallet/payment.js";
 import { copyWithFallback, type ClipboardLike } from "./clipboard.js";
+import { browserLayoutProbe, fitValue, type LayoutProbe } from "./fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import type { NoticeApi, NoticeTone } from "./notice.js";
 import { openOverlay, type OverlayHandle } from "./overlay.js";
@@ -116,10 +118,16 @@ function embeddingRefusal(): string | null {
 	return null;
 }
 
-/** Everything the payment panel needs: where to report, and how to copy. */
+/** Everything the payment panel needs: where to report, how to copy, and how a value it states measures the box it is drawn in. */
 export interface PayPanelOptions {
 	readonly notice: NoticeApi;
 	readonly clipboard?: ClipboardLike | null;
+	readonly fit?: LayoutProbe | null;
+}
+
+/** Where a built panel records the teardown of its current rows' fit subscriptions, so the overlay's close runs it. */
+interface PanelFits {
+	stop: () => void;
 }
 
 /** The mounted panel: the overlay element plus the one way to dismiss it. */
@@ -147,8 +155,10 @@ export function openPayPanel(invoice: Invoice, options: PayPanelOptions): PayPan
 		options.notice.showNotice(UNSUPPORTED_WALLET_MESSAGE, "error");
 		return null;
 	}
+	// The panel rebuilds its rows on every state change, so the teardown of the rows it holds now is kept where the overlay's close can run it.
+	const fits: PanelFits = { stop: () => {} };
 	try {
-		return openOverlay((close) => buildPayDialog(invoice, key, options, close), { initialFocus: ".pay-connect" });
+		return openOverlay((close) => buildPayDialog(invoice, key, options, close, fits), { initialFocus: ".pay-connect", onClose: () => fits.stop() });
 	} catch (error) {
 		// The typed refusal `buildPaymentPlan` raises for a family this flow cannot pay must not escape the panel entry; the gate above already covers it, and this keeps the guarantee if the two ever diverge.
 		if (error instanceof UnsupportedPaymentFamilyError) {
@@ -160,10 +170,20 @@ export function openPayPanel(invoice: Invoice, options: PayPanelOptions): PayPan
 }
 
 /** Build the panel's dialog element. Every wallet call below happens only from a click on its controls. */
-function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions, close: () => void): HTMLElement {
+function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions, close: () => void, fits: PanelFits): HTMLElement {
 	const plan = buildPaymentPlan(invoice);
 	const notice = options.notice;
 	const clipboard = options.clipboard ?? null;
+	const fit = options.fit ?? browserLayoutProbe;
+	// The rows a render builds are dropped by the next one, so the fit subscriptions taken for them are dropped with it rather than left watching a detached row; the summary's own row is built once and lives as long as the dialog, so its subscription is held apart and dropped when the panel closes.
+	const renderFits: (() => void)[] = [];
+	const dialogFits: (() => void)[] = [];
+	const stopRenderFits = (): void => {
+		for (const stop of renderFits.splice(0)) stop();
+	};
+	fits.stop = (): void => {
+		for (const stop of [...renderFits.splice(0), ...dialogFits.splice(0)]) stop();
+	};
 	const panelId = `pay-${(panelSequence += 1)}`;
 	// This panel's identity in the payment latch: a send claims the invoice for this object, and a flow holding a different object is refused.
 	const owner = {};
@@ -190,13 +210,14 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 			tabindex: "-1",
 		},
 		payHeader(plan, close),
-		paySummary(plan),
+		paySummary(plan, fit, dialogFits),
 		statusRegion,
 		dynamic,
 		h("p", { class: "field-hint" }, "Only your wallet is contacted while this panel is open."),
 	);
 
 	function render(): void {
+		stopRenderFits();
 		dynamic.replaceChildren();
 		append(dynamic, panelBody());
 		refreshStatus();
@@ -270,12 +291,15 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 	function accountLine(): DomChild {
 		const session = snapshot.session;
 		if (session === null) return null;
-		return h(
+		const value = h("span", { class: "pay-account-value mono" }, toChecksumAddress(session.account));
+		const row = h(
 			"p",
 			{ class: "pay-account" },
 			h("span", { class: "pay-account-label" }, "Connected account"),
-			h("span", { class: "pay-account-value mono" }, toChecksumAddress(session.account)),
+			value,
 		);
+		renderFits.push(fitValue({ row, value }, fit));
+		return row;
 	}
 
 	function balanceLine(): DomChild {
@@ -375,22 +399,35 @@ function payHeader(plan: PaymentPlan, close: () => void): HTMLElement {
 }
 
 /** What the transaction will send, read off the plan so the panel cannot disagree with the wallet. */
-function paySummary(plan: PaymentPlan): HTMLElement {
+function paySummary(plan: PaymentPlan, fit: LayoutProbe | null, stops: (() => void)[]): HTMLElement {
 	return h(
 		"dl",
 		{ class: "pay-summary" },
 		payTerm("Amount due", `${plan.amountText} ${plan.asset.symbol}`, true),
 		payTerm("Asset", `${plan.asset.name} (${plan.asset.symbol})`),
-		payTerm("Recipient", toChecksumAddress(plan.recipient), true),
+		payTerm("Recipient", toChecksumAddress(plan.recipient), true, { fit, stops }),
 		payTerm("Network", networkLabel(plan.chainId)),
 	);
 }
 
-function payTerm(label: string, value: string, mono = false): HTMLElement {
-	return h(
+/**
+ * One summary term: its label and its value, in a monospace face when the value is one a wallet states — the recipient's address.
+ *
+ * The recipient's row is handed to `ui/fit-value.ts` together with the place its teardown is kept, because the address is the value a payer compares against their wallet and a run that does not fit its column would be clipped; every other term here is the panel's own reading of the plan and keeps the size the stylesheet states.
+ */
+function payTerm(
+	label: string,
+	value: string,
+	mono = false,
+	fitting: { readonly fit: LayoutProbe | null; readonly stops: (() => void)[] } | null = null,
+): HTMLElement {
+	const field = h("dd", { class: mono ? "pay-term-value mono" : "pay-term-value" }, value);
+	const row = h(
 		"div",
 		{ class: "pay-term" },
 		h("dt", { class: "pay-term-label" }, label),
-		h("dd", { class: mono ? "pay-term-value mono" : "pay-term-value" }, value),
+		field,
 	);
+	if (fitting !== null && fitting.fit !== null) fitting.stops.push(fitValue({ row, value: field }, fitting.fit));
+	return row;
 }
