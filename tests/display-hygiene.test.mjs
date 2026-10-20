@@ -29,7 +29,6 @@ import { findAll, hasClass, textOf } from "./helpers/tree.mjs";
 import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 
 const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
-/** The render options every case in this suite builds on: the base URL, the invoice date, and no clipboard. */
 const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
 
 // Code points the validator deliberately leaves unrefused but every render surface must strip: the interlinear-annotation format characters and the Egyptian hieroglyph format controls.

@@ -38,11 +38,11 @@ export interface AppShell extends NoticeApi {
 	readonly notice: HTMLElement;
 	readonly content: HTMLElement;
 	/**
-	 * Replace the route container's document, running the release the document it drops carries.
+	 * Replace the route container's document, releasing the document it drops.
 	 *
 	 * The container is what drops a document, so it is also what ends what that document subscribed to, and nothing waits for a layout report to notice that the dropped rows are gone.
-	 * The incoming release is promoted into the one release slot before the dropped one runs, so a release that fails — reported in the notice region rather than thrown at the render that already replaced it, which must not be undone for a fault in what it displaced — can neither strand its successor unpromoted nor run a second time on the next route.
-	 * Only a document that reached this call has a release to run: a render that throws never gets here, because the renderer releases its own subscription in its own `catch` before {@link renderGuarded} mounts its error paragraph, whose release is `NOTHING_TO_RELEASE` and so ends nothing.
+	 * The incoming release is promoted into the one release slot before the dropped one is released, so a release that fails — reported in the notice region rather than thrown at the render that already replaced it, which must not be undone for a fault in what it displaced — can neither strand its successor unpromoted nor be released a second time on the next route.
+	 * Only a document that reached this call has something to release: a render that throws never gets here, because the renderer releases its own subscription in its own `catch` before {@link renderGuarded} mounts its error paragraph, whose release is `NOTHING_TO_RELEASE` and so ends nothing.
 	 */
 	setContent(node: ReleasableElement): void;
 	setActiveNav(name: string): void;
@@ -54,7 +54,7 @@ export interface RenderOptions {
 	readonly baseUrl: string;
 	readonly today: string;
 	readonly clipboard: ClipboardLike | null;
-	/** The probe every fitted value the routes draw measures through, or `null` to fit nothing; {@link BootOptions.fit} states where it comes from. */
+	/** The probe every fitted value the routes draw measures through; {@link BootOptions.fit} states where it comes from and what an absent or `null` probe means. */
 	readonly fit: LayoutProbe | null;
 	readonly exportPdf?: ExportPdfHandler;
 	readonly pay?: PayHandler;
@@ -62,13 +62,13 @@ export interface RenderOptions {
 
 /**
  * The optional overrides {@link bootApp} accepts: the base URL and date its defaults read, the clipboard, the layout probe the fitted values measure through, and the two invoice-view seams.
- * Every field falls back to the live-page default when omitted, except the probe: an absent one fits nothing and leaves every value at the rung its stylesheet states, because only the entry module knows how the page can measure a box.
+ * Every field falls back to the live-page default when omitted, except the probe, which only the entry module knows how to build.
  */
 export interface BootOptions {
 	readonly baseUrl?: string;
 	readonly today?: string;
 	readonly clipboard?: ClipboardLike | null;
-	/** The probe the fitted values measure through; `main.ts` supplies the browser's own, and an absent option fits nothing. */
+	/** The probe the fitted values measure through, supplied by `main.ts` as the browser's own; `PaymentSectionOptions.fit` in `../ui/payment-section.ts` states what an absent one means. */
 	readonly fit?: LayoutProbe | null;
 	readonly exportPdf?: ExportPdfHandler;
 	readonly pay?: PayHandler;
@@ -117,13 +117,12 @@ export function mountShell(root: HTMLElement): AppShell {
 		clearNotice,
 		setContent(node: ReleasableElement): void {
 			content.replaceChildren(node);
-			// The incoming release is promoted before the dropped document's release runs, so a release that throws can neither keep its successor from being promoted nor be run a second time by the next render; a release that fails is reported in the notice region, because the render that replaced the document has already succeeded and must not be undone for it.
 			const dropped = contentRelease;
 			contentRelease = node.release;
 			try {
 				dropped();
 			} catch (error) {
-				showNotice(boundMessage(`Releasing the previous view failed: ${messageOf(error)}`, NOTICE_MESSAGE_MAX), "error");
+				showNotice(boundMessage(`Releasing the previous document failed: ${messageOf(error)}`, NOTICE_MESSAGE_MAX), "error");
 			}
 		},
 		setActiveNav(name: string): void {

@@ -52,7 +52,7 @@ async function serveFile(request) {
 	if (!(await file.exists())) {
 		return notFound();
 	}
-	// Framing is permitted on purpose — some wallet hosts embed the invoice in their own page — so no frame-ancestors or X-Frame-Options header is sent; no-store and nosniff are the headers that remain, and nothing else in the header set changed.
+	// Framing is permitted on purpose — some wallet hosts show the invoice inside their own frame — so no `frame-ancestors` directive is set and no `X-Frame-Options` header is sent.
 	return new Response(file, {
 		headers: {
 			"cache-control": "no-store",
@@ -63,7 +63,6 @@ async function serveFile(request) {
 
 /**
  * Create the static server over `app/`, bound to loopback by default; `options` overrides the host and port.
- * It sends no-store and nosniff, and deliberately sends no anti-framing header: the page may be embedded by a wallet host.
  */
 export function createStaticServer(options = {}) {
 	return Bun.serve({

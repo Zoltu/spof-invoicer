@@ -438,11 +438,12 @@
 
 /*
  * The term value: the text a copy control reads, or the plain text of a term no wallet takes verbatim.
- * It is drawn as the text it is rather than as a form control, and it holds its characters on one run: the term is a flex container, so the value is a block box whose own overflow scrolls, and neither the layout nor a text selection can put a line break inside a value that has none.
+ * It is drawn as the text it is rather than as a form control, and it holds its characters on one run: the term's description is the flex container, so the value is a flex item whose own box scrolls its overflow, and neither the layout nor a text selection can put a line break inside a value that has none.
  * A copyable value is a keyboard-reachable scroll container of its own, so a keyboard-only user can arrow along a value wider than its column and reach the tail the copy control also hands over whole.
- * The scrollbar that overflow draws is left in place rather than hidden, because a value wider than its box is the one case where the box cannot draw the whole value: a hidden scrollbar makes that a silent clip, while a visible one says the tail is there, and the residual rung of the ladder below states it thin as its own cue.
- * One line box carries the value of every term, stated in an absolute length rather than left to each face's own size, so the mono face a verbatim term is set in draws no shorter a line than the plain Asset and Network terms above it and the terms keep the list's gap apart rather than a rhythm of their own.
- * The face the value is drawn at before any script runs is the ladder's base rung, `.payment-term dd.mono`'s 0.8125rem, which the enforcement test holds to `FIT_LADDER`'s own base size; `ui/fit-value.ts` writes a smaller rung, the stacked phase, or the residual rung only when the base does not fit.
+ * `overflow-wrap` and `word-break` are stated at their initial values rather than left implicit because both inherit, and neither is what forbids the wrap — `white-space: nowrap` is — so the pair keeps the no-break contract inside this rule rather than depending on no ancestor setting a break rule.
+ * The scrollbar that overflow draws is left in place rather than hidden, because a value wider than its box is the one case where the box cannot draw the whole value: a hidden scrollbar makes that a silent clip, while a visible one says the tail is there, and the residual rung of the screen ladder below states it thin as its own cue.
+ * One line box carries the value of every term, stated in an absolute length rather than left to each element's own font size, so the mono face a verbatim term is set in draws no shorter a line than the plain Asset and Network terms above it and the terms keep the list's gap apart rather than a rhythm of their own.
+ * The font size the value is drawn at before any script runs is the screen ladder's base rung, `.payment-term dd.mono`'s 0.8125rem; `ui/fit-value.ts` writes a smaller rung, the stacked phase, or the residual rung only when the base does not fit.
  */
 .payment-value {
 	flex: 1 1 0;
@@ -464,10 +465,9 @@
 }
 
 /*
- * The payment section's value ladder: a value a wallet takes verbatim is set at the largest rung of this ladder that holds it on one line, and `ui/fit-value.ts` writes that rung's class on the row the value sits in.
- * This stylesheet states the rungs of the section's own values, beside the rows they are drawn in; the payment panel's values take their rung sizes in `app.css`, beside the panel row geometry those rungs are measured against, and `ui/fit-value.ts`'s `FIT_LADDER` is the one statement both stylesheets are held to.
+ * The payment section's rungs of the screen ladder `ui/fit-value.ts` declares: a value a wallet takes verbatim is set at the first rung that holds it on one line, in the search order its own module doc states, and `ui/fit-value.ts` writes that rung's class on the row the value sits in.
  * The inline phase keeps the label, the value, and the copy control on one row, which is the geometry the base rung and the three sizes below it are measured against; the stacked phase gives the value the row's whole width at the cost of a line for the label; and the residual rung is what a value that fits nowhere takes, at the floor and scrolling rather than shrinking past it.
- * The floor is 10px: below it a monospace face stops separating 0 from O and l from 1 at the default zoom, which is a hazard for a value a payer checks by eye rather than a matter of taste.
+ * The floor's reason is the screen ladder's: the `FIT_RUNGS` doc comment in `ui/fit-value.ts` states why the rungs stop at 10px rather than stepping smaller.
  */
 .payment-term.fit-inline-13 .payment-value {
 	font-size: 0.8125rem;
@@ -486,7 +486,7 @@
 }
 
 /*
- * The stacked phase of a payment term: the label gives up the rail it shares with the value on one row, so the value takes the card's whole width, which is the geometry the stacked rungs are measured against.
+ * The stacked phase of a payment term: the label gives up the rail it shares with the value on one row, so the value takes the row's whole width, which is the geometry the stacked rungs are measured against.
  * The narrower rail the `640px` breakpoint states below is outranked by the phase's own class, which is the point: once a script has chosen the phase, the phase decides the row's columns.
  */
 .payment-term.fit-stacked-12,
@@ -508,8 +508,8 @@
 }
 
 /*
- * The residual rung: no rung of either phase holds the value, so it keeps the floor's face and scrolls its overflow, and the scrollbar is what tells a payer the tail is there.
- * `scrollbar-width: thin` and the WebKit height are the ladder's own size for that cue, so the row gains no more height than the thinnest scrollbar either engine draws.
+ * The residual rung: no rung of either phase holds the value, so it keeps the floor's font size and scrolls its overflow, and the scrollbar is what tells a payer the tail is there.
+ * `scrollbar-width: thin` is this rung's own cue rather than a rung size the screen ladder states, and it is what bounds the bar in the engines that honour it, while the 6px height on `::-webkit-scrollbar` bounds the bar in WebKit alone, so the row gains no more height than the thinnest scrollbar draws.
  */
 .payment-term.fit-residual .payment-value {
 	font-size: 0.625rem;
@@ -538,8 +538,8 @@
 }
 
 /*
- * The copy control sits inside the line box its value is drawn on rather than setting its row's height, which is what the `.btn` padding it inherits would do: the control is given a shorter padding and a smaller face on a leading of its own, so its border box stays under the mono value's line.
- * The control is centred rather than left on the row's baseline, because a baseline-aligned item is what the flex line is sized around: the line is then the largest ascent above the baseline plus the largest descent below it, so the control's own padding, border, and half-leading, counted on each side of its face separately, could hold a verbatim row a fraction of a line taller than its neighbours while its whole box still fitted inside the value's line.
+ * The copy control sits inside the line box its value is drawn on rather than setting its row's height, which is what the `.btn` padding it inherits would do: the control is given a shorter padding and a smaller font size on a leading of its own, so its border box stays under the mono value's line.
+ * The control is centred rather than left on the row's baseline, because a baseline-aligned item is what the flex line is sized around: the line is then the largest ascent above the baseline plus the largest descent below it, so the control's own padding, border, and half-leading, counted on each side of its font size separately, could hold a verbatim row a fraction of a line taller than its neighbours while its whole box still fitted inside the value's line.
  * Centred, the control contributes its border box alone, and the value's line box is the tallest box the line holds, so that line box and nothing else decides the row's height and every payment term keeps the list's own rhythm.
  * The rule is scoped under the term rather than written as a lone `.payment-copy`, so its selector outranks the single-class `.btn` it is layered on: at the same specificity the control's own metrics would hold only while the payment stylesheet happens to load last, and a reorder would restore the taller `.btn` padding this rule exists to remove.
  */

@@ -7,7 +7,7 @@
 /**
  * A probe whose measurements the test states and whose resize callbacks it fires by hand, so a fit is observed without a browser laying anything out.
  * `measure` answers whatever the test's own function says, which is how a value's demand is made to follow the phase the row's class list states.
- * `targets` records every subscription the fitter took and `unsubscribed` every one a teardown dropped, so the two can be held equal, and `fire` delivers the resize every subscription is waiting for.
+ * `targets` records every subscription the fitter took and `unsubscribed` every one a release dropped, so the two can be held equal, and `fire` delivers the resize every subscription is waiting for.
  */
 export function fakeProbe(measure) {
 	const runs = [];

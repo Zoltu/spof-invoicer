@@ -51,7 +51,6 @@ import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 
-/** The render options every case in this suite builds on: the base URL, the invoice date, and no clipboard. */
 const TOTAL_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
 
 function line(overrides = {}) {
@@ -512,7 +511,7 @@ test("renderRoute switches views and keeps hostile share text inert", () => {
 	}
 });
 
-test("the shell drops a document through one slot: the incoming release is promoted before the outgoing one runs, and a release that throws is reported, not thrown", () => {
+test("the shell drops a document through one release slot", () => {
 	// The route container keeps one release slot, filled by the document it mounts and run as that document is dropped. The incoming release is promoted before the dropped one runs, so a release that fails can neither leave the next document unpromoted nor be run a second time, and the route that already rendered is not thrown away for a fault in the one it replaced.
 	const fake = installInteractiveDocument();
 	try {
@@ -531,7 +530,7 @@ test("the shell drops a document through one slot: the incoming release is promo
 			"a release that fails is reported rather than thrown at the render that replaced it",
 		);
 		assert.equal(shell.content.children[0], third, "so the document the route just built is the one on screen");
-		assert.match(textOf(shell.notice), /Releasing the previous view failed: the old document's release failed/, "and the failure is named in the notice region");
+		assert.match(textOf(shell.notice), /Releasing the previous document failed: the old document's release failed/, "and the failure is named in the notice region");
 
 		shell.setContent(releasable(document.createElement("p"), () => {}));
 		assert.deepEqual(released, ["second"], "the release the failing document's successor carried is still promoted, so it runs when the next route takes the container");
@@ -606,7 +605,7 @@ test("no view module writes markup wholesale", () => {
 	}
 });
 
-test("no second release channel: a surface that subscribes carries its release, and no module takes one through a callback or a stop method", () => {
+test("a release travels on the returned element and through no other channel", () => {
 	// A release is one value on the element a surface returns (`ui/release.ts`). A callback an options bag accepts, or a `stop()` method on a handle, is a channel the caller that drops a surface can leave out or forget to honour, so neither may come back.
 	const files = sourceFiles(join(root, "app", "ts"));
 	for (const file of files) {
@@ -805,10 +804,10 @@ test("the create view's release stops the section the payee last built", () => {
 	const outstanding = () => probe.targets.length - probe.unsubscribed.length;
 	try {
 		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder(), fit: probe });
-		assert.equal(typeof view.release, "function", "the view hands back the release it carries");
+		assert.equal(typeof view.release, "function", "the view carries its release on the element it returns");
 		assert.equal(probe.targets.length, 0, "and has taken nothing before an invoice is built");
 		view.release();
-		assert.equal(outstanding(), 0, "a view released before the payee built an invoice has nothing to hand back");
+		assert.equal(outstanding(), 0, "a view released before the payee built an invoice releases nothing");
 		setControl(view, "payeeName", "Studio Example");
 		setControl(view, "payeeAddress", PAYEE);
 		setControl(view, "item-0-description", "Design work");
@@ -819,7 +818,7 @@ test("the create view's release stops the section the payee last built", () => {
 		assert.ok(drawn > 0, "the section drawn for the created invoice takes a subscription for each value a wallet takes verbatim");
 		assert.equal(outstanding(), drawn, "and holds all of them");
 
-		// A rebuild that throws before it has a section of its own leaves the one on screen exactly as it was: releasing the live section first would leave a visible, unfitted one behind, and the failure has to hand back what it took instead.
+		// A rebuild that throws before it has a section of its own leaves the one on screen exactly as it was: releasing the live section first would leave a visible, unfitted one behind, and the failure has to release what it took instead.
 		const createElement = document.createElement;
 		document.createElement = (tag) => {
 			if (tag === "footer") throw new Error("the section was refused");
@@ -833,21 +832,21 @@ test("the create view's release stops the section the payee last built", () => {
 		assert.equal(outstanding(), drawn, "the section on screen keeps every subscription it holds");
 		const failed = probe.targets.slice(drawn);
 		assert.ok(failed.length > 0, "while the failed build had taken some of its own");
-		for (const target of failed) assert.ok(probe.unsubscribed.includes(target), "and handed every one of them back");
+		for (const target of failed) assert.ok(probe.unsubscribed.includes(target), "and released every one of them");
 
 		const replaced = probe.targets.slice(0, drawn);
 		view.children[2].dispatch("submit");
 		for (const target of replaced) assert.ok(probe.unsubscribed.includes(target), "a rebuild that does draw one releases every subscription of the section it replaced");
 		assert.equal(outstanding(), drawn, "leaving only the subscriptions of the section now on screen");
 		view.release();
-		assert.equal(outstanding(), 0, "and the view's own release gives back the section still on screen");
+		assert.equal(outstanding(), 0, "and the view's own release releases the section still on screen");
 	} finally {
 		fake.restore();
 	}
 });
 
-test("the create view rendered with no release channel at all still returns an element that releases its fitting", () => {
-	// The acceptance gate renders the create form with no release option and walks the return value as a tree root, so this is that call with the suite's own probe: the release travels on the element, and the element is still the document the tree helpers read.
+test("the create view rendered with no release slot at all still returns an element that releases its fitting", () => {
+	// The acceptance gate renders the create form with no release slot to fill and walks the return value as a tree root, so this is that call with the suite's own probe: the release travels on the element, and the element is still the document the tree helpers read.
 	const fake = installInteractiveDocument();
 	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
 	try {
@@ -861,11 +860,12 @@ test("the create view rendered with no release channel at all still returns an e
 		findAll(create, (node) => node.tagName === "form")[0].dispatch("submit");
 		assert.ok(probe.targets.length > 0, "the created invoice's section took a subscription for each value a wallet takes verbatim");
 		create.release();
-		assert.equal(probe.targets.length - probe.unsubscribed.length, 0, "and the element the gate treats as a tree root hands every one of them back");
+		assert.equal(probe.targets.length - probe.unsubscribed.length, 0, "and the element the gate treats as a tree root releases every one of them");
 	} finally {
 		fake.restore();
 	}
 });
+
 test("an oversized invoice is refused with a notice instead of an uncaught throw", () => {
 	const fake = installInteractiveDocument();
 	try {

@@ -34,11 +34,12 @@ There is nothing to install and no account to create.
 - The app has no way to reach an outside server, so it never contacts a tracking service.
 - The app refuses to hand the payment to the crypto wallet unless the wallet reports the invoice's own network.
 - Nothing touches your wallet until you click Connect wallet & pay.
-- The page can be embedded by another page on purpose, because some wallets show the invoice inside their own frame: the payment panel still needs your own click and still refuses a window another page opened, but an embedding host could overlay the controls, and that is a risk this app accepts.
+- The app permits another page to frame it, so a wallet host can show the invoice inside its own frame, and it accepts that the framing page could overlay the controls.
+- The payment panel refuses a window that another page opened, because an opener served from the same website could drive the payment controls; the check is best-effort, so a determined page can still get around it.
 - Invoice text is always shown as plain text, so a link cannot add code to the page.
 - Payee entered text never turns into bold or italics, because a link can come from anyone.
 - You get the transaction hash, the code the wallet gives back for the payment, instead of an external link that looks up the payment.
-- The [payment safety memo](docs/design/payment-safety-memo.md) records the address-check and double-payment options, with the evidence and what was deliberately not built, why blockies avatars are decoration rather than a safeguard, why an address book would need a readable per-payee record this app does not keep, and the embedding risk this app accepts.
+- Every option weighed for address verification, a double-payment guard, blockies avatars, and a local address book is written down in the [Payment Safety Design Memo](docs/design/payment-safety-memo.md), each claim labelled as verified here, reported from an external source, unverified, or an accepted risk, including what the app deliberately does not build.
 
 ## Open the app
 
@@ -46,11 +47,14 @@ All three links open the same app, so pick the one that suits how you browse.
 IPFS is a network that serves files from many computers rather than one company.
 If you do not know what IPFS is, use the hosted link below; it opens like any other website.
 The long code starting `bafybei…` names the same content in all three, so the copy you are served can be checked against it.
-The app expects to be served from its own origin: the invoice lives in the URL fragment, and anything else sharing that origin would share the trust the fragment's confidentiality rests on.
 
 - **Most people:** <https://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.zoltu.io/> works in any browser, because a public gateway serves it for you; that gateway is run by someone else and could change the files before serving them, so trust it only as far as you trust its operator.
 - **Already use IPFS:** <ipfs://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4> opens the same app through your own IPFS software.
 - **Run your own IPFS node:** <http://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.localhost:8080/> serves the app from your own computer.
+
+Whichever link you pick, the app needs a website whose pages you trust with the invoice: the invoice travels in the part of the link after the `#`, and any other page on the same website as the app would be trusted with it.
+A shared gateway gives the app an address of its own, but not a website of its own: it serves the app beside every other site it hosts, and its operator decides what that address returns, so with that link you trust that operator, just as the warning beside the hosted link says.
+The link that serves the app from your own node is the one where that website answers to you alone.
 
 ## Screenshots
 

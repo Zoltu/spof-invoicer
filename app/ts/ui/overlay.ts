@@ -89,26 +89,26 @@ export function openOverlay(
 	buildDialog: (close: () => void) => ReleasableElement,
 	options: OverlayOptions = {},
 ): OverlayHandle {
-	let teardown: Release = NOTHING_TO_RELEASE;
+	let releaseMount: Release = NOTHING_TO_RELEASE;
 	const handle = createOverlay(buildDialog, {
 		onClose: () => {
-			teardown();
+			releaseMount();
 			options.onClose?.();
 		},
 	});
 	try {
-		teardown = mountOverlay(handle.element);
+		releaseMount = mountOverlay(handle.element);
 		focusFirst(handle.element, options.initialFocus);
 	} catch (error) {
-		// A dialog built behind an overlay that never mounted is a dialog no dismissal will ever reach, so this window releases what it built — the undo of whatever part of the mount landed, then the dialog's own release — before the failure reaches the caller that asked to open it.
-		teardown();
+		// A dialog built behind an overlay that never mounted is a dialog no dismissal will ever reach, so this window releases what it built — the release of the mount, then the dialog's own release — before the failure reaches the caller that asked to open it.
+		releaseMount();
 		handle.element.release();
 		throw error;
 	}
 	return handle;
 }
 
-/** Append the overlay to the page and return the undo: un-hide the background, remove it, refocus. */
+/** Append the overlay to the page and return the release of that mount: un-hide the background, remove it, refocus. */
 function mountOverlay(element: HTMLElement): Release {
 	const previouslyFocused = activeElement();
 	if (typeof document !== "undefined") document.body?.append(element);
@@ -157,8 +157,9 @@ const FOCUSABLE_TAGS: ReadonlySet<string> = new Set(["button", "input", "select"
 /**
  * Whether `element` can take keyboard focus: a form control, a link with a target, or anything the page made a focus stop with a non-negative `tabindex`.
  *
- * The `tabindex` case is what keeps a dialog's own focusable regions reachable by Tab: the payment panel's values are scroll boxes the page made stops, and a trap that counted only form controls would skip them, leaving a value that overflows its column unreachable while the same value is an ordinary stop in the payer's document. A negative `tabindex` is an element made programmatically focusable alone, so the dialog does not become a stop of its own.
- * A `tabindex` the platform cannot read as an integer — an empty value, a word — is no `tabindex` at all, so such an element is judged by its tag here exactly as the browser judges it, rather than being counted as a stop the browser never makes.
+ * The `tabindex` case is what keeps a dialog's own focusable regions reachable by Tab: the payment panel's values are scroll boxes the page made focus stops, and a trap that counted only form controls would skip them, leaving a value that overflows its column unreachable while the same value is an ordinary focus stop in the payer's document.
+ * A negative `tabindex` is an element made programmatically focusable alone, so the dialog does not become a focus stop of its own.
+ * A `tabindex` the platform cannot read as an integer — an empty value, a word — is no `tabindex` at all, so such an element is judged by its tag here exactly as the browser judges it, rather than being counted as a focus stop the browser never makes.
  */
 function isFocusable(element: HTMLElement): boolean {
 	if (element.hasAttribute("disabled")) return false;
@@ -196,7 +197,7 @@ function focusFirst(element: HTMLElement, selector?: string): void {
 
 /**
  * Hide every body child but `overlay` from assistive tech and from focus, for as long as the dialog is open.
- * Returns the undo: each element's previous `aria-hidden` is restored and the temporary `inert` is dropped, so a background element that was already hidden (or already inert) keeps its state.
+ * Returns the release of that hiding: each element's previous `aria-hidden` is restored and the temporary `inert` is dropped, so a background element that was already hidden (or already inert) keeps its state.
  */
 function hideBackground(overlay: HTMLElement): Release {
 	if (typeof document === "undefined") return NOTHING_TO_RELEASE;

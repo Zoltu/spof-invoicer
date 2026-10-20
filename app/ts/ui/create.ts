@@ -5,6 +5,8 @@
  * The payee's own screen shows the invoice the form creates, not only its share link: the section `ui/payment-section.ts` owns is drawn into this view for each invoice the form builds, so the payee can pay it, or copy its link, its address, and its amount, without opening their own share link.
  * Every rendered string — a field value, a validation message, a share payload — reaches the page as a text child of `util/dom.ts`'s `h()`, so nothing a user or a share link supplies can become markup.
  * An optional SVG icon is chosen from a file input and checked in place — a generous raw read ceiling on the file's own size first, then the icon gate, which applies its raw code-unit bound, its byte cap on the trimmed, NFC-composed text, and its construct rules — before it enters the form state, so an over-large, over-cap, or malformed file is refused under its own field and the icon the form already carries stays; the icon the form does carry is previewed through the icon leaf's own data URL, never as markup.
+ *
+ * The element the view returns carries the release of the section drawn for the invoice the payee last built, so the surface that replaces this view releases the fitting that would otherwise watch rows the page has dropped (`ui/release.ts`).
  */
 
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset, type Asset, type AssetFamily, type AssetId } from "../assets/registry.js";
@@ -126,7 +128,7 @@ export interface CreateViewOptions {
 	readonly today: string;
 	readonly clipboard?: ClipboardLike | null;
 	/**
-	 * The probe the created invoice's section measures its values through, or `null` to fit nothing and leave each value at the rung its stylesheet states; an absent option fits nothing for the same reason. The composition root supplies the browser's own probe.
+	 * The probe the created invoice's section measures its values through; `PaymentSectionOptions.fit` in `./payment-section.ts` states what an absent or `null` probe means.
 	 */
 	readonly fit?: LayoutProbe | null;
 }
@@ -608,7 +610,7 @@ type FormControl = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
  *
  * The DOM is built once; typing only updates the totals text, the line-amount cells, and the share-size note, never re-rendering the form.
  * Structural edits — add, remove, reorder — rebuild the item rows from the state.
- * The element it returns carries the release of the section drawn for the invoice the payee last built (`ui/release.ts`).
+ * The element it returns carries the release the module summary states.
  */
 export function renderCreateView(options: CreateViewOptions): ReleasableElement {
 	let state = emptyFormState(options.today);
@@ -1061,7 +1063,7 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 	sync();
 	syncPayoutWarning();
 	syncIconPreview();
-	// The created invoice's section outlives the submit that drew it, so the element this returns carries the release of that section: the surface that replaces this view releases the fitting that would otherwise watch rows the page has dropped, and the release reads the section in hand when it runs, which is the one the payee built last.
+	// The release reads the section in hand when it runs rather than the one in hand when the view was built, so the section a second submit drew is the one released.
 	return releasable(
 		h(
 			"section",

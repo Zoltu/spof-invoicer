@@ -601,37 +601,36 @@ textarea:disabled {
 }
 
 /*
- * A term's value is what the panel states and what a wallet takes: the amount due and the recipient's address are the values a payer checks before approving, so they are held on one line and never broken, and a value wider than the panel's column scrolls inside its own box rather than escaping the dialog.
- * The face follows the panel's own ladder below; a row no rung class is written on keeps the size this panel gives it.
+ * Every value the panel draws is held on one line and never broken, and a value wider than its column scrolls inside its own box rather than escaping the dialog.
+ * `.pay-term-value` is the class all four summary terms draw their value in, so the fitted amount and recipient and the plain Asset and Network rows take the same scroll box; the two wallet-reported values are named beside it, and the rule states the panel's one-line contract once.
+ * The two break properties are stated at their initial values here as `invoice.css`'s note on `.payment-value` states them for the invoice's own payment values: both inherit, so an ancestor's break rule would otherwise reach these values.
+ * The Asset and Network terms take no rung class, because neither is handed to the fitting; `ui/pay.ts`'s `payTerm` doc states what they keep in place of a rung, and why.
  */
-.pay-term-value {
-	margin: 0;
+.pay-term-value,
+.pay-account-value,
+.pay-balance-value {
 	min-width: 0;
 	white-space: nowrap;
 	overflow-wrap: normal;
+	word-break: normal;
 	overflow-x: auto;
+}
+
+/* The summary term's value keeps the definition list's margin off and gives every digit the same advance, so a digit sits in the same place whichever one it is and the amount's width follows its digit count alone. */
+.pay-term-value {
+	margin: 0;
 	font-variant-numeric: tabular-nums;
 }
 
 /*
- * A panel value is a keyboard-reachable scroll container, so it needs the ring `app.css` gives only form controls — the same ring the invoice's own payment values take — and the value is named for the term it holds, so a screen-reader user reaching the stop hears which value it carries.
- * The stops are declared here beside the boxes they ring, and the scrollbar the residual rung draws is stated below with the panel's own ladder.
+ * A panel value is a keyboard-reachable scroll container, so it needs the ring this stylesheet gives only form controls — the same ring the invoice's own payment values take — and the value is named for the term it holds, so a screen-reader user reaching the stop hears which value it carries.
+ * The stops are declared here beside the boxes they ring, and the scrollbar the residual rung draws is stated below with the panel's rungs of the screen ladder.
  */
 .pay-term-value:focus-visible,
 .pay-account-value:focus-visible,
 .pay-balance-value:focus-visible {
 	outline: 2px solid var(--accent);
 	outline-offset: 2px;
-}
-
-/*
- * The stacked phase of a panel term: the label takes a line of its own so the value has the panel's whole width, which is the geometry the panel's stacked rungs below are measured against.
- * The rungs are named here, once each, because the row's own columns are this stylesheet's, so a test reads this list and holds it to the ladder the module declares.
- */
-.pay-term.fit-stacked-12,
-.pay-term.fit-stacked-11,
-.pay-term.fit-stacked-10 {
-	grid-template-columns: 1fr;
 }
 
 .pay-dialog .mono {
@@ -676,37 +675,12 @@ textarea:disabled {
 }
 
 /*
- * The connected account and the balance are strings the wallet reports, and either can outrun the panel: each takes the room its label leaves, scrolls its overflow, and never breaks.
- * Both are keyboard-reachable scroll containers, so the focus ring above and the panel's own ladder below apply to them exactly as they do to a term's value.
+ * The connected account and the balance are strings the wallet reports, and either can outrun the panel: each takes the room its label leaves, and the one-line rule above states how its overflow is held.
+ * Both are keyboard-reachable scroll containers, so the focus ring above and the panel's rungs of the screen ladder below apply to them exactly as they do to a term's value.
  */
 .pay-account-value,
 .pay-balance-value {
 	flex: 1 1 0;
-	min-width: 0;
-	white-space: nowrap;
-	overflow-wrap: normal;
-	overflow-x: auto;
-}
-
-/*
- * The stacked phase of the connected account and of the balance: the row wraps and the value takes the line below its label, which is the geometry the panel's stacked rungs below are measured against.
- */
-.pay-account.fit-stacked-12,
-.pay-account.fit-stacked-11,
-.pay-account.fit-stacked-10,
-.pay-balance.fit-stacked-12,
-.pay-balance.fit-stacked-11,
-.pay-balance.fit-stacked-10 {
-	flex-wrap: wrap;
-}
-
-.pay-account.fit-stacked-12 .pay-account-value,
-.pay-account.fit-stacked-11 .pay-account-value,
-.pay-account.fit-stacked-10 .pay-account-value,
-.pay-balance.fit-stacked-12 .pay-balance-value,
-.pay-balance.fit-stacked-11 .pay-balance-value,
-.pay-balance.fit-stacked-10 .pay-balance-value {
-	flex-basis: 100%;
 }
 
 .pay-account-label {
@@ -715,9 +689,8 @@ textarea:disabled {
 }
 
 /*
- * The panel's value ladder: the same rungs `ui/fit-value.ts` searches, stated here beside the geometry of the rows those rungs are measured against, because a panel row's columns and its value's face are one reading of the same width.
- * `invoice.css` states the payment section's rungs beside its own rows, and this stylesheet states the panel's, so each surface's face is read where that surface's geometry is; `FIT_LADDER` in the module is the one statement both stylesheets are held to.
- * One rule per rung names the panel's three verbatim surfaces — the summary term's value, the connected account, and the wallet's balance — so a rung is one size wherever it is applied, and a test holds this list to the ladder's own names.
+ * The panel's rungs of the screen ladder `ui/fit-value.ts` declares, stated here beside the geometry of the rows those rungs are measured against, because a panel row's columns and its value's font size are one reading of the same width.
+ * One rule per rung names the panel's three fitted value classes — the summary term's value, which the amount and the recipient both draw, the connected account, and the wallet's balance — so a rung is one font size wherever it is applied, and the four fitted values the panel draws, one per row, all take it.
  */
 .pay-term.fit-inline-13 .pay-term-value,
 .pay-account.fit-inline-13 .pay-account-value,
@@ -743,6 +716,38 @@ textarea:disabled {
 	font-size: 0.625rem;
 }
 
+/*
+ * The stacked phase of a panel term: the label takes a line of its own so the value has the row's whole width.
+ * The `640px` block at the foot of this stylesheet gives a panel term that same one column whatever rung it carries, so below that width the class a fit writes changes the value's font size and no longer the row it is drawn on: a panel term carrying an inline rung is stacked there too, while `invoice.css` keeps the invoice's own terms on the label's rail at the same width.
+ * The rungs are named here, once each, because the row's own columns are this stylesheet's.
+ */
+.pay-term.fit-stacked-12,
+.pay-term.fit-stacked-11,
+.pay-term.fit-stacked-10 {
+	grid-template-columns: 1fr;
+}
+
+/*
+ * The stacked phase of the connected account and of the balance: the row wraps and the value takes the line below its label.
+ */
+.pay-account.fit-stacked-12,
+.pay-account.fit-stacked-11,
+.pay-account.fit-stacked-10,
+.pay-balance.fit-stacked-12,
+.pay-balance.fit-stacked-11,
+.pay-balance.fit-stacked-10 {
+	flex-wrap: wrap;
+}
+
+.pay-account.fit-stacked-12 .pay-account-value,
+.pay-account.fit-stacked-11 .pay-account-value,
+.pay-account.fit-stacked-10 .pay-account-value,
+.pay-balance.fit-stacked-12 .pay-balance-value,
+.pay-balance.fit-stacked-11 .pay-balance-value,
+.pay-balance.fit-stacked-10 .pay-balance-value {
+	flex-basis: 100%;
+}
+
 .pay-term.fit-stacked-12 .pay-term-value,
 .pay-account.fit-stacked-12 .pay-account-value,
 .pay-balance.fit-stacked-12 .pay-balance-value {
@@ -762,7 +767,7 @@ textarea:disabled {
 }
 
 /*
- * The residual rung of the panel's own ladder: no rung of either phase holds the value, so it keeps the floor's face and scrolls its overflow behind the thin scrollbar that says the tail is there.
+ * The residual rung as the panel states it: no rung of either phase holds the value, so it keeps the floor's font size and scrolls its overflow behind the thin scrollbar that says the tail is there.
  */
 .pay-term.fit-residual .pay-term-value,
 .pay-account.fit-residual .pay-account-value,
@@ -771,6 +776,7 @@ textarea:disabled {
 	scrollbar-width: thin;
 }
 
+/* The WebKit half of the residual rung's scrollbar cue, whose mechanism and reason `invoice.css` states beside the invoice's own residual rung: the 6px height here is that same figure, applied to the panel's three values. */
 .pay-term.fit-residual .pay-term-value::-webkit-scrollbar,
 .pay-account.fit-residual .pay-account-value::-webkit-scrollbar,
 .pay-balance.fit-residual .pay-balance-value::-webkit-scrollbar {
@@ -812,6 +818,9 @@ textarea:disabled {
 }
 
 @media (max-width: 640px) {
+	/*
+	 * Every panel term stacks at this width, whatever rung the fitter writes, so a term carrying an inline rung is drawn on a line of its own rather than on the shared row that phase names: the value keeps the row's whole width, and the rung still sets its font size.
+	 */
 	.pay-term {
 		grid-template-columns: 1fr;
 	}

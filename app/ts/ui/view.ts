@@ -43,7 +43,7 @@ export interface ViewOptions {
 	readonly exportPdf?: ExportPdfHandler;
 	readonly pay?: PayHandler;
 	/**
-	 * The probe the document's fitted values measure through, or `null` to fit nothing and leave each value at the rung its stylesheet states; an absent option fits nothing for the same reason. The composition root supplies the browser's own probe.
+	 * The probe the document's fitted values measure through; `PaymentSectionOptions.fit` in `./payment-section.ts` states what an absent or `null` probe means.
 	 */
 	readonly fit?: LayoutProbe | null;
 }

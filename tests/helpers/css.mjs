@@ -1,5 +1,6 @@
 /**
  * The stylesheet reader the suites pin CSS rules with: a stylesheet split into its rules, one rule's body looked up by selector, one property's value read out of a body, and a length read in the unit it states.
+ *
  * The suites that pin `app/stylesheets/**` share these so no suite carries a second parser of its own.
  */
 
@@ -76,9 +77,9 @@ const CSS_PX_PER_IN = 96;
 const PX_PER_POINT = CSS_PX_PER_IN / 72;
 
 /**
- * The advance of one character in the widest common monospace face a printer substitutes, in em: Courier and DejaVu Mono are about 0.602em, so two decimal places bound them.
+ * The advance of one character in the widest common monospace face a printer substitutes, in em: the bound `MONO_ADVANCE_EM` in `app/ts/ui/fit-value.ts` states and justifies, repeated here as a literal rather than imported, so the suite keeps a figure of its own to hold that module to.
  *
- * It is the one figure of this reader no stylesheet states — a page's geometry is in `print.css`, but a typeface's advance is not — so it is this reader's own statement of the printed bound rather than a reading of the module's constant, and `printFitRung` is held to it from both sides at every rung: a value of exactly the characters this bound fits prints at that rung, and one character more does not.
+ * It is the one figure of this reader no stylesheet states — a page's geometry is in `print.css`, but a typeface's advance is not — and `printFitRung` is held to it from both sides at every rung: a value of exactly the characters this bound fits prints at that rung, and one character more does not.
  */
 const PRINTED_MONO_ADVANCE_EM = 0.62;
 

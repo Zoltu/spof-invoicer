@@ -1,4 +1,4 @@
-/** The suite for `serve.mjs`: the static server's content types and path confinement, its caching and content-type headers, and the loopback bind with its cautions. */
+/** The suite for `serve.mjs`: the static server's path confinement, the content type each file is served with, the `cache-control` and `x-content-type-options` headers it sends, the framing directives it omits, and the loopback bind with its cautions. */
 
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -124,13 +124,13 @@ test("returns 404 for unknown paths and directories without an index", async () 
 	}
 });
 
-test("sends no anti-framing headers, while keeping no-store and nosniff", async () => {
+test("sends no X-Frame-Options header and no frame-ancestors directive, while keeping no-store and nosniff", async () => {
 	const server = listen();
 	try {
 		const page = await get(server.origin, "/");
 		assert.equal(page.status, 200);
 		assert.equal(page.headers.get("x-frame-options"), null, "the page may be embedded by a wallet host");
-		assert.equal(page.headers.get("content-security-policy"), null, "and no frame-ancestors header is sent in its place");
+		assert.equal(page.headers.get("content-security-policy"), null, "and no frame-ancestors directive is set in its place");
 		assert.equal(page.headers.get("cache-control"), "no-store", "the served document is still never cached");
 		assert.equal(page.headers.get("x-content-type-options"), "nosniff", "and is still not sniffed");
 		assert.equal(page.body, await readFile(join(root, "app/index.html"), "utf8"), "the served body is still the file's own bytes");

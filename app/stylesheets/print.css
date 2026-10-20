@@ -2,7 +2,7 @@
  * Print treatment for the official invoice.
  *
  * The on-screen document is the source of truth; this only makes it print cleanly.
- * Wrapped in `@media print`, it strips the app chrome, drops the screen card's depth, forces black on white, keeps rows, totals, and the payment block from splitting across a page, and prints each payment value whole: on screen the value is a single non-wrapping run that a print engine would lay out on one line and clip at the column's edge, so the on-screen value is dropped and its print twin, the same string as a text node, takes its place and wraps.
+ * Wrapped in `@media print`, it strips the app chrome, drops the screen card's depth, forces black on white, keeps rows, totals, and the payment block from splitting across a page, and prints each payment value whole: on screen the value is a single non-wrapping run that a print engine would lay out on one line and clip at the column's edge, so the on-screen value is dropped and its print twin, the same string as a text node, takes its place on a row of its own at a rung of the print ladder `ui/fit-value.ts` declares, where the four sized rungs keep it on one line and only `print-fit-wrap`, the last, lets a value past the floor break.
  * Page geometry is US Letter with comfortable margins.
  * This stylesheet serves the browser's own print path; the `Save as PDF` button is a separate route that hands the invoice to the pdf-lib renderer, which lays out its own pages rather than printing this DOM.
  */
@@ -133,9 +133,7 @@
 		break-inside: avoid;
 		page-break-inside: avoid;
 	}
-}
 
-@media print {
 	/* A dialog must never appear on the printed page, even if print is triggered while it is open. */
 	.dialog-backdrop {
 		display: none !important;
@@ -173,8 +171,9 @@
 	 * A copyable payment value prints whole.
 	 * The value is drawn on one non-wrapping run, which a print engine lays out on one line and clips at the column's edge, and the copy control beside it — the only affordance that hands over the complete value — is hidden above with the rest of the chrome, so a payee address or payment link longer than the column would otherwise reach paper as the prefix that fitted.
 	 * The value is dropped and its print twin, the same string as a text node, takes its place on a row of its own; only the values a wallet takes verbatim are dropped, which is what the class on them names: a term no wallet takes verbatim carries no twin, and its text prints as it stands.
-	 * The twin's face is one rung of the print ladder below, chosen by `ui/fit-value.ts` from the value's character count rather than from a measurement: at Letter with these margins the printed column is a fixed 7in, and print metrics are not measurable from script, so the length of the string is the only thing the page can know before it prints.
-	 * The rungs shrink the twin in steps to the 6pt floor — ordinary fine print, and the smallest size at which a monospace address still separates 0 from O and l from 1 on paper — and only the last rung lets a value past that floor wrap, which is the one printed presentation that puts a line break inside a string a wallet takes verbatim.
+	 * The twin's font size is a rung of the print ladder `ui/fit-value.ts` declares, chosen by that module from the value's character count rather than from a measurement: at Letter with these margins the printed column is a fixed 7in, and print metrics are not measurable from script, so the length of the string is the only thing the page can know before it prints.
+	 * The print rungs below shrink the twin in steps to the 6pt floor, whose reason the `FIT_RUNGS` doc comment in `ui/fit-value.ts` states, and only `print-fit-wrap`, the last, lets a value past that floor wrap, which is the one printed presentation that puts a line break inside a string a wallet takes verbatim.
+	 * The wrapping rung's rule states the floor's 6pt itself: a twin carries one rung class, so the class that wraps is handed no font size by the floor's own rule and would otherwise inherit whatever font size its parent carries.
 	 */
 	.payment-value-verbatim {
 		display: none !important;
@@ -206,9 +205,6 @@
 		white-space: nowrap;
 	}
 
-	/*
-	 * The rung past the floor: the size the floor's rule states, so the value breaks at the 6pt face both comments describe rather than at whatever face it inherits.
-	 */
 	.payment-value-print.print-fit-wrap {
 		font-size: 6pt;
 		white-space: normal;

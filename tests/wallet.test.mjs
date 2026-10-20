@@ -52,7 +52,6 @@ const PAYEE = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 const PAYEE_LOWER = PAYEE.toLowerCase();
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const USDC_TOTAL = 357000000n;
-/** The render options every case in this suite builds on: the base URL, the invoice date, and no clipboard. */
 const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
 
 /**
@@ -587,7 +586,7 @@ test("the panel refuses to send when the balance is short and re-checks on retry
 		assert.match(textOf(dialog), /less than the 357 USDC needed/);
 		assert.equal(provider.calls.some((call) => call.method === "eth_sendTransaction"), false);
 
-		assert.match(textOf(dialog), /Wallet balance:\s*0\.000001 USDC/, "the balance reads as the line it names, beside the wallet's report of it");
+		assert.match(textOf(dialog), /Wallet balance: 0\.000001 USDC/, "the balance reads as the line it names, beside the wallet's report of it");
 
 		provider.state.callResult = word(USDC_TOTAL);
 		click(byText(dialog, "button", "Try again")[0]);

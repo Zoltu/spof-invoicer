@@ -19,15 +19,15 @@ import { MAX_EMAIL_CHARS, createInvoice } from "../app/js/invoice/model.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
-import { copyControlClick, renderPaymentSection } from "../app/js/ui/payment-section.js";
-import { buildInvoiceViewModel, formatInvoiceDate, invoiceStatus, money } from "../app/js/ui/presentation.js";
-import { NOTHING_TO_RELEASE, releasable } from "../app/js/ui/release.js";
-import { buildShareBundle, createShareDialog, openShareDialog } from "../app/js/ui/share.js";
-import { FIT_LADDER } from "../app/js/ui/fit-value.js";
+import { FIT_RUNGS } from "../app/js/ui/fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES } from "../app/js/ui/messages.js";
 import { CHAIN_NAMES, chainName, networkLabel, requireNamedNetworks } from "../app/js/ui/network-labels.js";
 import { createOverlay, openOverlay } from "../app/js/ui/overlay.js";
 import { openPayPanel, UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
+import { copyControlClick, renderPaymentSection } from "../app/js/ui/payment-section.js";
+import { buildInvoiceViewModel, formatInvoiceDate, invoiceStatus, money } from "../app/js/ui/presentation.js";
+import { NOTHING_TO_RELEASE, releasable } from "../app/js/ui/release.js";
+import { buildShareBundle, createShareDialog, openShareDialog } from "../app/js/ui/share.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
 import { UINT256_MAX, fromBaseUnits } from "../app/js/util/decimal.js";
 import { h } from "../app/js/util/dom.js";
@@ -37,7 +37,6 @@ import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** The render options every case in this suite builds on: the base URL, the invoice date, and no clipboard. */
 const VIEW_OPTIONS = { baseUrl: "https://example.com/app/", today: "2026-10-03", clipboard: null };
 
 function line(overrides = {}) {
@@ -355,7 +354,7 @@ test("a render that throws after its payment section is built releases the secti
 	try {
 		assert.throws(() => renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder(), fit: probe }), /the article was refused/);
 		assert.ok(probe.targets.length > 0, "the section took a subscription for each value a wallet takes verbatim before the throw");
-		assert.deepEqual(probe.unsubscribed, probe.targets, "and the failed render hands every one of them back rather than leaving it watching a document it never built");
+		assert.deepEqual(probe.unsubscribed, probe.targets, "and the failed render releases every one of them rather than leaving it watching a document it never built");
 	} finally {
 		document.createElement = createElement;
 		fake.restore();
@@ -367,26 +366,26 @@ test("the invoice view's element releases the payment section's fitting, and lea
 	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
 	try {
 		const view = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder(), fit: probe });
-		assert.equal(typeof view.release, "function", "the document hands back the release it carries");
+		assert.equal(typeof view.release, "function", "the document carries its release on the element it returns");
 		assert.ok(probe.targets.length > 0, "the section took a subscription for each value a wallet takes verbatim");
 		assert.deepEqual(probe.unsubscribed, [], "and holds them while the document stands");
 		view.release();
-		assert.deepEqual(probe.unsubscribed, probe.targets, "the surface that replaces the document hands every one of them back, with no layout report to wait for");
+		assert.deepEqual(probe.unsubscribed, probe.targets, "the surface that replaces the document releases every one of them, with no layout report to wait for");
 	} finally {
 		fake.restore();
 	}
 });
 
-test("every surface that subscribes hands its release back on the element it built", () => {
+test("every surface that subscribes carries its release on the element it built", () => {
 	// The release travels on the element the surface returns, so a surface that forgot to attach one would leave a live subscription nothing points at: each surface below is asked only for its element, and released through that element.
 	const fake = installInteractiveDocument();
 	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
 	const outstanding = () => probe.targets.length - probe.unsubscribed.length;
 	const assertReleased = (label, element) => {
-		assert.equal(typeof element.release, "function", `${label} hands back the release it carries`);
+		assert.equal(typeof element.release, "function", `${label} carries its release on the element it returns`);
 		assert.ok(outstanding() > 0, `${label} took a subscription`);
 		element.release();
-		assert.equal(outstanding(), 0, `${label}'s release hands every one of them back`);
+		assert.equal(outstanding(), 0, `${label}'s release releases every one of them`);
 	};
 	try {
 		const model = buildInvoiceViewModel(invoiceFor(), VIEW_OPTIONS.today);
@@ -433,14 +432,14 @@ test("the shell releases the document it replaces, so no subscription outlives i
 			document.createElement = createElement;
 		}
 		assert.ok(probe.targets.length > 3, "the failed render had taken its own subscriptions before it threw");
-		assert.equal(outstanding(), 0, "and every subscription either render took is handed back rather than left on a document the page no longer holds");
+		assert.equal(outstanding(), 0, "and every subscription either render took is released rather than left on a document the page no longer holds");
 
 		const held = probe.targets.length;
 		renderRoute(shell, parseHash(`#/i/${encodeInvoice(invoiceFor({ id: "INV-3" }))}`), { ...VIEW_OPTIONS, fit: probe });
 		assert.ok(probe.targets.length > held, "a route rendered after a failure takes its own subscriptions");
 		assert.equal(outstanding(), probe.targets.length - held, "and holds them while it is on screen");
 		renderRoute(shell, parseHash("#/create"), { ...VIEW_OPTIONS, fit: probe });
-		assert.equal(outstanding(), 0, "and the create route hands them back as its own document takes the container");
+		assert.equal(outstanding(), 0, "and the create route releases them as its own document takes the container");
 	} finally {
 		fake.restore();
 	}
@@ -691,7 +690,7 @@ test("the overlay's Tab model counts a declared focus stop and no unreadable tab
 });
 
 test("closing an overlay runs its dialog's release exactly once, even when the release throws", () => {
-	// A dialog's rows are released by the dialog itself, so the builder returns its element carrying that release rather than handing it back through a variable the caller assigns to; the overlay runs it once, on every dismissal path, beside the caller's own close.
+	// A dialog's rows are released by the dialog itself, so the builder returns its element carrying that release rather than passing it through a variable the caller assigns to; the overlay runs it once, on every dismissal path, beside the caller's own close.
 	const fake = installInteractiveDocument();
 	try {
 		const released = [];
@@ -940,7 +939,7 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 
 		// The ladder: one rule per rung, the sizes descending to the 6pt floor, and no break allowed before it.
 		// The rungs and their point sizes are read from the module's table, because a printed value is sized from that table and a rule resized on one side alone would leave the page laying out a rung at a size the choice did not assume.
-		const sizedPrint = FIT_LADDER.print.filter((entry) => !entry.wraps);
+		const sizedPrint = FIT_RUNGS.print.filter((entry) => !entry.wraps);
 		const rungSizes = sizedPrint.map((entry) => [entry.rung, `${entry.points}pt`]);
 		const points = [];
 		for (const [rung, size] of rungSizes) {
@@ -953,7 +952,7 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		}
 		assert.deepEqual(points, [...points].sort((left, right) => right - left), "the rungs descend from the largest to the smallest");
 		assert.equal(points[points.length - 1], 6, "and stop at the 6pt floor, ordinary fine print");
-		const wrapRung = FIT_LADDER.print[FIT_LADDER.print.length - 1];
+		const wrapRung = FIT_RUNGS.print[FIT_RUNGS.print.length - 1];
 		const wrap = ruleBody(printCss, `.payment-value-print.${wrapRung.rung}`);
 		assert.ok(wrap !== undefined, "and the last rung states what a value past the floor may do");
 		assert.equal(declaration(wrap, "white-space"), "normal");
@@ -973,7 +972,7 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		// The rungs the twins carry, derived from the page's own geometry — the @page block print.css declares, less its margin — rather than from the module's arithmetic, so a units error on the module's side fails here instead of being transcribed into the expectation.
 		assert.deepEqual(
 			printed.map(printRungs),
-			[address, amount, model.paymentLink].map((value) => [expectedPrintRung(printCss, FIT_LADDER, [...value].length)]),
+			[address, amount, model.paymentLink].map((value) => [expectedPrintRung(printCss, FIT_RUNGS, [...value].length)]),
 			"each twin carries the rung its length earns on the page print.css declares",
 		);
 		assert.deepEqual(printRungs(printed[0]), ["print-fit-wrap"], "the 311-character address is past the print floor and wraps");
@@ -983,7 +982,7 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		const evmTwins = findAll(evm, (node) => hasClass(node, "payment-value-print"));
 		assert.deepEqual(
 			printRungs(evmTwins[0]),
-			[expectedPrintRung(printCss, FIT_LADDER, PAYEE.length)],
+			[expectedPrintRung(printCss, FIT_RUNGS, PAYEE.length)],
 			"and a 42-character EVM address prints at the rung its length earns on the same page",
 		);
 

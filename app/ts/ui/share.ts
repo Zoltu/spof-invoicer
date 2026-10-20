@@ -9,7 +9,7 @@
  * {@link createShareDialog} builds the overlay without mounting it, so the dialog is testable without a browser; {@link openShareDialog} mounts it over the page.
  * Every string reaches the page as a text child of `util/dom.ts`'s `h()`, so a share payload can never become markup.
  *
- * The dialog subscribes to nothing, so it states that with `NOTHING_TO_RELEASE` rather than leaving a release out: the overlay takes a dialog of the same shape every other subscribing surface returns (`ui/release.ts`).
+ * The dialog subscribes to nothing, so it states `NOTHING_TO_RELEASE` (`ui/release.ts`) rather than leaving a release out.
  *
  * The clipboard helper is `ui/clipboard.ts`'s, re-exported here so this module's callers keep a single import site.
  */
@@ -153,7 +153,7 @@ export function openShareDialog(bundle: ShareBundle, options: ShareDialogOptions
 	return openOverlay((close) => buildShareDialog(bundle, options.clipboard ?? null, close), { onClose: options.onClose });
 }
 
-/** The dialog's own element: its content, its labelled close control, and its Done control. It subscribes to nothing, so it states `NOTHING_TO_RELEASE` rather than leaving a release out. */
+/** The dialog's own element: its content, its labelled close control, and its Done control, releasing nothing for the reason the module doc gives. */
 function buildShareDialog(bundle: ShareBundle, clipboard: ClipboardLike | null, close: () => void): ReleasableElement {
 	const body = h("div", { class: "dialog-body" });
 	renderShareOptions(body, bundle, clipboard);
