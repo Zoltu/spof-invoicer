@@ -13,13 +13,14 @@ import { readSymbol } from "./helpers/qr-reader.mjs";
 import { refusalMessage } from "./helpers/refusals.mjs";
 import { findAll, findButton, hasClass, paymentValues, textOf } from "./helpers/tree.mjs";
 import { nextTask } from "./helpers/wait.mjs";
+import { installWindow, mockProvider } from "./helpers/wallet-mock.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
 import { MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_EMAIL_CHARS, MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
 import { MAX_JSON_BYTES, encodeInvoice } from "../app/js/invoice/codec.js";
 import { MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { decodeShare } from "../app/js/invoice/share.js";
 import { parseHash } from "../app/js/app/router.js";
-import { createDispatcher, dispatchRoute, mountShell, renderRoute } from "../app/js/app/shell.js";
+import { bootApp, createDispatcher, dispatchRoute, mountShell, renderRoute } from "../app/js/app/shell.js";
 import { PaymentLinkBudgetError } from "../app/js/payment/links.js";
 import {
 	addItem,
@@ -514,6 +515,9 @@ test("renderRoute switches views and keeps hostile share text inert", () => {
 test("the shell drops a document through one release slot", () => {
 	// The route container keeps one release slot, filled by the document it mounts and run as that document is dropped. The incoming release is promoted before the dropped one runs, so a release that fails can neither leave the next document unpromoted nor be run a second time, and the route that already rendered is not thrown away for a fault in the one it replaced.
 	const fake = installInteractiveDocument();
+	const reported = [];
+	const consoleError = console.error;
+	console.error = (...args) => reported.push(args);
 	try {
 		const shell = mountShell(document.createElement("div"));
 		const released = [];
@@ -530,18 +534,28 @@ test("the shell drops a document through one release slot", () => {
 			"a release that fails is reported rather than thrown at the render that replaced it",
 		);
 		assert.equal(shell.content.children[0], third, "so the document the route just built is the one on screen");
-		assert.match(textOf(shell.notice), /Releasing the previous document failed: the old document's release failed/, "and the failure is named in the notice region");
+		// The notice is announced as an alert and read by the payer, so it states what the failure leaves running and what to do about it, and keeps the exception's own message — which can carry a validator's echo of a rejected value — out of the page.
+		assert.match(textOf(shell.notice), /The previous document could not be cleared away/, "and the failure is reported in the notice region");
+		assert.doesNotMatch(textOf(shell.notice), /the old document's release failed/, "with none of the failure's internal detail in the payer-facing notice");
+		assert.equal(shell.notice.children[0].attributes.role, "alert", "as the one announcement the notice region makes for it");
+		// The failure is nowhere the payer can read it and is not dropped either: it is reported where a developer can read it, so a shipped release fault leaves a trace.
+		assert.equal(reported.length, 1, "the release that threw is reported once, off the payer's surface");
+		assert.equal(reported[0][1]?.message, "the old document's release failed", "with the exception that was actually thrown");
 
 		shell.setContent(releasable(document.createElement("p"), () => {}));
 		assert.deepEqual(released, ["second"], "the release the failing document's successor carried is still promoted, so it runs when the next route takes the container");
 		assert.equal(failed, 1, "and the release that threw ran exactly once");
 	} finally {
+		console.error = consoleError;
 		fake.restore();
 	}
 });
 
 test("a view renderer that throws leaves a notice, not a blank or stale document", () => {
 	const fake = installInteractiveDocument();
+	const reported = [];
+	const consoleError = console.error;
+	console.error = (...args) => reported.push(args);
 	try {
 		const shell = mountShell(document.createElement("div"));
 		renderRoute(shell, parseHash(""), TOTAL_OPTIONS);
@@ -553,11 +567,18 @@ test("a view renderer that throws leaves a notice, not a blank or stale document
 		renderRoute(shell, { kind: "view", invoice: unpayable }, TOTAL_OPTIONS);
 
 		assert.notEqual(shell.content.children[0], createView, "the route container drops the previous route's document");
-		assert.match(textOf(shell.content), /Invoice view failed:/);
+		assert.match(textOf(shell.content), /^The invoice could not be shown/, "the container states the failure in the app's own words, and only those");
 		assert.equal(shell.notice.children[0].attributes.role, "alert", "and the notice region announces it too");
-		assert.match(textOf(shell.notice), /Invoice view failed:/);
-		assert.match(textOf(shell.notice), /0x-prefixed 40-hex address/, "with the reason the render refused the invoice");
+		assert.match(textOf(shell.notice), /^The invoice could not be shown/);
+		assert.match(textOf(shell.notice), /Reload the page to start over/, "with the one action that clears it");
+		assert.doesNotMatch(textOf(shell.notice), /0x-prefixed 40-hex address/, "and none of the renderer's own message, which can carry a validator's echo of a rejected value");
+		assert.doesNotMatch(textOf(shell.content), /0x-prefixed 40-hex address/, "in the document it left behind either");
+		// Nothing of the renderer's message reaches the payer, and it is not dropped: it is reported under the route whose render failed, with the validator's own error.
+		assert.equal(reported.length, 1, "the failure is reported once, off the payer's surface");
+		assert.equal(reported[0][0], "invoice view render:", "under the route that failed");
+		assert.match(String(reported[0][1]?.message), /0x-prefixed 40-hex address/, "carrying the renderer's own error, which is what a developer needs to see");
 	} finally {
+		console.error = consoleError;
 		fake.restore();
 	}
 });
@@ -761,7 +782,71 @@ test("a link-budget refusal reaches the payee as its own plan, with the asset an
 	assert.doesNotMatch(refused.message, /could not be shared/);
 	const failed = shareFailure(new Error("the codec threw"), ASSET_REGISTRY.eth);
 	assert.equal(failed.kind, "failed");
-	assert.match(failed.message, /^The invoice could not be shared: the codec threw$/);
+	assert.equal(failed.message, "The invoice could not be shared. Reload the page and try again.", "a fault this form cannot explain is reported in one fixed sentence, not in the error's own words");
+	assert.doesNotMatch(failed.message, /the codec threw/, "so no internal detail of the failure reaches the notice the payee reads");
+	assert.equal(failed.cause instanceof Error, true, "while the error itself is carried on the refusal for a diagnostic");
+});
+
+test("a share failure the payee cannot act on is reported to the console, not only carried on the refusal", () => {
+	// The refusal carries the exception so the submit that answers the payee can report it: a fault nobody can explain to the payee has to reach a developer, or the only trace of it is a sentence that says nothing about what happened.
+	const fake = installInteractiveDocument();
+	const reported = [];
+	const consoleError = console.error;
+	console.error = (...args) => reported.push(args);
+	try {
+		const notices = noticeRecorder();
+		// A base URL that is not a string is the fault this suite can provoke through the form: the share builder refuses it, so the plan is the generic refusal rather than a budget one.
+		const view = renderCreateView({ ...TOTAL_OPTIONS, baseUrl: 42, notice: notices });
+		setControl(view, "payeeName", "Studio Example");
+		setControl(view, "payeeAddress", PAYEE);
+		setControl(view, "item-0-description", "Design work");
+		setControl(view, "item-0-quantity", "2");
+		setControl(view, "item-0-unitPrice", "150");
+		assert.doesNotThrow(() => view.children[2].dispatch("submit"), "the submit listener reports the fault rather than throwing it");
+		assert.equal(notices.calls.at(-1)?.message, "The invoice could not be shared. Reload the page and try again.", "the payee reads the app's fixed sentence");
+		assert.doesNotMatch(notices.calls.at(-1)?.message, /base URL/, "and none of the failure's own words");
+		assert.equal(reported.length, 1, "and the failure behind it is reported once, off the payee's surface");
+		assert.equal(reported[0][0], "share refusal:", "under the refusal it was");
+		assert.match(String(reported[0][1]?.message), /the base URL must be a string/, "carrying the error the share builder raised");
+	} finally {
+		console.error = consoleError;
+		fake.restore();
+	}
+});
+
+test("a refused paste reaches the notice as the app's own sentence, with the codec's refusal reported instead", () => {
+	// The paste is the payer's, and when the link was shared with them it is an attacker's, and a codec refusal can echo what it carried; so the notice states a fixed sentence and the codec's own failure goes to the console, which is the boundary every other payer-facing failure path here keeps.
+	const fake = installInteractiveDocument();
+	const reported = [];
+	const consoleError = console.error;
+	console.error = (...args) => reported.push(args);
+	try {
+		const shell = bootApp(document.createElement("div"), TOTAL_OPTIONS);
+		const form = findAll(shell.root, (node) => node.tagName === "form" && hasClass(node, "open-form"))[0];
+		const input = findAll(shell.root, (node) => node.tagName === "input" && hasClass(node, "open-input"))[0];
+		assert.ok(form !== undefined && input !== undefined, "the header offers the paste box");
+		// A base32 payload that decodes to text no JSON reader accepts, so the codec's refusal carries what the paste carried.
+		input.value = b32("PASTE-ECHO-1234 not json");
+		form.dispatch("submit", { type: "submit" });
+		const notice = textOf(shell.notice);
+		assert.match(notice, /could not be read as a share link or a pinv1b- blob/, "the payer reads the app's own sentence");
+		assert.doesNotMatch(notice, /PASTE-ECHO/, "and none of the paste the codec's refusal echoes");
+		assert.doesNotMatch(notice, /not JSON|JSON Parse/, "nor the codec's own wording");
+		assert.equal(shell.notice.children[0].attributes.role, "alert", "announced as the failure it is");
+		assert.equal(reported.length, 1, "and the failure behind it is reported once, off the payer's surface");
+		assert.equal(reported[0][0], "pasted share refusal:", "under the refusal it was");
+		assert.match(String(reported[0][1]?.message), /JSON/i, "carrying the codec's own error");
+
+		// A retired base64url blob is refused too, and the sentence names the container this build shares, so the payer is told to ask for a fresh link rather than left with the codec's internal account of an encoding they cannot act on.
+		input.value = "pinv1-AAAAAAAA";
+		form.dispatch("submit", { type: "submit" });
+		assert.match(textOf(shell.notice), /ask the sender for a fresh link/, "the payer is given the action that clears a retired blob");
+		assert.doesNotMatch(textOf(shell.notice), /retired base64url/, "rather than the codec's own account of the encoding");
+		assert.equal(reported.length, 2, "and that refusal is reported too");
+	} finally {
+		console.error = consoleError;
+		fake.restore();
+	}
 });
 
 test("shareSizeHint reports the encoded size and flags the over-cap case", () => {
@@ -803,7 +888,8 @@ test("the create view's release stops the section the payee last built", () => {
 	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
 	const outstanding = () => probe.targets.length - probe.unsubscribed.length;
 	try {
-		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder(), fit: probe });
+		const notices = noticeRecorder();
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: notices, fit: probe });
 		assert.equal(typeof view.release, "function", "the view carries its release on the element it returns");
 		assert.equal(probe.targets.length, 0, "and has taken nothing before an invoice is built");
 		view.release();
@@ -825,10 +911,15 @@ test("the create view's release stops the section the payee last built", () => {
 			return createElement.call(document, tag);
 		};
 		try {
-			assert.throws(() => view.children[2].dispatch("submit"), /the section was refused/, "a submit whose section cannot be drawn fails");
+			assert.doesNotThrow(() => view.children[2].dispatch("submit"), "a submit whose section cannot be drawn does not escape the submit listener");
 		} finally {
 			document.createElement = createElement;
 		}
+		// The notice region was cleared before the section was built, so a submit that failed here has to say so itself: without the boundary the payee was left with no link, no dialog, and no message.
+		const reported = notices.calls.filter((call) => call !== null).at(-1);
+		assert.equal(reported?.tone, "error", "so the payee is told the submit failed instead of being left with a cleared notice and nothing else");
+		assert.equal(reported?.message, "The invoice could not be shown or shared. Reload the page and try again.", "in the app's own fixed sentence");
+		assert.doesNotMatch(String(reported?.message), /the section was refused/, "and none of the failure's internal detail");
 		assert.equal(outstanding(), drawn, "the section on screen keeps every subscription it holds");
 		const failed = probe.targets.slice(drawn);
 		assert.ok(failed.length > 0, "while the failed build had taken some of its own");
@@ -840,6 +931,53 @@ test("the create view's release stops the section the payee last built", () => {
 		assert.equal(outstanding(), drawn, "leaving only the subscriptions of the section now on screen");
 		view.release();
 		assert.equal(outstanding(), 0, "and the view's own release releases the section still on screen");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a submit whose replaced section cannot be released still shows the new invoice and opens the share dialog", () => {
+	// The section being replaced is released inside the submit listener, so a stop that throws is the one failure that could strand the fitting of the section just built — nothing else holds it — and leave the listener before the share dialog opened.
+	const fake = installInteractiveDocument();
+	const inner = fakeProbe(() => ({ content: 120, box: 240 }));
+	let thrown = false;
+	const probe = {
+		...inner,
+		onResize(target, run) {
+			const stop = inner.onResize(target, run);
+			return () => {
+				stop();
+				if (thrown) return;
+				thrown = true;
+				throw new Error("the replaced section's stop failed");
+			};
+		},
+	};
+	const outstanding = () => probe.targets.length - probe.unsubscribed.length;
+	try {
+		const notices = noticeRecorder();
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: notices, fit: probe });
+		setControl(view, "payeeName", "Studio Example");
+		setControl(view, "payeeAddress", PAYEE);
+		setControl(view, "item-0-description", "Design work");
+		setControl(view, "item-0-quantity", "2");
+		setControl(view, "item-0-unitPrice", "150");
+		view.children[2].dispatch("submit");
+		const first = probe.targets.length;
+		assert.ok(first > 0, "the first section took a subscription for each value a wallet takes verbatim");
+
+		assert.doesNotThrow(() => view.children[2].dispatch("submit"), "a stop that throws while the section it belonged to is released does not escape the submit listener");
+		const backdrop = document.body.children.find((child) => child.attributes?.class?.includes("dialog-backdrop"));
+		assert.ok(backdrop, "so the share dialog opens for the invoice the submit built");
+		assert.ok(notices.calls.some((call) => call !== null && call.tone === "error"), "and the failure is reported rather than swallowed");
+		assert.equal(notices.calls.at(-1)?.tone, "error", "reported after the submit's own success line, because the notice region holds one message and a report written first would be overwritten by it");
+
+		// The section the second submit built is the one the view holds, so nothing it took was stranded by the stop that threw: the view's own release is what drops it when the route moves on.
+		const second = probe.targets.slice(first);
+		assert.ok(second.length > 0, "the section the second submit built took subscriptions of its own");
+		assert.deepEqual(second.filter((target) => probe.unsubscribed.includes(target)), [], "and holds every one of them while it is on screen");
+		view.release();
+		assert.equal(outstanding(), 0, "with the view's release dropping them, because the view held the new section before the failing stop ran");
 	} finally {
 		fake.restore();
 	}
@@ -1615,6 +1753,33 @@ test("a file whose read yields something other than text is refused under the ic
 		assert.equal(textOf(message()), refusalMessage(() => validateIcon(42)), "with the gate's own wording for a value that is not text");
 		assert.equal(findAll(view, (node) => hasClass(node, "icon-preview")).length, 0, "and no icon is stored or previewed");
 	} finally {
+		fake.restore();
+	}
+});
+
+test("a route change dismisses the payment panel the document it replaces was opened from", () => {
+	// The panel is mounted over the page rather than inside the route container, and it fits its own summary rows, so a route that replaces the document without dismissing it would leave the dialog and its fitting on a page the payer has navigated away from.
+	const fake = installInteractiveDocument();
+	const provider = mockProvider();
+	const installed = installWindow({ ethereum: provider });
+	try {
+		const probe = fakeProbe(() => ({ content: 120, box: 240 }));
+		const shell = mountShell(document.createElement("div"));
+		const options = { ...TOTAL_OPTIONS, fit: probe };
+		renderRoute(shell, parseHash(`#/i/${encodeInvoice(invoiceFor({ id: "INV-ROUTE-PANEL" }))}`), options);
+		const pay = findButton(shell.content, "Pay");
+		assert.ok(pay !== undefined, "the invoice's document offers its Pay control");
+		pay.dispatch("click", { type: "click" });
+		const backdrop = () => document.body.children.find((child) => typeof child.tagName === "string" && hasClass(child, "dialog-backdrop"));
+		assert.ok(backdrop() !== undefined, "the panel mounts over the page");
+		assert.ok(probe.targets.length > 0, "and its summary rows take fittings of their own");
+
+		renderRoute(shell, parseHash(""), options);
+
+		assert.equal(backdrop(), undefined, "a route change takes the panel down with the document it was opened from");
+		assert.deepEqual(new Set(probe.unsubscribed), new Set(probe.targets), "and releases the fitting it held, so nothing the panel started outlives the document");
+	} finally {
+		installed.restore();
 		fake.restore();
 	}
 });

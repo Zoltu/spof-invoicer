@@ -61,6 +61,7 @@ function selectorMatches(element, selector) {
  * It stays deliberately small — the DOM surface those modules actually use, nothing more.
  *
  * Unlike {@link installFakeDocument}'s plain object nodes, `createElement` returns an instance of the class exposed as `globalThis.HTMLElement`, so `ui/overlay.ts`'s `instanceof HTMLElement` checks behave as they do in a page.
+ * `createRange` and `getSelection` are the two calls a copy control's fallback makes when the clipboard refuses, and every range the selection is handed is recorded on the document's own `selections` array, so a suite can assert what a manual copy selected without a real selection to inspect.
  * `document.body` exists for overlay mounting; `append`/`replaceChildren` track each child's `parentNode` so `remove()` can detach it; `isConnected` reports whether a node still hangs under `document.body`, so a subtree `replaceChildren` dropped reads as detached; `focus()` records `document.activeElement`; `querySelector` matches a comma-separated list of tag names or class selectors; and `dispatch` supplies no-op `preventDefault`/`stopPropagation` so a handler can call them on a plain event object.
  */
 export function installInteractiveDocument() {
@@ -151,11 +152,31 @@ export function installInteractiveDocument() {
 	const document = {
 		body: new FakeElement("body"),
 		activeElement: null,
+		selections: [],
 		createElement(tag) {
 			return new FakeElement(tag);
 		},
 		createTextNode(text) {
 			return { nodeType: 3, textContent: text };
+		},
+		createRange() {
+			return {
+				node: null,
+				selectNodeContents(node) {
+					this.node = node;
+				},
+				getBoundingClientRect() {
+					return { width: 0, height: 0 };
+				},
+			};
+		},
+		getSelection() {
+			return {
+				removeAllRanges() {},
+				addRange(range) {
+					document.selections.push(range);
+				},
+			};
 		},
 	};
 
@@ -163,6 +184,7 @@ export function installInteractiveDocument() {
 	globalThis.HTMLElement = FakeElement;
 
 	return {
+		document,
 		restore() {
 			if (previousDocument === undefined) {
 				delete globalThis.document;

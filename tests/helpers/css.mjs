@@ -7,13 +7,44 @@
 import assert from "node:assert/strict";
 
 /**
- * Every rule of a stylesheet, as the selector list its header names and the body its braces hold, with its comments dropped first because a rule's text reaches back to the previous closing brace and a comment above it carries commas of its own.
+ * Every rule of a stylesheet, as the selector list its header names, the body its braces hold, and the at-rule query it sits inside, with its comments dropped first because a rule's text reaches back to the previous closing brace and a comment above it carries commas of its own.
+ *
+ * `at` is the query a rule stands under — `"@media screen"`, `"@media print"`, `""` at the top level — so a suite can pin where a rule is stated and not only what it declares: a rule that keeps its declarations and loses its query is invisible to a reader that keeps only selectors and bodies, and that is exactly how a screen-only cue could reach paper with every other assertion still green.
  */
 export function cssRules(css) {
-	return [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((rule) => ({
-		selectors: rule[1].split(",").map((entry) => entry.trim()),
-		body: rule[2],
-	}));
+	const text = css.replace(/\/\*[\s\S]*?\*\//g, "");
+	const rules = [];
+	const enclosing = [];
+	let header = "";
+	let index = 0;
+	while (index < text.length) {
+		const character = text[index];
+		if (character === "{") {
+			const prelude = header.trim();
+			header = "";
+			const close = text.indexOf("}", index);
+			const nested = text.indexOf("{", index + 1);
+			// An at-rule whose block holds rules states the query every rule inside it is drawn under; one whose block holds declarations is a rule of its own, which is how a page block is stated and read.
+			if (prelude.startsWith("@") && nested !== -1 && nested < close) {
+				enclosing.push(prelude);
+				index += 1;
+				continue;
+			}
+			if (close === -1) break;
+			rules.push({ selectors: prelude.split(",").map((entry) => entry.trim()), body: text.slice(index + 1, close), at: enclosing.join(" ") });
+			index = close + 1;
+			continue;
+		}
+		if (character === "}") {
+			enclosing.pop();
+			header = "";
+			index += 1;
+			continue;
+		}
+		header += character;
+		index += 1;
+	}
+	return rules;
 }
 
 /**
@@ -96,18 +127,37 @@ export function printedLinePx(printCss) {
 	return (LETTER_WIDTH_IN - 2 * Number(margin[1])) * CSS_PX_PER_IN;
 }
 
-/** How many monospace characters a printed value set at `points` fits on that line: its width in CSS pixels against one character's advance, which is the em bound converted to pixels at the point size. */
-export function printedCharactersAt(printCss, points) {
-	return Math.floor(printedLinePx(printCss) / (points * PX_PER_POINT * PRINTED_MONO_ADVANCE_EM));
+/**
+ * The width of the column a printed payment value is laid out on, in CSS pixels: the page's own content line less the label rail and the column gap the invoice stylesheet gives `.payment-term`.
+ * The print twin is a block inside that term's own value column, so this — not the page's whole line — is the width the print ladder is sized against; a rung sized against the line overflows the column, and `white-space: nowrap` then runs the tail of an address past the paper's margin.
+ * The widest rail and gap any statement of the term gives are used, because the narrower rail a width query states only widens the column, and the narrowest column is the one a rung must hold the value in.
+ */
+export function printedValueColumnPx(printCss, invoiceCss) {
+	const page = printedLinePx(printCss);
+	const terms = cssRules(invoiceCss).filter((rule) => rule.selectors.length === 1 && rule.selectors[0] === ".payment-term");
+	assert.ok(terms.length > 0, "invoice.css states the payment term whose value column a printed value is laid out in");
+	const widest = (property) => {
+		const stated = terms.map((rule) => declaration(rule.body, property)).filter((value) => value !== undefined);
+		assert.ok(stated.length > 0, `invoice.css's .payment-term states its ${property}, which is what a printed value's column is derived from`);
+		return Math.max(...stated.map((value) => pxLength(String(value).trim().split(/\s+/)[0], `.payment-term ${property}`)));
+	};
+	const column = page - widest("grid-template-columns") - widest("gap");
+	assert.ok(column > 0 && column < page, `a printed payment value's column is narrower than the page's ${page}px line and still has a width: ${column}px`);
+	return column;
+}
+
+/** How many monospace characters a printed value set at `points` fits in the column it is laid out in: that column's width in CSS pixels against one character's advance, which is the em bound converted to pixels at the point size. */
+export function printedCharactersAt(printCss, invoiceCss, points) {
+	return Math.floor(printedValueColumnPx(printCss, invoiceCss) / (points * PX_PER_POINT * PRINTED_MONO_ADVANCE_EM));
 }
 
 /**
- * The print rung a value of `characters` length earns on the page `printCss` describes, walking the module's own `ladder`: the largest sized rung whose line holds the value, or the rung that wraps when even the last one does not.
- * The break points come from the stylesheet's geometry rather than from the module's arithmetic, so a width or a unit stated wrongly on the module's side fails a suite rather than being transcribed into it.
+ * The print rung a value of `characters` length earns on the page `printCss` describes and in the column `invoiceCss` gives it, walking the module's own `ladder`: the largest sized rung whose column holds the value, or the rung that wraps when even the last one does not.
+ * The break points come from the stylesheets' geometry — the page block's line less the payment term's own rail and gap — rather than from the module's arithmetic, so a width, a rail, or a unit stated wrongly on the module's side fails a suite rather than being transcribed into it.
  */
-export function expectedPrintRung(printCss, ladder, characters) {
+export function expectedPrintRung(printCss, invoiceCss, ladder, characters) {
 	for (const rung of ladder.print) {
-		if (rung.wraps || characters > printedCharactersAt(printCss, rung.points)) continue;
+		if (rung.wraps || characters > printedCharactersAt(printCss, invoiceCss, rung.points)) continue;
 		return rung.rung;
 	}
 	return ladder.print[ladder.print.length - 1].rung;

@@ -29,7 +29,7 @@ import {
 import { PaymentLinkBudgetError, requireLinkBudget } from "../payment/links.js";
 import { toBaseUnits } from "../util/decimal.js";
 import { h } from "../util/dom.js";
-import { boundMessage, messageOf } from "../util/errors.js";
+import { boundMessage, messageOf, reportInternalFailure } from "../util/errors.js";
 import { MAX_ICON_DIMENSION, MAX_ICON_FILE_BYTES, MAX_ICON_SVG_BYTES, iconFileSizeRefusal } from "../util/icon-capacity.js";
 import { svgDataUrl } from "../util/svg-data-url.js";
 import { checksumStatus } from "../wallet/address.js";
@@ -42,7 +42,7 @@ import type { NoticeApi } from "./notice.js";
 import { renderPaymentSection } from "./payment-section.js";
 import { buildInvoiceViewModel } from "./presentation.js";
 import { releasable, type ReleasableElement } from "./release.js";
-import { buildShareBundle, openShareDialog, type ClipboardLike, type ShareBundle } from "./share.js";
+import { buildShareBundle, openShareDialog, type ClipboardLike, type ShareBundle, type ShareDialogHandle } from "./share.js";
 
 /**
  * Upper bound on a field or summary error's rendered length, matching the shell notice's own bound.
@@ -131,6 +131,12 @@ export interface CreateViewOptions {
 	 * The probe the created invoice's section measures its values through; `PaymentSectionOptions.fit` in `./payment-section.ts` states what an absent or `null` probe means.
 	 */
 	readonly fit?: LayoutProbe | null;
+	/**
+	 * Told the share dialog this form opens for the invoice it has just built, and told `null` once it has closed, so the surface that drops the form can dismiss a dialog the form opened rather than leaving it over another document.
+	 *
+	 * The shell supplies this and keeps the one slot it dismisses on a route change (`app/shell.ts`); a form rendered without it opens the dialog for itself and keeps no way to it, which is the state a suite drives.
+	 */
+	readonly onDialog?: (dialog: ShareDialogHandle | null) => void;
 }
 
 /** A fresh, empty line with a sensible starting quantity. */
@@ -433,7 +439,7 @@ export function liveLineAmount(state: CreateFormState, index: number): string | 
 export type ShareRefusal =
 	| { readonly kind: "too-large"; readonly message: string }
 	| { readonly kind: "link-too-large"; readonly message: string }
-	| { readonly kind: "failed"; readonly message: string };
+	| { readonly kind: "failed"; readonly message: string; readonly cause: unknown };
 
 /** The outcome of a share attempt: a bundle to share, the fields to fix, or the refusal that stopped it. */
 export type SharePlan =
@@ -453,7 +459,7 @@ function linkBudgetMessage(asset: Asset): string {
 /**
  * The refusal a failed share attempt reads as, decided by the error's class rather than by its message.
  *
- * A budget refusal is the one throw a payee's own input can provoke, so it is answered as the state it is; anything else is a fault this form cannot explain and is reported as one, with the underlying message clipped the way every other message reaching the page is.
+ * A budget refusal is the one throw a payee's own input can provoke, so it is answered as the state it is; anything else is a fault this form cannot explain, and the payee is told it in one fixed sentence about what happened and what to do, never in the error's own words: that message is read by the payee and can carry a validator's echo of a rejected value, which is nothing they can act on. The error itself travels on the refusal so the submit that answers the payee reports it where a developer can read it, which is the other half of that boundary.
  * Exported so the classification is testable without a registry entry that outgrows the symbol, which no shipped entry does.
  */
 export function shareFailure(error: unknown, asset: Asset): ShareRefusal {
@@ -462,7 +468,8 @@ export function shareFailure(error: unknown, asset: Asset): ShareRefusal {
 	}
 	return {
 		kind: "failed",
-		message: `The invoice could not be shared: ${boundMessage(messageOf(error), FIELD_MESSAGE_MAX)}`,
+		message: "The invoice could not be shared. Reload the page and try again.",
+		cause: error,
 	};
 }
 
@@ -793,13 +800,24 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 	 * Draw the invoice the form just created into this view, through the section the payer's document draws beside it.
 	 *
 	 * The replacement is built before the section it replaces is released, so a build that throws leaves the section on screen — its fitting included — exactly as it was, rather than releasing the live section and leaving a visible one unfitted.
+	 * The new section becomes the one this view holds and is mounted before the old one is released, because the release of the section being replaced is the one thing here that can throw: a stop that failed would otherwise strand the fitting of a section this view had built and not yet held, and the throw would leave the submit listener before the share dialog opened.
+	 * Returns `false` when the replaced section could not be released, so the submit reports that after its own success line — the notice region holds one message, and a report written before it would be overwritten by it.
 	 */
-	function showCreatedPayment(invoice: Invoice): void {
+	function showCreatedPayment(invoice: Invoice): boolean {
 		const next = renderPaymentSection(buildInvoiceViewModel(invoice, options.today), { clipboard: options.clipboard ?? null, fit: options.fit ?? null });
-		createdSection?.release();
+		const replaced = createdSection;
 		createdSection = next;
 		createdPayment.replaceChildren(next);
 		createdPayment.removeAttribute("hidden");
+		if (replaced === null) return true;
+		try {
+			replaced.release();
+			return true;
+		} catch (error) {
+			// The submit reports the app's fixed sentence for a replaced section that could not be released; the stop's own message goes to the console, because a stop failure is the one failure here that would otherwise leave no trace at all.
+			reportInternalFailure("replaced payment section release", error);
+			return false;
+		}
 	}
 
 	function sync(): void {
@@ -1040,8 +1058,12 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 		h("div", { class: "form-actions" }, h("button", { type: "submit", class: "btn btn-primary" }, "Create share link")),
 	);
 
-	form.addEventListener("submit", (event) => {
-		event.preventDefault();
+	/**
+	 * Submit the form: decide the share attempt, draw the invoice it built, and open the dialog that offers it.
+	 *
+	 * The notice region is cleared before the invoice is drawn, so the caller bounds this: a step that throws after that point — a payment section that cannot be built, a dialog that cannot be opened — would otherwise leave the payee with no link, no dialog, and no message at all.
+	 */
+	function submit(): void {
 		const plan = planShare(state, options.baseUrl);
 		if (plan.kind === "invalid") {
 			showErrors(plan.errors);
@@ -1050,13 +1072,32 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 		}
 		showErrors([]);
 		if (plan.kind !== "ready") {
+			// The budget refusals are what a payee's own input can provoke and are stated in the app's own words; a fault behind the generic refusal is a failure nobody can explain to the payee, so it is reported where a developer can read it, as every other failure path here is.
+			if (plan.kind === "failed") reportInternalFailure("share refusal", plan.cause);
 			options.notice.showNotice(plan.message, "error");
 			return;
 		}
 		options.notice.clearNotice();
-		showCreatedPayment(plan.invoice);
-		openShareDialog(plan.bundle, { clipboard: options.clipboard ?? null });
+		const released = showCreatedPayment(plan.invoice);
+		// The dialog offers the invoice this form has just built, so its handle goes to the caller that drops the form: it must not outlive it.
+		const dialog = openShareDialog(plan.bundle, {
+			clipboard: options.clipboard ?? null,
+			onClose: () => options.onDialog?.(null),
+		});
+		options.onDialog?.(dialog);
 		options.notice.showNotice(`Invoice ${plan.invoice.id} is ready to share.`, "success");
+		if (!released) options.notice.showNotice(RELEASE_FAILED_MESSAGE, "error");
+	}
+
+	form.addEventListener("submit", (event) => {
+		event.preventDefault();
+		try {
+			submit();
+		} catch (error) {
+			// The payee reads one fixed sentence, and the failure behind it goes to the console: a renderer's message can carry a validator's echo of a rejected value, which is nothing the payee can act on.
+			reportInternalFailure("create view submit", error);
+			options.notice.showNotice(SUBMIT_FAILED_MESSAGE, "error");
+		}
 	});
 
 	rebuildItems((index) => index);
@@ -1076,6 +1117,12 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 		() => createdSection?.release(),
 	);
 }
+
+/** Reported when the section a new invoice replaced could not be released: what the failure leaves running and what the payee can do about it, never the exception's own message, which can carry a validator's echo of a rejected value. */
+const RELEASE_FAILED_MESSAGE = "The payment details of the invoice you created before could not be cleared away, so something they were watching may still be running. Reload the page to start over.";
+
+/** Reported when a submit cannot finish: the notice region was cleared before the invoice was drawn, so without this sentence a failed submit would leave the payee with nothing on screen at all. Never the failure's own message. */
+const SUBMIT_FAILED_MESSAGE = "The invoice could not be shown or shared. Reload the page and try again.";
 
 interface BuiltRow {
 	readonly row: HTMLElement;

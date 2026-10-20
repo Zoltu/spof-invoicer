@@ -2,7 +2,7 @@
  * Print treatment for the official invoice.
  *
  * The on-screen document is the source of truth; this only makes it print cleanly.
- * Wrapped in `@media print`, it strips the app chrome, drops the screen card's depth, forces black on white, keeps rows, totals, and the payment block from splitting across a page, and prints each payment value whole: on screen the value is a single non-wrapping run that a print engine would lay out on one line and clip at the column's edge, so the on-screen value is dropped and its print twin, the same string as a text node, takes its place on a row of its own at a rung of the print ladder `ui/fit-value.ts` declares, where the four sized rungs keep it on one line and only `print-fit-wrap`, the last, lets a value past the floor break.
+ * Wrapped in `@media print`, it strips the app chrome, drops the screen card's depth, forces black on white, keeps rows, totals, and the payment block from splitting across a page, and prints each payment value whole: on screen the value is a single non-wrapping run that a print engine would lay out on one line and clip at the column's edge, so the on-screen value is dropped and its print twin, the same string as text, takes its place on a row of its own at a rung of the print ladder `ui/fit-value.ts` declares, where a value the rung's column holds prints on one line and a longer one continues on the next printed line inside the segments that module splits it into, with every printed line of the value ruled under, so no break in a printed value can go unmarked.
  * Page geometry is US Letter with comfortable margins.
  * This stylesheet serves the browser's own print path; the `Save as PDF` button is a separate route that hands the invoice to the pdf-lib renderer, which lays out its own pages rather than printing this DOM.
  */
@@ -169,16 +169,28 @@
 
 	/*
 	 * A copyable payment value prints whole.
-	 * The value is drawn on one non-wrapping run, which a print engine lays out on one line and clips at the column's edge, and the copy control beside it — the only affordance that hands over the complete value — is hidden above with the rest of the chrome, so a payee address or payment link longer than the column would otherwise reach paper as the prefix that fitted.
+	 * The value is drawn on one run, which a print engine lays out on one line and clips at the column's edge, and the copy control beside it — the only affordance that hands over the complete value — is hidden above with the rest of the chrome, so a payee address or payment link longer than the column would otherwise reach paper as the prefix that fitted.
 	 * The value is dropped and its print twin, the same string as a text node, takes its place on a row of its own; only the values a wallet takes verbatim are dropped, which is what the class on them names: a term no wallet takes verbatim carries no twin, and its text prints as it stands.
-	 * The twin's font size is a rung of the print ladder `ui/fit-value.ts` declares, chosen by that module from the value's character count rather than from a measurement: at Letter with these margins the printed column is a fixed 7in, and print metrics are not measurable from script, so the length of the string is the only thing the page can know before it prints.
-	 * The print rungs below shrink the twin in steps to the 6pt floor, whose reason the `FIT_RUNGS` doc comment in `ui/fit-value.ts` states, and only `print-fit-wrap`, the last, lets a value past that floor wrap, which is the one printed presentation that puts a line break inside a string a wallet takes verbatim.
+	 * The twin's font size is a rung of the print ladder `ui/fit-value.ts` declares, chosen by that module from the value's character count rather than from a measurement: at Letter with these margins the column the twin is laid out in is priced at 5.75in — the page's 7in line less the payment term's 7rem label rail and its 0.5rem gap — and print metrics are not measurable from script, so the length of the string is the only thing the page can know before it prints.
+	 * That column is the width this page draws, not a width a printed page is guaranteed to give the twin: another page size, a margin changed in the print dialog, or a narrower paper leaves a narrower column, and script cannot see it before it prints.
+	 * So a printed twin never clips its tail on paper, whatever column it lands in: a sized rung states that the value keeps every character and may break, so a column narrower than the width the rung was priced against continues the value on the next printed line rather than running it past the paper's right margin, where there is no cue and no copy control to recover it from.
+	 * The print rungs below shrink the twin in steps to the 6pt floor, whose reason the `FIT_RUNGS` doc comment in `ui/fit-value.ts` states, and `print-fit-wrap`, the last, is the rung a value past that floor takes: its segments put the first breaks where that module put them rather than wherever the box ends, and a break the page makes inside one of them is marked exactly as a break between two of them is.
 	 * The wrapping rung's rule states the floor's 6pt itself: a twin carries one rung class, so the class that wraps is handed no font size by the floor's own rule and would otherwise inherit whatever font size its parent carries.
+	 *
+	 * A wrapped value is drawn in the segments `ui/fit-value.ts` splits it into, one printed line each at the column the ladder prices, so the first breaks fall where that module put them rather than wherever the box ends.
+	 * Every printed line of a payment value carries a dashed rule under it, and the rule is the mark at that line's end: a value's characters are held in an inline run, `box-decoration-break: clone` gives each rendered fragment of that run its own end decoration, and a line break inside the run fragments it — so a break the page makes inside a segment is marked exactly as a break between two segments is, and no rendered line break in a printed value is left for the reader to interpret.
+	 * The rule cannot be read as a character of the address, it puts nothing into a string a payer copies, and it cannot be selected with the value; it is drawn as a border, never as generated text.
+	 * Every line of the value is ruled, the last one included, and that is the price of marking a break wherever it falls: CSS decorates each fragment of a broken inline box alike and has no way to single out the fragment that ends the box, so the rule reads as "this printed line is part of the value, in order, and no character stands between it and the next" rather than as "the value continues".
+	 * The reader's reading is therefore one statement about the whole ruled run: every ruled line is the value, its characters are all of them in order, and the value ends at the last character of the ruled text.
+	 * The segment is priced from the widest monospace face a printer substitutes, so on the column the ladder prices it fills one line without breaking; on a narrower column it keeps its characters by breaking rather than by losing its tail, for the same reason the sized rungs do, and that break is marked like any other.
 	 */
 	.payment-value-verbatim {
 		display: none !important;
 	}
 
+	/*
+	 * The twin takes a line of its own inside the payment term's value column, which is the width `ui/fit-value.ts` sizes its rung against: the page's whole line is not the width the twin has, and a twin sized against that line would overflow its column and run the tail of a value past the paper's right margin, with the copy control that hands the value over whole hidden above.
+	 */
 	.payment-value-print {
 		display: block;
 		flex-basis: 100%;
@@ -187,27 +199,54 @@
 
 	.payment-value-print.print-fit-1 {
 		font-size: 9pt;
-		white-space: nowrap;
 	}
 
 	.payment-value-print.print-fit-2 {
 		font-size: 8pt;
-		white-space: nowrap;
 	}
 
 	.payment-value-print.print-fit-3 {
 		font-size: 7pt;
-		white-space: nowrap;
 	}
 
 	.payment-value-print.print-fit-4 {
 		font-size: 6pt;
-		white-space: nowrap;
+	}
+
+	/*
+	 * The one line rule a sized rung needs: the printed value keeps every character it has — `pre-wrap` preserves its spacing rather than collapsing a run of spaces — and it may break where it must, so a column narrower than the width the rung was priced against continues the value on the next printed line instead of running its tail past the paper's right margin with no cue and no copy control to recover it.
+	 * A break the page makes below that width is marked like any other, by the run rule stated below, so a sized rung needs no mark of its own.
+	 * At the column the ladder prices, the value fits the line this states without breaking, so the one-line presentation the rung was chosen for is the one a Letter page prints.
+	 */
+	.payment-value-print.print-fit-1,
+	.payment-value-print.print-fit-2,
+	.payment-value-print.print-fit-3,
+	.payment-value-print.print-fit-4 {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
 	}
 
 	.payment-value-print.print-fit-wrap {
 		font-size: 6pt;
 		white-space: normal;
 		overflow-wrap: anywhere;
+	}
+
+	.payment-value-print.print-fit-wrap .payment-value-print-segment {
+		display: block;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+
+	/*
+	 * The mark at every printed line of a value, wherever that line ends: the value's characters sit in an inline run, so a line break fragments the run and `box-decoration-break: clone` paints each fragment's own end decoration.
+	 * A sized rung's run breaks only where its column runs out, a wrapped value's run breaks inside a segment where that segment's column runs out, and both are marked here rather than by a rule that could only mark a segment's boundary.
+	 * The rule is a border and states no `content`, so it is never part of the text: nothing it draws can be selected, copied, or read as a character of the value.
+	 */
+	.payment-value-print .payment-value-print-run {
+		-webkit-box-decoration-break: clone;
+		box-decoration-break: clone;
+		border-bottom: 0.5pt dashed #000;
+		padding-bottom: 1pt;
 	}
 }

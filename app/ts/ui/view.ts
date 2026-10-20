@@ -14,19 +14,17 @@
 import { requireAsset } from "../assets/registry.js";
 import type { Invoice } from "../invoice/model.js";
 import { h } from "../util/dom.js";
-import { boundMessage, messageOf } from "../util/errors.js";
+import { reportInternalFailure } from "../util/errors.js";
 import { isWalletPayable } from "../wallet/payment.js";
 import type { ClipboardLike } from "./clipboard.js";
 import type { LayoutProbe } from "./fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
+import { VIEW_BUILD_RELEASE_FAILED_MESSAGE } from "./messages.js";
 import type { NoticeApi } from "./notice.js";
 import { renderPaymentSection } from "./payment-section.js";
 import { buildInvoiceViewModel, type InvoicePartyView } from "./presentation.js";
 import { releasable, type ReleasableElement } from "./release.js";
-import { buildShareBundle, openShareDialog } from "./share.js";
-
-/** The most of an action failure's rendered length the view carries into its notice. */
-const ACTION_ERROR_MAX = 300;
+import { buildShareBundle, openShareDialog, type ShareDialogHandle } from "./share.js";
 
 /** Hand a validated invoice to the pdf-lib renderer when one is supplied; may complete asynchronously. */
 export type ExportPdfHandler = (invoice: Invoice) => void | Promise<void>;
@@ -46,6 +44,12 @@ export interface ViewOptions {
 	 * The probe the document's fitted values measure through; `PaymentSectionOptions.fit` in `./payment-section.ts` states what an absent or `null` probe means.
 	 */
 	readonly fit?: LayoutProbe | null;
+	/**
+	 * Told the modal this document opens, and told `null` once it has closed, so the surface that drops the document can dismiss a dialog the document opened instead of leaving it standing over the next one.
+	 *
+	 * The shell supplies this and keeps the one slot it dismisses on a route change (`app/shell.ts`); a document rendered without it opens the dialog for itself and keeps no way to it, which is the state a suite drives.
+	 */
+	readonly onDialog?: (dialog: ShareDialogHandle | null) => void;
 }
 
 /**
@@ -175,6 +179,7 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
 			);
 
 	// The section's fitting is a subscription rather than something that ends by itself, so the document this returns carries its release, and releases it here when the render throws: neither a dropped document nor a failed one leaves an observer behind.
+	// A release that throws on this path is the one failure this renderer raises on the section's behalf, so it is surfaced as `ui/messages.ts`'s fixed sentence with the failed build kept on the error's `cause`: the shell reports that error where a developer reads it and shows the payer its own route sentence, so neither message reaches the notice region.
 	const payment = renderPaymentSection(view, { clipboard: options.clipboard ?? null, fit: options.fit ?? null });
 	try {
 		// The item table can overflow a phone; making its scroll box a named, focusable region lets a keyboard-only user reach the clipped columns, which Safari's scroller auto-focus does not.
@@ -196,7 +201,13 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
 		const rendered = h("section", { class: "view view-invoice" }, documentActions(invoice, options), document);
 		return releasable(rendered, payment.release);
 	} catch (error) {
-		payment.release();
+		try {
+			payment.release();
+		} catch {
+			const failure = new Error(VIEW_BUILD_RELEASE_FAILED_MESSAGE);
+			failure.cause = error;
+			throw failure;
+		}
 		throw error;
 	}
 }
@@ -204,12 +215,18 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
 /**
  * The actions around the document are chrome; the `no-print` class hides them from the print path in `print.css`, and the exported PDF, drawn from the view model, never reads this DOM.
  *
+ * The share dialog describes this document, so its handle is reported through `ViewOptions.onDialog` as it opens and told `null` as it closes: the dialog that offers this invoice's link must not be left standing over the document a route change puts in its place.
+ *
  * Pay is the injected-wallet flow, which only the EVM family pays through: on an EVM invoice it is present so the layout is complete and stays disabled — with the reason shown beside it — until a handler is wired, so no click can reach an EVM provider before one exists, while a privacy-chain invoice is offered a hint naming the hand-off it does carry instead of a control that would lead nowhere.
  */
 function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 	const shareButton = h("button", { type: "button", class: "btn btn-secondary" }, "Share");
 	shareButton.addEventListener("click", () => {
-		openShareDialog(buildShareBundle(invoice, options.baseUrl), { clipboard: options.clipboard ?? null });
+		const dialog = openShareDialog(buildShareBundle(invoice, options.baseUrl), {
+			clipboard: options.clipboard ?? null,
+			onClose: () => options.onDialog?.(null),
+		});
+		options.onDialog?.(dialog);
 	});
 
 	const saveButton = h("button", { type: "button", class: "btn btn-secondary" }, "Save as PDF");
@@ -265,6 +282,8 @@ function walletPayNote(walletPayable: boolean, pay: PayHandler | undefined, note
 
 /**
  * Run an action handler, routing a synchronous throw or an async rejection to the notice instead of letting it escape the click listener.
+ *
+ * The sentence the payer reads names the action and nothing else: the notice is announced to the payer and read by them, and a handler's own message can carry a validator's echo of a rejected value, a renderer's internal path, or wording nothing on this page can act on, so the failure itself goes to `reportInternalFailure` and the payer is told only what they can do about it.
  * The handler is invoked synchronously, so a wired handler has run by the time the click dispatch returns; only its failure is deferred.
  */
 function runAction(run: () => void | Promise<void>, options: ViewOptions, label: string): void {
@@ -272,7 +291,8 @@ function runAction(run: () => void | Promise<void>, options: ViewOptions, label:
 		try {
 			await run();
 		} catch (error) {
-			options.notice.showNotice(boundMessage(`${label} failed: ${messageOf(error)}`, ACTION_ERROR_MAX), "error");
+			reportInternalFailure(`${label} action`, error);
+			options.notice.showNotice(`${label} failed. Reload the page and try again.`, "error");
 		}
 	})();
 }

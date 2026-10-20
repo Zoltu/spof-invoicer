@@ -417,7 +417,7 @@
 
 /*
  * The payment terms are what a payer copies into a wallet — the amount, the address, the link — so a value a wallet takes verbatim is drawn as ordinary text with a copy control beside it, and the term lays that text, the control, and the status out on one row.
- * A value never wraps: it holds its characters as one run and scrolls its own overflow, so neither the layout nor a text selection can put a line break inside a value that has none.
+ * A value a wallet takes verbatim never wraps: it holds its characters as one run and scrolls its own overflow, so neither the layout nor a text selection can put a line break inside a value that has none. The plain text of a term no wallet takes verbatim takes `.payment-value-wrapping` below and draws its own lines instead.
  */
 .payment-term dd {
 	margin: 0;
@@ -438,21 +438,36 @@
 
 /*
  * The term value: the text a copy control reads, or the plain text of a term no wallet takes verbatim.
- * It is drawn as the text it is rather than as a form control, and it holds its characters on one run: the term's description is the flex container, so the value is a flex item whose own box scrolls its overflow, and neither the layout nor a text selection can put a line break inside a value that has none.
+ * It is drawn as the text it is rather than as a form control, and a value a wallet takes verbatim holds its characters on one run: the term's description is the flex container, so the value is a flex item whose own box scrolls its overflow, and neither the layout nor a text selection can put a line break inside a value that has none.
+ * The plain text of a term no wallet takes verbatim takes the wrapping state stated below instead, which leaves the one-line contract for the one value it does not belong to.
  * A copyable value is a keyboard-reachable scroll container of its own, so a keyboard-only user can arrow along a value wider than its column and reach the tail the copy control also hands over whole.
  * `overflow-wrap` and `word-break` are stated at their initial values rather than left implicit because both inherit, and neither is what forbids the wrap — `white-space: nowrap` is — so the pair keeps the no-break contract inside this rule rather than depending on no ancestor setting a break rule.
- * The scrollbar that overflow draws is left in place rather than hidden, because a value wider than its box is the one case where the box cannot draw the whole value: a hidden scrollbar makes that a silent clip, while a visible one says the tail is there, and the residual rung of the screen ladder below states it thin as its own cue.
+ * The scrollbar that overflow draws is left in place rather than hidden, because a value wider than its box is the one case where the box cannot draw the whole value: a hidden scrollbar makes that a silent clip, while a visible one says the tail is there.
+ * A bar is not a cue every engine paints before the payer scrolls, so the row's own cue below is what marks a value the fit has not shown to be whole.
  * One line box carries the value of every term, stated in an absolute length rather than left to each element's own font size, so the mono face a verbatim term is set in draws no shorter a line than the plain Asset and Network terms above it and the terms keep the list's gap apart rather than a rhythm of their own.
  * The font size the value is drawn at before any script runs is the screen ladder's base rung, `.payment-term dd.mono`'s 0.8125rem; `ui/fit-value.ts` writes a smaller rung, the stacked phase, or the residual rung only when the base does not fit.
  */
 .payment-value {
 	flex: 1 1 0;
 	min-width: 0;
+	/* The value is the containing block of the scale box drawn inside it, so that box stays within the value's own box wherever the value is laid out (`ui/fit-value.ts` states what the box is for). */
+	position: relative;
 	white-space: nowrap;
 	overflow-wrap: normal;
 	word-break: normal;
 	overflow-x: auto;
 	line-height: 1.4rem;
+}
+
+/*
+ * The state of a value no wallet takes verbatim — the asset's name with its symbol, and the network's label — and the one place these values leave the scroll box above: the section reads both strings for itself, so neither is a value a wallet takes and neither is handed to the fitting, and a value nothing sizes and nothing cues must not be one that can be clipped.
+ * It wraps rather than scrolls, so a longer registry name or network label is drawn whole on the next line instead of running a clipped tail past the column with no cue and no focus stop to recover it from; the focus stop and the cue are owed the values that scroll, and this state has neither because nothing can hide a character of it.
+ * The wrapped box draws its own lines, so it keeps neither `white-space: nowrap` nor the scroll container: it is the same value box, in a different state, which is why the classes are read together rather than as two boxes.
+ */
+.payment-value-wrapping {
+	white-space: normal;
+	overflow-wrap: anywhere;
+	overflow: visible;
 }
 
 /*
@@ -488,10 +503,12 @@
 /*
  * The stacked phase of a payment term: the label gives up the rail it shares with the value on one row, so the value takes the row's whole width, which is the geometry the stacked rungs are measured against.
  * The narrower rail the `640px` breakpoint states below is outranked by the phase's own class, which is the point: once a script has chosen the phase, the phase decides the row's columns.
+ * The residual rung states the same columns, because it is the one state the row certainly scrolls: it is reached only after both phases' rungs have been measured and none held the value, so restoring the rail under it would draw the value in a column narrower than the ones the search already refused it in and leave the painted cue as the only thing between a clipped address and a payer reading it as whole.
  */
 .payment-term.fit-stacked-12,
 .payment-term.fit-stacked-11,
-.payment-term.fit-stacked-10 {
+.payment-term.fit-stacked-10,
+.payment-term.fit-residual {
 	grid-template-columns: 1fr;
 }
 
@@ -508,8 +525,10 @@
 }
 
 /*
- * The residual rung: no rung of either phase holds the value, so it keeps the floor's font size and scrolls its overflow, and the scrollbar is what tells a payer the tail is there.
- * `scrollbar-width: thin` is this rung's own cue rather than a rung size the screen ladder states, and it is what bounds the bar in the engines that honour it, while the 6px height on `::-webkit-scrollbar` bounds the bar in WebKit alone, so the row gains no more height than the thinnest scrollbar draws.
+ * The residual rung: no rung of either phase holds the value, so it keeps the floor's font size, scrolls its overflow, and takes the row's whole width under the stacked columns stated above — the widest column the row gives a value, and the one the cue is drawn beside rather than an alternative to.
+ * `scrollbar-width: thin` bounds the bar in the engines that honour it, while the 6px height on `::-webkit-scrollbar` bounds it in WebKit alone, so the row gains no more height than the thinnest scrollbar draws.
+ * The bar alone is not a cue a payer is guaranteed to see: an overlay-scrollbar engine paints no bar until the payer scrolls, so a value clipped at the column's edge would be drawn as a bare prefix of a Zcash or Monero address that reads as the whole address.
+ * The cue below is what this stylesheet states instead, on the row rather than in the scroll box, because a text line on the row is painted whether or not the engine paints the bar.
  */
 .payment-term.fit-residual .payment-value {
 	font-size: 0.625rem;
@@ -521,10 +540,36 @@
 }
 
 /*
- * The print twin of a copyable payment value: the printed page's own presentation of the same string, which print.css shows in the dropped value's place, so on screen it is not shown at all.
+ * The cue that a value may be cut off: a line of text on the term's own row, beneath the value rather than over it, so a clipped value can never read as a complete address on an engine that paints no scrollbar until the payer scrolls.
+ *
+ * The cue belongs to the sized state rather than to the rung a fit happened to reach: the value of a `fit-sized` row is drawn in a scroll box at the base rung whenever no fitting rung sits on the row — an engine with no `ResizeObserver`, a section rendered with no probe, a value the document has not laid out yet — and an overlay-scrollbar engine paints no bar in any of those states, so a clipped prefix of an address would read as the whole address.
+ * Every state of a sized row therefore carries the cue, and nothing a fit writes switches it off. A completed fit is no evidence that the value is still whole, because a change to the advance the value's glyphs are actually drawn at — a minimum-font-size setting, `text-size-adjust`, a mobile engine's font boosting, a late face substitution — grows the run without moving anything the page can observe (`ui/fit-value.ts` states that gap beside the scale box), so a cue that waited for a measurement's confirmation would be missing exactly where the value is clipped. A cue painted beside a value that is whole costs a payer one sentence; a missing cue beside a value that is clipped costs them the tail of an address. A term no wallet takes verbatim carries no cue at all, because nothing sizes its value and its value wraps, so nothing may clip it.
+ * The fitting still re-measures when the value's computed font size changes, which is the one such change the value's column-wide box cannot report; the cue is what covers every change the fitting cannot see.
+ * Its wording states no fact about whether the value is whole, because the cue is painted in both states: a sentence saying the value continues, or telling the payer to use Copy for the whole value, is false beside every value a fit has just shown whole — a 42-character EVM address, an amount, a link — and a cue that is wrong in the common case is one a payer learns to discount beside the 311-character address that is genuinely clipped, while an assistive technology announces the false sentence right after the value. "If the value is cut off, scroll it." is an instruction conditioned on the clip rather than a claim about it, so it reads true beside a whole value and beside a clipped one, and it names the scroll box and focus stop every cued row gives its value — the one affordance the panel's rows without a copy control have as well.
+ * `app.css` states the same sentence beside the payment panel's own rows, so the two surfaces say one thing rather than two.
+ * The cue is the value's neighbour in the row's grid, which is why it alters nothing the value draws: the run keeps its own glyphs — no ellipsis, no fade or mask over them, no respacing, and no transform — and stays the single scrollable line the rules above state.
+ * It is generated content of the row, so it is never a text node of the document: a term's value is the term's own text and nothing else, which is the string the copy control is handed and the run any read of the rendered value picks up, so no path from a value to a copied string carries the sentence.
+ * `user-select: none` is what keeps the sentence out of a mouse selection that spans the term, and it is the only exclusion a stylesheet can state here: no test in this repository can observe a selection or a copied string, because the suites drive a fake DOM with no CSS. The residual is that an engine which serializes generated content into a copied selection can paste the sentence after the value; what the placement above pins is that the cue sits outside the value's own box and outside every string the app copies.
+ * It is scoped to the screen because the printed page drops the on-screen run for its print twin, which carries the whole value.
  */
-.payment-value-print {
-	display: none;
+@media screen {
+	.payment-term.fit-sized::after {
+		content: "If the value is cut off, scroll it.";
+		grid-column: 1 / -1;
+		color: var(--inv-muted, var(--ink-muted));
+		user-select: none;
+	}
+}
+
+/*
+ * The print twin of a copyable payment value: the printed page's own presentation of the same string, which print.css shows in the dropped value's place, so on screen it is not shown at all.
+ * The hiding is stated for the screen rather than for every medium, because print.css names the same class at the same specificity to show the twin, and two such rules in two files are decided by the order the links load in: a reorder that let this one win in print would hide the twin as well as the on-screen value and print an invoice with no payout address at all.
+ * A screen query cannot match a printed page, so the twin's printed visibility is decided by the medium it is printed under rather than by which stylesheet the page happens to load last.
+ */
+@media screen {
+	.payment-value-print {
+		display: none;
+	}
 }
 
 /*

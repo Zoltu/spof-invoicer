@@ -20,7 +20,7 @@ import { buildPaymentLink } from "../app/js/payment/links.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
 import { FIT_RUNGS } from "../app/js/ui/fit-value.js";
-import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES } from "../app/js/ui/messages.js";
+import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES, VIEW_BUILD_RELEASE_FAILED_MESSAGE } from "../app/js/ui/messages.js";
 import { CHAIN_NAMES, chainName, networkLabel, requireNamedNetworks } from "../app/js/ui/network-labels.js";
 import { createOverlay, openOverlay } from "../app/js/ui/overlay.js";
 import { openPayPanel, UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
@@ -323,6 +323,9 @@ test("Save as PDF hands the invoice to the export handler, or notices when none 
 
 test("a rejected PDF export is reported through the notice, not thrown", async () => {
 	const fake = installInteractiveDocument();
+	const reported = [];
+	const consoleError = console.error;
+	console.error = (...args) => reported.push(args);
 	try {
 		const notices = noticeRecorder();
 		const view = renderInvoiceView(invoiceFor(), {
@@ -336,8 +339,14 @@ test("a rejected PDF export is reported through the notice, not thrown", async (
 		await drain();
 		const last = notices.calls.at(-1);
 		assert.equal(last.tone, "error");
-		assert.match(last.message, /kaboom/);
+		// The notice is the surface the payer reads and assistive technology announces, so it carries the app's one fixed sentence for a failed export and none of the renderer's own words.
+		assert.equal(last.message, "PDF export failed. Reload the page and try again.", "the payer reads the app's own sentence for an export that failed");
+		assert.doesNotMatch(last.message, /kaboom/, "with none of the failure's internal detail in it");
+		// The failure itself is not lost: it is reported where a developer can read it, with the renderer's own error rather than a sentence about one.
+		assert.equal(reported.length, 1, "the failure is reported once, off the payer's surface");
+		assert.equal(reported[0][1]?.message, "kaboom", "carrying the renderer's own error");
 	} finally {
+		console.error = consoleError;
 		fake.restore();
 	}
 });
@@ -464,6 +473,131 @@ test("the shell forwards the exportPdf and pay seams into the invoice view", () 
 		pay.dispatch("click", { type: "click" });
 		assert.deepEqual(exported, ["INV-1"]);
 		assert.deepEqual(paid, ["INV-1"]);
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a route change dismisses the share dialog the dropped document opened", () => {
+	// The share dialog offers the document's own share link, so one left standing over the next document offers a link describing an invoice that is no longer on screen. The shell holds the one modal slot, so navigating away from the document that opened it dismisses it there rather than leaving a document's dialog over another document's page.
+	const fake = installInteractiveDocument();
+	try {
+		const shell = mountShell(document.createElement("div"));
+		renderRoute(shell, parseHash(`#/i/${encodeInvoice(invoiceFor())}`), VIEW_OPTIONS);
+		const share = byText(shell.content.children[0], "button", "Share")[0];
+		assert.ok(share !== undefined, "the document offers its Share control");
+		share.dispatch("click", { type: "click" });
+		const opened = findAll(document.body, (node) => hasClass(node, "dialog"));
+		assert.equal(opened.length, 1, "which opens the share dialog over the page");
+		assert.match(textOf(opened[0]), /Share this invoice/, "the dialog for this document's own share strings");
+
+		renderRoute(shell, parseHash("#/create"), VIEW_OPTIONS);
+		assert.deepEqual(findAll(document.body, (node) => hasClass(node, "dialog")), [], "a route change dismisses it, so no dialog describes a document the shell has replaced");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("an open attempt refused while a dialog stands dismisses that dialog rather than dropping its handle", () => {
+	// The panel's entry returns `null` when it refuses to open, and a slot that stored that `null` would forget the dialog still standing over the page: its backdrop would cover the next document and the rows it fitted would never be released.
+	const fake = installInteractiveDocument();
+	try {
+		const shell = mountShell(document.createElement("div"));
+		const dialog = openOverlay(() => releasable(h("div", { class: "dialog" }, "the share strings"), NOTHING_TO_RELEASE));
+		shell.setOpenDialog(dialog);
+		assert.equal(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")).length, 1, "the document's dialog stands over the page");
+		shell.setOpenDialog(null);
+		assert.deepEqual(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")), [], "and the refused open attempt dismisses it instead of leaving it mounted with no handle holding it");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a second dialog opened while one stands is the one dismissed, so the held dialog keeps its backdrop, its release, and the page it hides", () => {
+	// Dismissing the older of two mounted dialogs would undo the background hiding the newer one had just applied, so the newcomer is the one that goes: the slot never loses a live handle, and the page behind the dialog that stays is still hidden from assistive tech and from keyboard focus.
+	const fake = installInteractiveDocument();
+	try {
+		const page = document.createElement("div");
+		document.body.append(page);
+		const shell = mountShell(page);
+		const first = openOverlay(() => releasable(h("div", { class: "dialog" }, "first"), NOTHING_TO_RELEASE));
+		const second = openOverlay(() => releasable(h("div", { class: "dialog" }, "second"), NOTHING_TO_RELEASE));
+		shell.setOpenDialog(first);
+		shell.setOpenDialog(second);
+		const standing = findAll(document.body, (node) => hasClass(node, "dialog-backdrop"));
+		assert.equal(standing.length, 1, "one dialog stands over the page rather than two");
+		assert.match(textOf(standing[0]), /first/, "and it is the one the shell holds, so the newcomer's backdrop is gone rather than orphaned");
+		// The newcomer recorded the background as the held dialog had already left it, so dismissing the newcomer writes exactly that back: the page stays hidden behind the dialog still standing, and that dialog's own backdrop stops being hidden.
+		assert.equal(page.getAttribute("aria-hidden"), "true", "the page behind the surviving dialog is still hidden from assistive tech");
+		assert.ok(page.hasAttribute("inert"), "and still cannot take keyboard focus");
+		assert.equal(standing[0].getAttribute("aria-hidden"), null, "while the surviving dialog's own backdrop stops being hidden");
+		assert.ok(!standing[0].hasAttribute("inert"));
+		shell.setContent(releasable(h("section", { class: "view" }), NOTHING_TO_RELEASE));
+		assert.deepEqual(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")), [], "and the route change dismisses the dialog the shell still holds");
+		assert.equal(page.getAttribute("aria-hidden"), null, "which un-hides the page behind it");
+		assert.ok(!page.hasAttribute("inert"), "and drops its temporary inert state");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a superseded dialog's own close report does not take the dialog on screen with it", () => {
+	// The share dialog reports its dismissal back to the shell as `onDialog(null)`, so the slot's dismissal of a newcomer re-enters the slot: read as a reason to dismiss, that `null` closes the dialog the payer was using and un-hides a page a modal is still mounted over. Only an embedder can reach it — a modal's backdrop and its inert background block the second entry point a payer would need — so the slot is what has to tell its own dismissal's report from a dialog closing itself.
+	const fake = installInteractiveDocument();
+	try {
+		const page = document.createElement("div");
+		document.body.append(page);
+		const shell = mountShell(page);
+		renderRoute(shell, parseHash(`#/i/${encodeInvoice(invoiceFor())}`), VIEW_OPTIONS);
+		const share = () => byText(shell.content.children[0], "button", "Share")[0];
+		share().dispatch("click", { type: "click" });
+		const first = findAll(document.body, (node) => hasClass(node, "dialog-backdrop"));
+		assert.equal(first.length, 1, "the document's Share control opens one dialog");
+		assert.equal(page.getAttribute("aria-hidden"), "true", "hiding the page behind it from assistive tech");
+		assert.ok(page.hasAttribute("inert"), "and from keyboard focus");
+
+		share().dispatch("click", { type: "click" });
+		const standing = findAll(document.body, (node) => hasClass(node, "dialog-backdrop"));
+		assert.equal(standing.length, 1, "a second open attempt leaves one dialog standing rather than none");
+		assert.equal(standing[0], first[0], "and it is the dialog the shell held, which the payer was using");
+		assert.equal(page.getAttribute("aria-hidden"), "true", "so the page behind it stays hidden from assistive tech");
+		assert.ok(page.hasAttribute("inert"), "and stays out of the keyboard while a modal is still mounted");
+
+		renderRoute(shell, parseHash("#/create"), VIEW_OPTIONS);
+		assert.deepEqual(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")), [], "and the route change still dismisses the dialog the shell holds");
+		assert.equal(page.getAttribute("aria-hidden"), null, "which un-hides the page behind it");
+		assert.ok(!page.hasAttribute("inert"), "and returns it to the keyboard");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("dismissing the payment panel and clicking Pay again opens a panel rather than a dialog cleared away in that same click", () => {
+	// The shell's modal slot holds whichever dialog the document opened, and the payer dismissing the panel is a path the slot is not part of; a slot that kept the closed handle would read the next Pay click as a second dialog standing over a live one and dismiss the newcomer inside the click that mounted it, so the payer would see nothing and nothing would say why.
+	const fake = installInteractiveDocument();
+	try {
+		const page = document.createElement("div");
+		document.body.append(page);
+		const shell = mountShell(page);
+		// An invoice no other case pays: the payment latch remembers a send by the invoice's own content for the whole run.
+		renderRoute(shell, parseHash(`#/i/${encodeInvoice(invoiceFor({ id: "INV-REOPEN" }))}`), VIEW_OPTIONS);
+		const pay = () => byText(shell.content.children[0], "button", "Pay")[0];
+		pay().dispatch("click", { type: "click" });
+		const opened = findAll(document.body, (node) => hasClass(node, "pay-dialog"));
+		assert.equal(opened.length, 1, "the first click opens the payment panel");
+
+		const close = findAll(opened[0], (node) => node.attributes?.["aria-label"] === "Close payment panel")[0];
+		assert.ok(close, "the panel offers its own close control");
+		close.dispatch("click", { type: "click" });
+		assert.deepEqual(findAll(document.body, (node) => hasClass(node, "pay-dialog")), [], "the payer's own dismissal takes the panel off the page without paying");
+
+		pay().dispatch("click", { type: "click" });
+		const reopened = findAll(document.body, (node) => hasClass(node, "pay-dialog"));
+		assert.equal(reopened.length, 1, "and the next Pay click opens a panel rather than mounting one the shell dismisses in that same click");
+		assert.notEqual(reopened[0], opened[0], "which is a fresh dialog, not the one the payer dismissed");
+		assert.equal(findAll(reopened[0], (node) => hasClass(node, "pay-connect")).length, 1, "offering the control the payer pays with");
+		assert.equal(page.getAttribute("aria-hidden"), "true", "and hiding the page behind it from assistive tech again");
+		assert.ok(page.hasAttribute("inert"), "and from keyboard focus");
 	} finally {
 		fake.restore();
 	}
@@ -702,9 +836,11 @@ test("closing an overlay runs its dialog's release exactly once, even when the r
 			),
 			{ onClose: () => closed.push("caller") },
 		);
+		assert.equal(overlay.closed, false, "a dialog on the page reads as open through its handle");
 		overlay.element.dispatch("keydown", { type: "keydown", key: "Escape" });
 		assert.deepEqual(released, ["dialog"], "the release the dialog carries runs as the dialog closes");
 		assert.deepEqual(closed, ["caller"], "beside the caller's own close");
+		assert.equal(overlay.closed, true, "and the handle states that the dialog closed, which is what a slot holding it reads");
 		overlay.close();
 		assert.deepEqual(released, ["dialog"], "and a second dismissal runs nothing a second time");
 
@@ -720,6 +856,53 @@ test("closing an overlay runs its dialog's release exactly once, even when the r
 		assert.throws(() => failing.close(), /the release failed/, "a release that fails is not swallowed");
 		assert.equal(runs, 1, "and it runs exactly once even though it threw");
 		assert.deepEqual(afterThrow, ["caller"], "and the caller's own close still runs behind it, so a dismissal cannot strand the half that unmounts the overlay");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a dismissal the payer triggers reports a release that throws, and a caller holding the handle still takes it", () => {
+	// Escape, a backdrop click, and the dialog's own controls are all dismissals with nobody above the listener to hand a failure back to: a throw there reaches the console and no payer. Every one of them reports the failure through the overlay's own hook, and the handle keeps a close for the caller that can act on it.
+	const fake = installInteractiveDocument();
+	try {
+		const dismissThrough = (dismiss) => {
+			const reports = [];
+			const overlay = createOverlay(
+				(close) => {
+					const done = h("button", { type: "button", class: "dialog-done" }, "Done");
+					done.addEventListener("click", close);
+					return releasable(h("div", { class: "dialog" }, done), () => {
+						throw new Error("the release failed");
+					});
+				},
+				{ onDismissFailed: () => reports.push("reported") },
+			);
+			dismiss(overlay);
+			return reports;
+		};
+		const ways = [
+			["the dialog's own close control", (overlay) => overlay.element.querySelector(".dialog-done").dispatch("click", { type: "click" })],
+			["Escape", (overlay) => overlay.element.dispatch("keydown", { type: "keydown", key: "Escape" })],
+			["a click on the backdrop", (overlay) => overlay.element.dispatch("click", { type: "click", target: overlay.element })],
+		];
+		for (const [where, dismiss] of ways) {
+			assert.deepEqual(
+				dismissThrough(dismiss),
+				["reported"],
+				`a dismissal by ${where} reports the release that failed, and throws nothing at the listener that ran it`,
+			);
+		}
+
+		// A caller that holds the handle is the other half: it takes the failure itself, and the payer is not told twice about one failure.
+		const reports = [];
+		const failing = createOverlay(
+			() => releasable(h("div", { class: "dialog" }), () => {
+				throw new Error("the release failed");
+			}),
+			{ onDismissFailed: () => reports.push("reported") },
+		);
+		assert.throws(() => failing.close(), /the release failed/, "a caller holding the handle still takes the failure the dismissal raised");
+		assert.deepEqual(reports, [], "and the same failure is not reported through the hook as well");
 	} finally {
 		fake.restore();
 	}
@@ -773,6 +956,68 @@ test("an overlay that cannot mount releases the dialog it built, without reporti
 	}
 	assert.deepEqual(released, ["dialog"], "the dialog's release runs on the failed mount");
 	assert.equal(closed, 0, "and the caller's close is not reported for an overlay that never opened");
+});
+
+test("a mount that cannot hide the background leaves neither a backdrop over the page nor a hidden background", () => {
+	// The mount returns its release only when it returns, so a hide that throws partway hands the open window nothing to undo: the backdrop this call appended is removed, and the writes it had already made are undone, inside the same call.
+	const fake = installInteractiveDocument();
+	const released = [];
+	try {
+		const hidden = document.createElement("div");
+		const refused = document.createElement("div");
+		document.body.append(hidden, refused);
+		const setAttribute = refused.setAttribute.bind(refused);
+		refused.setAttribute = (name, value) => {
+			if (name === "inert") throw new Error("the background refused its inert state");
+			return setAttribute(name, value);
+		};
+		assert.throws(
+			() => openOverlay(() => releasable(h("div", { class: "dialog" }), () => released.push("dialog"))),
+			/the background refused its inert state/,
+			"the caller is told the mount failed",
+		);
+		assert.deepEqual(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")), [], "no backdrop is left standing over the page");
+		assert.equal(hidden.getAttribute("aria-hidden"), null, "the child the hiding had already reached is un-hidden again");
+		assert.ok(!hidden.hasAttribute("inert"), "with the temporary inert it was given dropped too");
+		assert.equal(refused.getAttribute("aria-hidden"), null, "and the child whose write threw keeps no half-written state");
+		assert.ok(!refused.hasAttribute("inert"));
+	} finally {
+		fake.restore();
+	}
+	assert.deepEqual(released, ["dialog"], "the dialog's own release still runs on the failed mount");
+});
+
+test("a mount whose own release throws still releases the dialog it built", () => {
+	// The mount's release and the dialog's release both run through the shared helper, so a window that unwinds cannot strand the dialog's release on a dialog no handle ever returns; the failure that reaches the caller is still the mount's own, which is what it asked to open.
+	const fake = installInteractiveDocument();
+	const previouslyFocused = document.createElement("button");
+	document.body.append(previouslyFocused);
+	previouslyFocused.focus();
+	const focus = globalThis.HTMLElement.prototype.focus;
+	const remove = globalThis.HTMLElement.prototype.remove;
+	const released = [];
+	// Focus refuses inside the freshly mounted dialog, which is the failure that reaches the open window's catch with a mount release already in hand; the mount's own release then refuses to remove the overlay, so its release throws first.
+	globalThis.HTMLElement.prototype.focus = () => {
+		throw new Error("focus was refused");
+	};
+	globalThis.HTMLElement.prototype.remove = () => {
+		throw new Error("the overlay could not be removed");
+	};
+	try {
+		assert.throws(
+			() => openOverlay(() => releasable(h("div", { class: "dialog" }), () => released.push("dialog"))),
+			(error) => {
+				assert.match(error.message, /focus was refused/, "the caller is told about the failure that stopped the open, not about the cleanup's");
+				assert.match(String(error.cause?.message), /the overlay could not be removed/, "and the release that failed beside it is carried on that failure rather than lost");
+				return true;
+			},
+		);
+	} finally {
+		globalThis.HTMLElement.prototype.focus = focus;
+		globalThis.HTMLElement.prototype.remove = remove;
+		fake.restore();
+	}
+	assert.deepEqual(released, ["dialog"], "the dialog's own release ran even though the mount's release threw before it");
 });
 
 test("openShareDialog mounts over the page, hides the background, and restores focus on close", () => {
@@ -912,7 +1157,7 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
 		const printed = findAll(payment, (node) => hasClass(node, "payment-value-print"));
 		const amount = model.payment.find((term) => term.label === model.labels.amount).value;
-		assert.equal(amount.length, 79, "the amount fixture is 79 characters, inside the 9pt rung's own count");
+		assert.equal(amount.length, 79, "the amount fixture is 79 characters, past what the 9pt rung's column holds and inside the next rung's");
 		assert.deepEqual(
 			printed.map((node) => textOf(node)),
 			[address, amount, model.paymentLink],
@@ -946,8 +1191,10 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 			const body = ruleBody(printCss, `.payment-value-print.${rung}`);
 			assert.ok(body !== undefined, `print.css states the ${rung} rung`);
 			assert.equal(declaration(body, "font-size"), size, `${rung} is set at ${size}`);
-			assert.equal(declaration(body, "white-space"), "nowrap", `${rung} holds the value on one line`);
-			assert.equal(declaration(body, "overflow-wrap"), undefined, `${rung} never breaks the value`);
+			// The rung's own rule states its size, and the line every sized rung is drawn on is stated once for all four: the printed column is the one this page draws, not one a printed page is guaranteed to give the twin, so the printed value keeps every character it has and continues on the next line instead of running its tail past the paper's margin, where no cue and no copy control could recover it.
+			assert.equal(appliedDeclaration(printCss, `.payment-value-print.${rung}`, "white-space"), "pre-wrap", `${rung} preserves every character of the value on the paper, its spacing included`);
+			assert.equal(appliedDeclaration(printCss, `.payment-value-print.${rung}`, "overflow-wrap"), "anywhere", `${rung} breaks inside the value rather than clipping its tail when the column is narrower than the rung was priced against`);
+			assert.notEqual(declaration(body, "white-space"), "nowrap", `${rung} states no line rule of its own that would cut a value its column does not hold`);
 			points.push(Number(size.slice(0, -2)));
 		}
 		assert.deepEqual(points, [...points].sort((left, right) => right - left), "the rungs descend from the largest to the smallest");
@@ -969,20 +1216,21 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 			}
 		}
 
-		// The rungs the twins carry, derived from the page's own geometry — the @page block print.css declares, less its margin — rather than from the module's arithmetic, so a units error on the module's side fails here instead of being transcribed into the expectation.
+		// The rungs the twins carry, derived from the stylesheets' own geometry — the @page block print.css declares, less its margin, and then the payment term's own label rail and gap, which is the column a twin is laid out in — rather than from the module's arithmetic, so a units, margin, or rail error on the module's side fails here instead of being transcribed into the expectation.
+		const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
 		assert.deepEqual(
 			printed.map(printRungs),
-			[address, amount, model.paymentLink].map((value) => [expectedPrintRung(printCss, FIT_RUNGS, [...value].length)]),
-			"each twin carries the rung its length earns on the page print.css declares",
+			[address, amount, model.paymentLink].map((value) => [expectedPrintRung(printCss, invoiceCss, FIT_RUNGS, [...value].length)]),
+			"each twin carries the rung its length earns in the column print.css and invoice.css give it",
 		);
 		assert.deepEqual(printRungs(printed[0]), ["print-fit-wrap"], "the 311-character address is past the print floor and wraps");
 		assert.deepEqual(printRungs(printed[2]), ["print-fit-wrap"], "as is the 404-character link that carries it");
-		assert.deepEqual(printRungs(printed[1]), ["print-fit-1"], "while the 79-character amount fits the 9pt rung the page's geometry earns for it");
+		assert.deepEqual(printRungs(printed[1]), ["print-fit-2"], "while the 79-character amount is past what the 9pt rung's column holds, so it takes the 8pt rung the same geometry earns for it");
 		const evm = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
 		const evmTwins = findAll(evm, (node) => hasClass(node, "payment-value-print"));
 		assert.deepEqual(
 			printRungs(evmTwins[0]),
-			[expectedPrintRung(printCss, FIT_RUNGS, PAYEE.length)],
+			[expectedPrintRung(printCss, invoiceCss, FIT_RUNGS, PAYEE.length)],
 			"and a 42-character EVM address prints at the rung its length earns on the same page",
 		);
 
@@ -994,8 +1242,46 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 	}
 });
 
-test("no non-verbatim payment value can outgrow its column, so none needs a print twin", () => {
-	// The printed page drops only the verbatim values and swaps in a twin; a plain value that fits its column is safe to print as it stands. Verify that the only plain values are the registry's own Asset and Network labels, and that the widest one fits the narrowest value column at the viewport the page is laid out for.
+test("the print twin's printed visibility is decided by the stylesheets' media queries, not by the order the two files load in", () => {
+	// The twin is hidden by one file and shown by another, each at the same specificity, so the pair is decided by source order unless the media queries decide it: a `<link>` reorder that let the hiding rule win in print would drop the twin as well as the on-screen value print.css hides, and the page would print an invoice carrying no payout address at all. This reads both files' statements about the twin and resolves them the way the cascade does for each medium, under each load order.
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
+	/** Whether a rule's query matches `medium`: a rule outside any query matches every medium, and a query naming the medium matches it. */
+	const matches = (at, medium) => at === "" || at.includes(medium);
+	/** Every `display` one file states for the twin, with the query it sits under and the file that states it. */
+	const stated = (css, file) =>
+		cssRules(css)
+			.filter((rule) => rule.selectors.includes(".payment-value-print") && declaration(rule.body, "display") !== undefined)
+			.map((rule) => ({ file, at: rule.at, display: declaration(rule.body, "display") }));
+	const invoice = [invoiceCss, "invoice.css"];
+	const print = [printCss, "print.css"];
+	const statements = [invoice, print].flatMap(([css, file]) => stated(css, file));
+	assert.ok(statements.length >= 2, "both files state how the twin is displayed, so the two are swapped rather than both drawn");
+
+	// The property that has to hold whatever the load order: no statement that hides the twin may be able to match a printed page, or a printed page could be left with the on-screen value hidden by print.css and the twin hidden here, and no second copy of the address on it.
+	const hiding = statements.filter((rule) => rule.display === "none");
+	assert.ok(hiding.length > 0, "invoice.css still hides the twin on screen, where the value and its copy control are the presentation");
+	for (const rule of hiding) {
+		assert.ok(!matches(rule.at, "print"), `${rule.file} hides the twin under ${rule.at === "" ? "no query at all" : rule.at}, which can match a printed page`);
+	}
+	const showing = statements.filter((rule) => matches(rule.at, "print") && rule.display !== "none");
+	assert.ok(showing.length > 0, "and print.css shows the twin in the printed page, so the printed document carries the value whole");
+	for (const rule of showing) {
+		assert.match(rule.display, /^(?:block|inline)$/, `${rule.file} shows the twin as a box of its own on the row it takes under ${rule.at}`);
+	}
+
+	// The same answer under either load order, resolved the way the cascade resolves equal-specificity statements: the last matching one wins, which is the order-dependence this pins away.
+	for (const order of [[invoice, print], [print, invoice]]) {
+		const names = order.map(([, file]) => file).join(" loaded before ");
+		/** The `display` the cascade applies to the twin in `medium`, with the files loaded in `order`. */
+		const applied = (medium) => order.flatMap(([css, file]) => stated(css, file)).filter((rule) => matches(rule.at, medium)).at(-1);
+		assert.equal(applied("screen")?.display, "none", `${names}: the twin is hidden on screen, whichever file loads last`);
+		assert.match(String(applied("print")?.display), /^(?:block|inline)$/, `${names}: and shown in print, so no order of the two links can print the document without its payout address`);
+	}
+});
+
+test("the values no wallet takes verbatim wrap rather than scroll, so none can be clipped and none needs a print twin", () => {
+	// The printed page drops only the verbatim values and swaps in a twin, so a plain value has to be safe to print as it stands. Its safety is the wrap: the value is drawn whole on as many lines as it needs rather than held on one scrolling run, so no overlay-scrollbar engine can hand a payer a clipped tail of it with no cue and no focus stop. Verify that the only plain values are the registry's own Asset and Network labels, and that both states of the value box are stated by the stylesheet.
 	const hostile = invoiceFor({
 		id: "I".repeat(64),
 		payee: { name: "N".repeat(200), address: PAYEE },
@@ -1021,6 +1307,38 @@ test("no non-verbatim payment value can outgrow its column, so none needs a prin
 		widest * perCharPx <= valueColumnPx,
 		`the widest non-verbatim value is ${widest} characters, which fits the ${valueColumnPx}px column at the value face's half-em average`,
 	);
+
+	// The mechanism that makes a clipped tail impossible is the wrap, not the estimate above: every plain value takes the wrapping state of the value box, and that state draws its own lines rather than keeping a scroll container.
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(hostile, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const terms = findAll(view, (node) => hasClass(node, "payment-term"));
+		const plainTerms = terms.filter((term) => findAll(term, (node) => hasClass(node, "payment-value-verbatim")).length === 0);
+		assert.deepEqual(
+			plainTerms.map((term) => textOf(term)),
+			plain.map((term) => `${term.label}${term.value}`),
+			"the terms drawn without a verbatim value are the asset and network terms the model states",
+		);
+		for (const term of plainTerms) {
+			const value = findAll(term, (node) => hasClass(node, "payment-value"))[0];
+			assert.ok(value !== undefined, "each plain term draws its value in the payment section's value box");
+			assert.ok(hasClass(value, "payment-value-wrapping"), `${String(value.attributes.class)} takes the wrapping state, so a label wider than the column is drawn on the next line instead of scrolling out of sight`);
+			assert.equal(value.attributes.tabindex, undefined, "and it is no focus stop: a value that cannot overflow has no tail for a keyboard user to arrow along to");
+			assert.equal(value.attributes.role, undefined, "and carries no role a stop would need");
+			assert.ok(!hasClass(term, "fit-sized"), "its row is not one the ladder sizes, so nothing cues a value nothing can hide");
+		}
+
+		const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+		const wrapping = ruleBody(invoiceCss, ".payment-value-wrapping");
+		assert.ok(wrapping !== undefined, "invoice.css states what a payment value no wallet takes verbatim does instead of taking the scroll box the verbatim values are drawn in");
+		assert.equal(declaration(wrapping, "white-space"), "normal", "it wraps, so a longer label is drawn on the next line rather than held on one run");
+		assert.equal(declaration(wrapping, "overflow-wrap"), "anywhere", "and a label with no space of its own still breaks inside itself rather than running past the column");
+		assert.equal(declaration(wrapping, "overflow"), "visible", "it draws its own lines rather than scrolling, so every line it wraps onto is part of the value a payer sees");
+		assert.equal(appliedDeclaration(invoiceCss, ".payment-value", "white-space"), "nowrap", "while the class the verbatim values share still states the one-line contract, which those values keep, being strings a wallet takes");
+		assert.equal(appliedDeclaration(invoiceCss, ".payment-value", "overflow-x"), "auto", "with the scroll box a value wider than the column is read through");
+	} finally {
+		fake.restore();
+	}
 });
 
 /**
@@ -1759,15 +2077,144 @@ test("a verbatim payment row is no taller than the value it draws, and an empty 
 		fake.restore();
 	}
 
-	// The value is a scroll container, and its scrollbar is how an overflowing value says so: nothing hides it, so a value that overflows before any script runs is visibly scrollable rather than silently clipped. The residual rung — the one state in which the value certainly does not fit — states that cue, and the ladder-agreement test holds its statement in both engines to the ladder.
-	assert.equal(declaration(value, "scrollbar-width"), undefined, "the base rule hides no scrollbar, so a value that overflows before any script runs is visibly scrollable rather than silently clipped");
+	// The value is a scroll container, and its scrollbar is one thing an overflowing value says so with: nothing hides it, so an engine that paints a bar shows the value's overflow rather than clipping it silently.
+	assert.equal(declaration(value, "scrollbar-width"), undefined, "the base rule hides no scrollbar, so an engine that paints one shows a value that overflows it");
 	assert.equal(declaration(value, "overflow-x"), "auto", "and the value scrolls its own overflow");
 	assert.equal(ruleBody(invoiceCss, ".payment-value::-webkit-scrollbar"), undefined, "no WebKit rule hides the scrollbar that overflow draws either");
+	// The bar is not a cue every engine paints — an overlay-scrollbar engine draws one only once the payer scrolls, and the states in which no fit ever lands carry no rung at all — so the cue a value may be clipped by is a line of text on the row itself, painted for every state of a row the ladder sizes that no rung holding the value covers. The ladder-agreement test in `tests/fit-value.test.mjs` holds that cue, and the states that silence it, to the ladder.
+	const sizedCue = ruleBody(invoiceCss, ".payment-term.fit-sized::after");
+	assert.ok(sizedCue !== undefined, "invoice.css states the cue a value the ladder sizes carries, on the row rather than in the value's scroll box");
+	assert.equal(declaration(sizedCue, "content"), '"If the value is cut off, scroll it."', "worded as an instruction conditioned on the clip rather than a claim that the value continues, so it is true beside a value a fit has just shown whole — the common case for every address, amount, and hash — and beside the 311-character address that is genuinely clipped, and it names the scroll box this term gives its value whether or not a copy control sits beside it");
+	assert.equal(declaration(sizedCue, "user-select"), "none", "and the rule that paints the cue states the one exclusion a stylesheet can make from a selection, which is all this suite can read: the cue is generated content of the row and never a text node, so the value's own text and every string the app copies are free of it, and the residual a browser's selection could still carry is stated in the rule's own comment");
 
 	// Neither affordance is part of the text a payer selects, which is what makes a select-all of the section read one label and one value per line; both also keep their own width on the row rather than stretching.
 	for (const selector of [".payment-copy", ".payment-status"]) {
 		assert.equal(appliedDeclaration(invoiceCss, selector, "flex"), "0 0 auto", `${selector} keeps its own width on the payment row rather than stretching`);
 		assert.equal(appliedDeclaration(invoiceCss, selector, "user-select"), "none", `${selector} is outside a text selection of the section`);
+	}
+});
+
+/**
+ * The cue every row a value the ladder sizes is drawn in carries, as both stylesheets state it and as every assertion below is held to.
+ * It is worded as an instruction conditioned on the clip rather than as a claim that the value continues, so it is true beside a value a fit has just shown whole and beside one that is cut off, and it names the scroll box such a row gives its value whether or not a copy control sits beside it.
+ */
+const CUE_TEXT = "If the value is cut off, scroll it.";
+
+/** The words the cue is recognised by in a rendered document, which is read for them rather than for the stylesheet that paints them. */
+const CUE_WORDS = /cut off|scroll it/;
+
+/** The classes a fitted value's own text is drawn in, on either surface: a cue generated inside one of them would be part of the value's own box rather than beside it. */
+const VALUE_BOXES = [".payment-value", ".pay-term-value", ".pay-account-value", ".pay-balance-value", ".pay-hash"];
+
+/** The elements the invoice keeps out of a text selection: its copy control, and the status that reports the copy. */
+const INVOICE_SELECTION_EXCLUSIONS = [".payment-copy", ".payment-status"];
+
+/** The same two elements on the panel's receipt row: the control that copies the transaction hash, and its "Copied" status. */
+const RECEIPT_SELECTION_EXCLUSIONS = [".pay-copy", ".pay-copy-status"];
+
+test("the clipping cue is scoped to the screen, so the printed page never draws it beside the complete print twin", () => {
+	// The cue is a line of text on the row, and the printed page draws the whole value of that same row from its print twin: a cue that reached paper would sit beside an address that is already complete, and a value marked as possibly cut off would be the one thing on the sheet that is whole.
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
+	const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
+	const statesCue = (rule) => String(declaration(rule.body, "content") ?? "").includes(CUE_TEXT);
+
+	// Every statement of the cue text in the invoice stylesheet stands under the screen query, read from the at-rule prelude the rule sits inside rather than from the declaration alone.
+	const cueRules = cssRules(invoiceCss).filter(statesCue);
+	assert.ok(cueRules.length > 0, "invoice.css states the cue a value the ladder sizes carries");
+	for (const rule of cueRules) {
+		assert.equal(rule.at, "@media screen", `${rule.selectors.join(", ")} states the cue inside \`@media screen\`, so no print engine can draw it beside the print twin of the same value`);
+	}
+
+	// The whole treatment of that cue is screen-only, and nothing on the screen silences it: a cue shown only on paper is the same defect seen from the other side, and a state that switched the cue off would be exactly the missing cue a clipped value must never have.
+	const sizedRows = cssRules(invoiceCss).filter((rule) => rule.selectors.some((selector) => selector.startsWith(".payment-term.fit-sized")));
+	assert.ok(sizedRows.length > 0, `the cue's own rule is read: ${sizedRows.map((rule) => rule.selectors.join(", ")).join(" | ")}`);
+	assert.deepEqual(
+		sizedRows.filter((rule) => declaration(rule.body, "content") === "none").map((rule) => rule.selectors.join(", ")),
+		[],
+		"no state of a sized payment term silences its cue, so a value that may be clipped is never drawn as whole",
+	);
+	for (const rule of sizedRows) {
+		assert.equal(rule.at, "@media screen", `${rule.selectors.join(", ")} is drawn on the screen alone, the cue and every state that switches it off alike`);
+	}
+
+	// The panel draws its own version of the cue under a screen query of its own, and print.css hides the dialog it is drawn in: both halves of that are pinned here, because either one alone would let the text reach paper.
+	assert.equal(cssRules(printCss).filter(statesCue).length, 0, "print.css states no clipping cue of its own");
+	const panelCue = cssRules(appCss).filter(statesCue);
+	assert.ok(panelCue.length > 0, "app.css states the panel's own version of the cue");
+	for (const rule of panelCue) {
+		assert.ok(
+			rule.selectors.every((selector) => /^\.pay-(?:term|account|balance|result)\.fit-sized/.test(selector)),
+			`${rule.selectors.join(", ")} states the cue on the panel's own rows — the summary terms, the two wallet strings, and the receipt's transaction hash — which are drawn inside the dialog print.css hides`,
+		);
+		assert.equal(rule.at, "@media screen", `${rule.selectors.join(", ")} states the panel's cue inside \`@media screen\`, so the sentence rests on the panel's own query rather than on print.css hiding the dialog it is drawn in`);
+	}
+
+	// The cue's placement on the panel's rows is part of the same screen-only treatment, for the same reason: a rule that kept its declarations and lost its query would leave the panel's cue off paper only for as long as print.css went on hiding the whole dialog.
+	const panelCueTreatment = cssRules(appCss).filter((rule) => rule.selectors.some((selector) => /^\.pay-(?:term|account|balance|result)\.fit-sized::after$/.test(selector)));
+	assert.ok(panelCueTreatment.length > 0, "app.css states how the panel's cue is placed on its rows");
+	for (const rule of panelCueTreatment) {
+		assert.equal(rule.at, "@media screen", `${rule.selectors.join(", ")} places the panel's cue on the screen alone, the cue and the box it is drawn in alike`);
+	}
+	const hiddenDialog = cssRules(printCss).find((rule) => rule.selectors.includes(".dialog-backdrop"));
+	assert.ok(hiddenDialog !== undefined, "print.css states what happens to a dialog a print is taken of");
+	assert.equal(declaration(hiddenDialog.body, "display"), "none !important", "which is that it never reaches paper, so the panel's cue cannot either");
+
+	// The two surfaces say one thing: the panel's cue and the invoice's cue are the same sentence, so a payer reads one instruction wherever a row a value the ladder sizes is drawn in, and a wording changed on one side alone fails here.
+	assert.deepEqual(
+		[...new Set(panelCue.map((rule) => declaration(rule.body, "content")))],
+		[...new Set(cueRules.map((rule) => declaration(rule.body, "content")))],
+		"app.css paints the same sentence invoice.css paints, so the cue cannot come to mean two things on the surfaces that draw it",
+	);
+});
+
+test("the cue is generated content of a row and never a text node, so no string the app copies can carry it", () => {
+	// What keeps the cue out of a copied string is pinned here as far as this repository can see it: the sentence is a `::after` of the row the value sits in rather than of the value's own box, and it is no text node at all — the value's own text, which is the string each copy control is handed and the run any read of the rendered document picks up, is the value and nothing else.
+	const cueRules = ["invoice.css", "app.css"].flatMap((name) => {
+		const css = readFileSync(join(root, `app/stylesheets/${name}`), "utf8");
+		return cssRules(css)
+			.filter((rule) => String(declaration(rule.body, "content") ?? "").includes(CUE_TEXT))
+			.map((rule) => ({ name, selectors: rule.selectors, body: rule.body }));
+	});
+	assert.equal(cueRules.length, 2, "each surface states the cue once: invoice.css for the invoice's terms and app.css for the panel's rows");
+	for (const { name, selectors, body } of cueRules) {
+		for (const selector of selectors) {
+			assert.ok(selector.endsWith("::after"), `${name}'s ${selector} paints the cue as generated content rather than as an element carrying it`);
+			assert.ok(
+				/^\.(?:payment-term|pay-term|pay-account|pay-balance|pay-result)\.fit-sized::after$/.test(selector),
+				`${name}'s ${selector} generates the cue on the row a value the ladder sizes is drawn in, beside the value rather than in it`,
+			);
+			for (const valueSelector of VALUE_BOXES) {
+				assert.ok(
+					!selector.includes(valueSelector),
+					`${name}'s ${selector} generates no cue inside ${valueSelector}, so the box a value's own text is drawn in stays the value alone`,
+				);
+			}
+		}
+		assert.equal(declaration(body, "user-select"), "none", `${name} states the one exclusion a stylesheet can make from a selection in the rule that paints the cue, so the two cannot drift apart; what no suite here can observe, because the suites drive a fake DOM with no CSS, is a browser keeping the sentence out of a selection that spans the row`);
+	}
+
+	// The rendered documents then carry no text node of the sentence at all, so neither a copy of a value's own text nor the string a copy control is handed can include it.
+	const fake = installInteractiveDocument();
+	try {
+		const invoice = invoiceFor();
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const verbatim = buildInvoiceViewModel(invoice, VIEW_OPTIONS.today).payment.filter((term) => term.verbatim === true);
+		assert.deepEqual(paymentValues(view), verbatim.map((term) => term.value), "each value a wallet takes verbatim renders the term's own string and nothing else, which is the string its copy control hands the clipboard");
+		assert.doesNotMatch(textOf(view), CUE_WORDS, "and the cue is in no text node of the document, because a stylesheet paints it rather than the view building it");
+
+		// An invoice of its own, because the attempted-payment latch is per invoice id and another test in this process may already have claimed this one.
+		const handled = openPayPanel(invoiceFor({ id: "INV-CUE" }), { notice: noticeRecorder(), clipboard: null, fit: fakeProbe(() => ({ content: 120, box: 240 })) });
+		assert.ok(handled !== null, "the payment panel opens for an invoice of its own");
+		const panelValues = findAll(handled.element, (node) => hasClass(node, "pay-term-value"));
+		assert.ok(panelValues.length > 0, "and draws its summary values in the boxes the cue is painted beside");
+		for (const node of panelValues) {
+			assert.doesNotMatch(textOf(node), CUE_WORDS, "no panel value's own text carries the cue either");
+		}
+		assert.doesNotMatch(textOf(handled.element), CUE_WORDS, "nor does any other text node the panel builds");
+		handled.close();
+	} finally {
+		fake.restore();
 	}
 });
 
@@ -1787,6 +2234,18 @@ test("the copy control's own metrics outrank the plain button's, whatever order 
 		selectorWeight(".payment-term .payment-copy") > selectorWeight(".btn"),
 		"the control's scoped selector must outrank the plain .btn class, so no stylesheet order can hand the control the button's taller metrics",
 	);
+});
+
+test("the receipt row's copy control and status are kept out of a selection the way the invoice's are", () => {
+	// A drag-selection that spans the receipt row must not add the control's face or the "Copied" line to the transaction hash, which is the string the payer checks against their wallet: the invoice states that exclusion on its own copy control and status, and the panel's receipt row states the same two rules for the two elements it draws.
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
+	const invoiceExclusion = cssRules(invoiceCss).filter((rule) => INVOICE_SELECTION_EXCLUSIONS.every((selector) => rule.selectors.includes(selector)));
+	assert.equal(invoiceExclusion.length, 1, "invoice.css states one rule naming the invoice's copy control and its status together");
+	assert.equal(declaration(invoiceExclusion[0].body, "user-select"), "none", "and that rule is what keeps both out of a text selection");
+	const receiptExclusion = cssRules(appCss).filter((rule) => RECEIPT_SELECTION_EXCLUSIONS.every((selector) => rule.selectors.includes(selector)));
+	assert.equal(receiptExclusion.length, 1, "app.css states the same rule for the receipt row's copy control and its status, in one selector list of their own");
+	assert.equal(declaration(receiptExclusion[0].body, "user-select"), "none", "so a selection that spans the receipt row yields the transaction hash alone");
 });
 
 test("a copy confirmation clears after its pause and a repeated copy still announces", async () => {
@@ -1867,7 +2326,7 @@ test("each copy status is a live region that stays in the document before it has
 	}
 });
 
-test("a verbatim payment value is a named focus stop with its own ring, and the residual rung is the visible cue that it scrolls", () => {
+test("a verbatim payment value is a named focus stop with its own ring, and a clipped value is cued on its row rather than by a mask", () => {
 	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
 	const appCss = readFileSync(join(root, "app/stylesheets/app.css"), "utf8");
 	// A value wider than its column is a keyboard-reachable scroll container, so it needs both the ring `app.css` gives only form controls and a name that tells a screen-reader user which value the stop holds.
@@ -1880,7 +2339,7 @@ test("a verbatim payment value is a named focus stop with its own ring, and the 
 		"the ring's colour falls back to the root-scoped `--accent`, so it resolves on the create screen as well as the payer's document",
 	);
 	assert.ok(declaration(ruleBody(appCss, ":root"), "--accent") !== undefined, "and that fallback is the root's own accent token, which every surface inherits");
-	// The cue that a value does not fit is its scrollbar rather than a mask or a fade: a hidden scrollbar would make the overflow a silent clip, so an overflowing value is visibly scrollable, and the residual rung's own statement of that cue is held to the ladder by the ladder-agreement test.
+	// The cue that a value does not fit is neither a mask nor a fade drawn out of its glyphs: a hidden scrollbar would make the overflow a silent clip, so no rule hides the bar an engine paints, and the cue a clipped value is given is the row's own line of text, which the ladder-agreement test holds to the ladder.
 	assert.equal(ruleBody(invoiceCss, ".payment-term:hover .payment-value-verbatim"), undefined, "no hover-only rule stands in for the scrollbar a clipped value would otherwise show");
 	assert.doesNotMatch(invoiceCss, /mask-image/, "and no mask fades the value's edge in its place");
 	assert.equal(ruleBody(invoiceCss, ".payment-value::-webkit-scrollbar"), undefined, "and the base rule hides no scrollbar for the engine that would draw one");
@@ -1942,6 +2401,46 @@ test("a copy in flight does not write into a payment section the create screen h
 		pauses[1]();
 		assert.equal(textOf(status), "", "and the pending clear does not write into it either");
 	} finally {
+		fake.restore();
+	}
+});
+
+test("the invoice view surfaces a release that throws as the app's own sentence, not the stop's", () => {
+	const fake = installInteractiveDocument();
+	const createElement = document.createElement;
+	// The document is built after the payment section has taken its fittings, so a document that refuses the article fails the render with the section's release still to run — and the stop below throws the way a release a browser refuses does.
+	document.createElement = (tag) => {
+		if (tag === "article") throw new Error("the document was refused");
+		return createElement.call(document, tag);
+	};
+	try {
+		const inner = fakeProbe(() => ({ content: 120, box: 240 }));
+		let thrown = false;
+		const probe = {
+			measure: inner.measure,
+			onResize(target, run) {
+				const stop = inner.onResize(target, run);
+				return () => {
+					stop();
+					if (thrown) return;
+					thrown = true;
+					throw new Error("the first stop failed");
+				};
+			},
+		};
+		let failure = null;
+		try {
+			renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder(), fit: probe });
+		} catch (error) {
+			failure = error;
+		}
+		assert.ok(failure !== null, "a render that fails after the section took its fittings throws");
+		assert.equal(String(failure.message), VIEW_BUILD_RELEASE_FAILED_MESSAGE, "the failure surfaces as the app's own fixed sentence, which is the error a developer reads in the shell's internal report rather than the sentence the payer's notice shows");
+		assert.doesNotMatch(String(failure.message), /the first stop failed/, "never in the stopped subscriber's own words, which can carry internal detail the payer-facing notice must not reach");
+		assert.equal(failure.cause?.message, "the document was refused", "with the failure that caused the path kept on the error rather than in its message");
+		assert.deepEqual(new Set(inner.unsubscribed), new Set(inner.targets), "and every fitting the section had taken was released, the ones behind the stop that threw included");
+	} finally {
+		document.createElement = createElement;
 		fake.restore();
 	}
 });

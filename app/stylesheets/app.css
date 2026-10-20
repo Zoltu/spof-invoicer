@@ -601,19 +601,38 @@ textarea:disabled {
 }
 
 /*
- * Every value the panel draws is held on one line and never broken, and a value wider than its column scrolls inside its own box rather than escaping the dialog.
- * `.pay-term-value` is the class all four summary terms draw their value in, so the fitted amount and recipient and the plain Asset and Network rows take the same scroll box; the two wallet-reported values are named beside it, and the rule states the panel's one-line contract once.
+ * Every value a wallet takes verbatim is held on one line and never broken, and a value wider than its column scrolls inside its own box rather than escaping the dialog.
+ * `.pay-term-value` is the class all four summary terms draw their value in, so the fitted amount and recipient and the plain Asset and Network rows share one statement of the panel's value box, which the two wallet-reported values and the receipt's transaction hash are named beside; the wrapping state below is the one value that leaves that contract, and it leaves it as a state of a value rather than as a second box.
  * The two break properties are stated at their initial values here as `invoice.css`'s note on `.payment-value` states them for the invoice's own payment values: both inherit, so an ancestor's break rule would otherwise reach these values.
- * The Asset and Network terms take no rung class, because neither is handed to the fitting; `ui/pay.ts`'s `payTerm` doc states what they keep in place of a rung, and why.
+ * The Asset and Network terms take no rung class, because neither is handed to the fitting; their value takes the wrapping state below, and `ui/pay.ts`'s `payTerm` doc states why.
  */
 .pay-term-value,
 .pay-account-value,
-.pay-balance-value {
+.pay-balance-value,
+.pay-hash {
 	min-width: 0;
+	/* Each value is the containing block of the scale box drawn inside it, so that box stays within the value's own box wherever the panel lays the value out (`ui/fit-value.ts` states what the box is for). */
+	position: relative;
 	white-space: nowrap;
 	overflow-wrap: normal;
 	word-break: normal;
 	overflow-x: auto;
+}
+
+/*
+ * The scale box every value the ladder sizes carries inside it: empty, hidden, out of the flow, and sized one em in each direction, so its own size follows the value's drawn font size and nothing else.
+ * It exists because the value's box cannot report a change to the value's font size — a value set in a larger face inside a column of the same width — while this box, sized from that same computed font size, can, and the fitting re-measures when it does (`ui/fit-value.ts` states what the box reports and what it cannot, and `FIT_SCALE_CLASS` in that module the name).
+ * It catches the change a rule or an inherited size makes to that computed size, and it catches nothing of a change to the advance the value's glyphs are actually drawn at: a browser minimum-font-size setting, `text-size-adjust`, a mobile engine's font boosting, and a late face substitution grow the run without moving this box. That is why the cue below, which says the value may be cut off, is painted in every state of a fitted row and never switched off.
+ * It states visibility rather than taking the box out of the layout, because a hidden box still has a size to report and a `display: none` one would have none; it carries no text and is `aria-hidden`, so a selection of the value still yields the value alone.
+ * The document's payment values draw the same element and, being `invoice.css`'s rather than this stylesheet's, take this one rule: it is stated here because both surfaces share it and `app.css` is the sheet the document loads as well.
+ */
+.fit-scale {
+	position: absolute;
+	inset-block-start: 0;
+	inset-inline-start: 0;
+	inline-size: 1em;
+	block-size: 1em;
+	visibility: hidden;
 }
 
 /* The summary term's value keeps the definition list's margin off and gives every digit the same advance, so a digit sits in the same place whichever one it is and the amount's width follows its digit count alone. */
@@ -623,12 +642,24 @@ textarea:disabled {
 }
 
 /*
- * A panel value is a keyboard-reachable scroll container, so it needs the ring this stylesheet gives only form controls — the same ring the invoice's own payment values take — and the value is named for the term it holds, so a screen-reader user reaching the stop hears which value it carries.
+ * The two values the panel reads for itself — the asset's name with its symbol, and the network's label — wrap rather than scroll, so a longer registry name or network label is drawn whole on the next line instead of running a clipped tail that reads as the whole name.
+ * Neither is a string a wallet takes verbatim or a payer compares, so there is nothing to hand the fitting and nothing a cue would be true about: the value states every character it has, which is what makes a cue unnecessary here rather than absent by oversight.
+ * The wrapped box draws its own lines, so it keeps neither the scroll container nor the one-line contract of the values above it.
+ */
+.pay-term-value-wrapping {
+	white-space: normal;
+	overflow-wrap: anywhere;
+	overflow: visible;
+}
+
+/*
+ * A panel value is a keyboard focus stop — a scroll container for the verbatim values, which is how a value wider than the panel is read through — so it needs the ring this stylesheet gives only form controls, the same ring the invoice's own payment values take, and the value is named for the term it holds, so a screen-reader user reaching the stop hears which value it carries.
  * The stops are declared here beside the boxes they ring, and the scrollbar the residual rung draws is stated below with the panel's rungs of the screen ladder.
  */
 .pay-term-value:focus-visible,
 .pay-account-value:focus-visible,
-.pay-balance-value:focus-visible {
+.pay-balance-value:focus-visible,
+.pay-hash:focus-visible {
 	outline: 2px solid var(--accent);
 	outline-offset: 2px;
 }
@@ -677,6 +708,7 @@ textarea:disabled {
 /*
  * The connected account and the balance are strings the wallet reports, and either can outrun the panel: each takes the room its label leaves, and the one-line rule above states how its overflow is held.
  * Both are keyboard-reachable scroll containers, so the focus ring above and the panel's rungs of the screen ladder below apply to them exactly as they do to a term's value.
+ * The receipt's transaction hash takes the same three statements — the one-line box above, that focus ring, and those rungs — because it is the other string the payer copies verbatim out of this panel.
  */
 .pay-account-value,
 .pay-balance-value {
@@ -690,29 +722,33 @@ textarea:disabled {
 
 /*
  * The panel's rungs of the screen ladder `ui/fit-value.ts` declares, stated here beside the geometry of the rows those rungs are measured against, because a panel row's columns and its value's font size are one reading of the same width.
- * One rule per rung names the panel's three fitted value classes — the summary term's value, which the amount and the recipient both draw, the connected account, and the wallet's balance — so a rung is one font size wherever it is applied, and the four fitted values the panel draws, one per row, all take it.
+ * One rule per rung names the panel's four fitted value classes — the summary term's value, which the amount and the recipient both draw, the connected account, the wallet's balance, and the receipt's transaction hash — so a rung is one font size wherever it is applied, and the five fitted values the panel draws, one per row, all take it.
  */
 .pay-term.fit-inline-13 .pay-term-value,
 .pay-account.fit-inline-13 .pay-account-value,
-.pay-balance.fit-inline-13 .pay-balance-value {
+.pay-balance.fit-inline-13 .pay-balance-value,
+.pay-result.fit-inline-13 .pay-hash {
 	font-size: 0.8125rem;
 }
 
 .pay-term.fit-inline-12 .pay-term-value,
 .pay-account.fit-inline-12 .pay-account-value,
-.pay-balance.fit-inline-12 .pay-balance-value {
+.pay-balance.fit-inline-12 .pay-balance-value,
+.pay-result.fit-inline-12 .pay-hash {
 	font-size: 0.75rem;
 }
 
 .pay-term.fit-inline-11 .pay-term-value,
 .pay-account.fit-inline-11 .pay-account-value,
-.pay-balance.fit-inline-11 .pay-balance-value {
+.pay-balance.fit-inline-11 .pay-balance-value,
+.pay-result.fit-inline-11 .pay-hash {
 	font-size: 0.6875rem;
 }
 
 .pay-term.fit-inline-10 .pay-term-value,
 .pay-account.fit-inline-10 .pay-account-value,
-.pay-balance.fit-inline-10 .pay-balance-value {
+.pay-balance.fit-inline-10 .pay-balance-value,
+.pay-result.fit-inline-10 .pay-hash {
 	font-size: 0.625rem;
 }
 
@@ -720,58 +756,70 @@ textarea:disabled {
  * The stacked phase of a panel term: the label takes a line of its own so the value has the row's whole width.
  * The `640px` block at the foot of this stylesheet gives a panel term that same one column whatever rung it carries, so below that width the class a fit writes changes the value's font size and no longer the row it is drawn on: a panel term carrying an inline rung is stacked there too, while `invoice.css` keeps the invoice's own terms on the label's rail at the same width.
  * The rungs are named here, once each, because the row's own columns are this stylesheet's.
+ * The residual rung is named with them: it is the one state a panel row certainly scrolls, and it is reached only after both phases' rungs have been measured and none held the value, so a residual row left in the label's rail would draw the value in a column narrower than the ones the search already refused it in and rest the whole property on the cue staying painted.
  */
 .pay-term.fit-stacked-12,
 .pay-term.fit-stacked-11,
-.pay-term.fit-stacked-10 {
+.pay-term.fit-stacked-10,
+.pay-term.fit-residual {
 	grid-template-columns: 1fr;
 }
 
 /*
  * The stacked phase of the connected account and of the balance: the row wraps and the value takes the line below its label.
+ * The residual rung is stated here with them for the reason a panel term's is: the value keeps the row's whole width rather than the share the label leaves it.
  */
 .pay-account.fit-stacked-12,
 .pay-account.fit-stacked-11,
 .pay-account.fit-stacked-10,
+.pay-account.fit-residual,
 .pay-balance.fit-stacked-12,
 .pay-balance.fit-stacked-11,
-.pay-balance.fit-stacked-10 {
+.pay-balance.fit-stacked-10,
+.pay-balance.fit-residual {
 	flex-wrap: wrap;
 }
 
 .pay-account.fit-stacked-12 .pay-account-value,
 .pay-account.fit-stacked-11 .pay-account-value,
 .pay-account.fit-stacked-10 .pay-account-value,
+.pay-account.fit-residual .pay-account-value,
 .pay-balance.fit-stacked-12 .pay-balance-value,
 .pay-balance.fit-stacked-11 .pay-balance-value,
-.pay-balance.fit-stacked-10 .pay-balance-value {
+.pay-balance.fit-stacked-10 .pay-balance-value,
+.pay-balance.fit-residual .pay-balance-value {
 	flex-basis: 100%;
 }
 
 .pay-term.fit-stacked-12 .pay-term-value,
 .pay-account.fit-stacked-12 .pay-account-value,
-.pay-balance.fit-stacked-12 .pay-balance-value {
+.pay-balance.fit-stacked-12 .pay-balance-value,
+.pay-result.fit-stacked-12 .pay-hash {
 	font-size: 0.75rem;
 }
 
 .pay-term.fit-stacked-11 .pay-term-value,
 .pay-account.fit-stacked-11 .pay-account-value,
-.pay-balance.fit-stacked-11 .pay-balance-value {
+.pay-balance.fit-stacked-11 .pay-balance-value,
+.pay-result.fit-stacked-11 .pay-hash {
 	font-size: 0.6875rem;
 }
 
 .pay-term.fit-stacked-10 .pay-term-value,
 .pay-account.fit-stacked-10 .pay-account-value,
-.pay-balance.fit-stacked-10 .pay-balance-value {
+.pay-balance.fit-stacked-10 .pay-balance-value,
+.pay-result.fit-stacked-10 .pay-hash {
 	font-size: 0.625rem;
 }
 
 /*
- * The residual rung as the panel states it: no rung of either phase holds the value, so it keeps the floor's font size and scrolls its overflow behind the thin scrollbar that says the tail is there.
+ * The residual rung as the panel states it: no rung of either phase holds the value, so it keeps the floor's font size, scrolls its overflow, and keeps the whole width the stacked columns above give it.
+ * The thin bar below is painted only by an engine that draws one before the payer scrolls, which is why the cue stated further down belongs to the row rather than to this rung, and why the row's own columns are what the cue is drawn beside rather than a substitute for them.
  */
 .pay-term.fit-residual .pay-term-value,
 .pay-account.fit-residual .pay-account-value,
-.pay-balance.fit-residual .pay-balance-value {
+.pay-balance.fit-residual .pay-balance-value,
+.pay-result.fit-residual .pay-hash {
 	font-size: 0.625rem;
 	scrollbar-width: thin;
 }
@@ -779,8 +827,46 @@ textarea:disabled {
 /* The WebKit half of the residual rung's scrollbar cue, whose mechanism and reason `invoice.css` states beside the invoice's own residual rung: the 6px height here is that same figure, applied to the panel's three values. */
 .pay-term.fit-residual .pay-term-value::-webkit-scrollbar,
 .pay-account.fit-residual .pay-account-value::-webkit-scrollbar,
-.pay-balance.fit-residual .pay-balance-value::-webkit-scrollbar {
+.pay-balance.fit-residual .pay-balance-value::-webkit-scrollbar,
+.pay-result.fit-residual .pay-hash::-webkit-scrollbar {
 	height: 6px;
+}
+
+/*
+ * The cue that a value may be cut off: the thin bar above is not painted by an overlay-scrollbar engine until the payer scrolls, and the panel has states in which no rung is ever written at all — a panel rendered with no probe, an engine with no `ResizeObserver`, and any frame before the first layout report — in which a value scrolls at the base size inside a box that draws no bar.
+ * So the cue belongs to the sized state of the row rather than to the residual rung: every state of a `fit-sized` row carries it, and nothing a fit writes switches it off. A completed fit is no evidence that the value is still whole, because a change to the advance the value's glyphs are actually drawn at — a minimum-font-size setting, `text-size-adjust`, a mobile engine's font boosting, a late face substitution — grows the run without moving anything the page can observe (`ui/fit-value.ts` states that gap beside the scale box), so a cue that waited for a measurement's confirmation would be missing exactly where the value is clipped. A cue painted beside a value that is whole costs a payer one sentence; a missing cue beside a value that is clipped costs them the tail of an address. The Asset and Network rows carry none, because no fitter sizes them and their value wraps, so neither can hide a character of what it reads.
+ * The fitting still re-measures when the value's computed font size changes, which is the one such change the value's column-wide box cannot report; the cue is what covers every change the fitting cannot see.
+ * Its wording states no fact about whether the value is whole, because the cue is painted in both states: a sentence saying the value continues is false beside every value a fit has just shown whole — a 42-character EVM address, an amount, a balance, a 66-character hash — and a cue that is wrong in the common case is one a payer learns to discount beside the 311-character address that is genuinely clipped, while an assistive technology announces the false sentence right after the value. "If the value is cut off, scroll it." is an instruction conditioned on the clip rather than a claim about it, so it reads true beside a whole value and beside a clipped one.
+ * It names scrolling because scrolling is the affordance every row the cue is painted on has: the receipt's transaction hash carries a copy control, while the amount, the recipient, the connected account, and the balance are read through their own scroll box and focus stop, so naming Copy here would be false on four of these rows. `invoice.css` states the same sentence beside the invoice's own terms, so the two surfaces say one thing rather than two.
+ * Each of the panel's fitted rows states a cue beside its value rather than over it, which is why the value's run keeps its own glyphs — no ellipsis, no fade or mask over them, no respacing, and no transform — and stays the single scrollable line the rules above state.
+ * The cue is generated content of the row, so it is never a text node of the document: a value's own text is the value and nothing else, which is the string every copy control is handed and the run any read of the rendered value picks up, so no path from a value to a copied string carries the sentence.
+ * `user-select: none` is what keeps the sentence out of a mouse selection that spans the row, and it is the only exclusion a stylesheet can state here: no test in this repository can observe a selection or a copied string, because the suites drive a fake DOM with no CSS. The residual is that an engine which serializes generated content into a copied selection can paste the sentence after the value; what the placement above pins is that the cue sits outside the value's own box and outside every string the app copies.
+ * A summary term's cue takes the row's whole width beneath it; the account and the balance rows wrap, so their cue takes the line below the value instead of squeezing it, which is also why those two rows wrap in every state of the row the panel sizes.
+ * It is scoped to the screen for the reason `invoice.css` states beside the invoice's own cue: the printed page draws no panel at all and draws each invoice value whole, so a cue that reached paper would mark a complete value as possibly cut off. The query is the panel's own rather than an inherited effect of `print.css` hiding the dialog the panel is drawn in, so the sentence stays off paper whatever that hiding comes to say.
+ */
+@media screen {
+	.pay-term.fit-sized::after,
+	.pay-account.fit-sized::after,
+	.pay-balance.fit-sized::after,
+	.pay-result.fit-sized::after {
+		content: "If the value is cut off, scroll it.";
+		color: var(--ink-muted);
+		user-select: none;
+	}
+
+	.pay-term.fit-sized::after {
+		grid-column: 1 / -1;
+	}
+
+	.pay-account.fit-sized::after,
+	.pay-balance.fit-sized::after {
+		flex: 0 0 100%;
+	}
+}
+
+.pay-account.fit-sized,
+.pay-balance.fit-sized {
+	flex-wrap: wrap;
 }
 
 .pay-actions {
@@ -801,6 +887,9 @@ textarea:disabled {
 	color: var(--ink-muted);
 }
 
+/*
+ * The receipt's transaction hash is the other string the payer copies out of this panel verbatim, so it is drawn in the panel's own monospace face at the ladder's base rung and takes the one-line box, the focus ring, and the rungs the fitted values above take: a hash wider than a phone's panel scrolls inside its box with the row's cue beside it, rather than being cut at the edge of a box that says nothing.
+ */
 .pay-hash {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 0.8125rem;
@@ -815,6 +904,15 @@ textarea:disabled {
 .pay-copy-status {
 	font-size: 0.8125rem;
 	color: var(--success);
+}
+
+/*
+ * The receipt row's copy control and the status reporting its outcome are screen affordances, and neither is a value the payer reads: the exclusion `invoice.css` states for the invoice's own copy control and status, stated here for the two elements the receipt row draws, so a drag-selection that spans that row yields the transaction hash and nothing the control or its confirmation put beside it.
+ * It is stated on the row's own classes rather than inherited from the panel, so neither element depends on where the row is drawn.
+ */
+.pay-copy,
+.pay-copy-status {
+	user-select: none;
 }
 
 @media (max-width: 640px) {

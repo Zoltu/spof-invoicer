@@ -107,10 +107,10 @@ function dialogOf(handle) {
 	return findAll(handle.element, (node) => hasClass(node, "pay-dialog"))[0];
 }
 
-/** The transaction hash the panel shows; it lives in a readonly input's value, not in text nodes. */
+/** The transaction hash the panel shows: the text of the fitted value element that holds it. */
 function hashOf(node) {
 	const field = findAll(node, (child) => hasClass(child, "pay-hash"))[0];
-	return field === undefined ? null : field.attributes.value;
+	return field === undefined ? null : textOf(field);
 }
 
 test("a native invoice builds an eth_sendTransaction that pays the payee the computed total", () => {
@@ -470,12 +470,19 @@ test("the panel shows the hash as text with a copy control, and falls back to se
 
 		const dialog = dialogOf(handle);
 		assert.match(textOf(dialog), /Transaction submitted/);
-		const field = findAll(dialog, (node) => node.tagName === "input")[0];
-		assert.equal(field.attributes.value, TX_HASH);
-		assert.equal(field.attributes.readonly, "", "the hash is selectable text, not an editable field");
+		const hashValue = findAll(dialog, (node) => hasClass(node, "pay-hash"))[0];
+		assert.equal(textOf(hashValue), TX_HASH, "the hash is drawn as the panel's own text, whole, rather than as a form control's value");
+		assert.equal(findAll(dialog, (node) => node.tagName === "input").length, 0, "no form control holds the hash, so a selection of the receipt yields its characters");
+		assert.equal(hashValue.attributes.role, "group", "the hash is a named group, the shape a bare span cannot take a name in");
+		assert.equal(hashValue.attributes["aria-label"], "Transaction hash", "named by its label, so a screen-reader user reaching the focus stop hears which value it holds");
+		assert.equal(hashValue.attributes.tabindex, "0", "and a focus stop of its own, which is how a value wider than the panel is read to its tail");
+		const receipt = findAll(dialog, (node) => hasClass(node, "pay-result"))[0];
+		assert.ok(hasClass(receipt, "fit-sized"), "and its row is one the ladder sizes, which is what paints the cue beside a hash the panel cannot hold whole");
 		assert.equal(findAll(dialog, (node) => node.tagName === "a").length, 0, "no block-explorer link");
 
-		click(byText(dialog, "button", "Copy")[0]);
+		const copyControl = byText(dialog, "button", "Copy")[0];
+		assert.ok(hasClass(copyControl, "pay-copy"), "the receipt row's copy control carries the class the stylesheet keeps out of a text selection, so a drag over the row cannot add its face to the hash");
+		click(copyControl);
 		await drain();
 		assert.deepEqual(written, [TX_HASH]);
 		assert.equal(findAll(dialog, (node) => hasClass(node, "pay-copy-status"))[0].textContent, "Copied");
@@ -485,14 +492,12 @@ test("the panel shows the hash as text with a copy control, and falls back to se
 		click(byText(offline.element, "button", "Connect wallet & pay")[0]);
 		await drain();
 		const offlineDialog = dialogOf(offline);
-		const offlineField = findAll(offlineDialog, (node) => node.tagName === "input")[0];
-		let selected = 0;
-		offlineField.select = () => {
-			selected += 1;
-		};
+		const offlineHash = findAll(offlineDialog, (node) => hasClass(node, "pay-hash"))[0];
+		const selections = fake.document.selections;
 		click(byText(offlineDialog, "button", "Copy")[0]);
 		await drain();
-		assert.equal(selected, 1, "without a clipboard the field is selected for a manual copy");
+		assert.equal(selections.length, 1, "without a clipboard the hash is selected for a manual copy");
+		assert.equal(selections[0].node, offlineHash, "and the selection is taken over the value element that holds the hash, whose characters are the value itself");
 		assert.equal(
 			findAll(offlineDialog, (node) => hasClass(node, "pay-copy-status"))[0].textContent,
 			"Press Ctrl/Cmd+C to copy",
@@ -1089,7 +1094,13 @@ test("the payment panel is refused when another page opened this one", async () 
 		const notices = noticeRecorder();
 		const handle = openPayPanel(usdcInvoice(), { notice: notices, clipboard: null });
 		assert.equal(handle, null, "no panel is presented in a window another page opened");
-		assert.match(notices.calls.at(-1).message, /opened by another page/);
+		const message = notices.calls.at(-1).message;
+		assert.match(message, /opened by another page/);
+		// The refusal tests presence and nothing else, so it refuses every opener, and the notice has to say so: a payer who followed a plain link across origins has an opener too, and a sentence that named only a page from this website as the reason would tell them something untrue about their own window.
+		assert.match(message, /every opener is refused/, "the notice says what the refusal does — every opener is refused, not only one kind of opener");
+		assert.match(message, /whichever page that is/, "including the window the payer is looking at, whatever page opened it");
+		assert.match(message, /could drive the payment controls/, "while still naming the hazard that makes an opener a reason to refuse at all");
+		assert.doesNotMatch(message, /\(\d+ characters\)/, "and the refusal reaches the payer whole rather than cut off at the notice region's bound");
 		assert.equal(notices.calls.at(-1).tone, "error");
 		assert.equal(provider.calls.length, 0, "refusing the panel contacts no wallet");
 	} finally {

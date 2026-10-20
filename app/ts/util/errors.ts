@@ -3,7 +3,7 @@
  *
  * `describe` renders any rejected value safely and uniformly for the bad-argument slot of an error message: `null`, `undefined`, `symbol` and objects never throw, and identical values render identically across modules.
  * `preview` renders the same bad-argument slot boundedly — a length bound for values that can be arbitrarily large (an unparsed share payload, an over-long free-text field) — and it bounds the work as well as the message: a value that is not a string is never asked for a rendering the bound could not cut, the tag it is rendered under is read under a guard of its own, and the characters `JSON.stringify` leaves as themselves are stripped from whatever it does render.
- * `boundMessage` clips an already-rendered message that embeds such a value, and `messageOf` extracts the message of a caught error so one module can wrap another's failure with its own path.
+ * `boundMessage` clips an already-rendered message that embeds such a value, `messageOf` extracts the message of a caught error so one module can wrap another's failure with its own path, and `reportInternalFailure` hands a caught failure's own detail to the console, where a developer can read it and where no payer and no assistive technology can.
  *
  * The value-validation functions in `util/decimal.ts`, `wallet/address.ts` and `wallet/erc20.ts` follow one rule: an argument of the wrong shape or type throws a `TypeError`, while a correctly-shaped value outside the accepted range throws a `RangeError`.
  * Typed domain errors are separate `Error` subclasses and sit outside that rule — for example `UnsupportedAssetError`, `UnsupportedChainError` and `UnpayableAddressError` in `assets/registry.ts`, `InvalidChecksumError` in `wallet/address.ts`, `InvalidZcashAddressError` in `wallet/zcash-address.ts` and `InvalidMoneroAddressError` in `wallet/monero-address.ts`, `UnsupportedPayoutFamilyError` and `UnreadableTokenContractError` in `wallet/payout-address.ts`, `InvalidInvoiceError` and `UnsupportedInvoiceVersionError` in `invoice/model.ts`, `InvalidIconError` in `invoice/icon.ts`, and `ShareFormatError` and `UnsupportedShareVersionError` in `invoice/codec.ts`.
@@ -112,4 +112,18 @@ export function boundMessage(message: string, limit = 200): string {
 /** The message of a caught error, or {@link describe} of a non-`Error` throw. */
 export function messageOf(error: unknown): string {
 	return error instanceof Error ? error.message : describe(error);
+}
+
+/**
+ * Report a caught failure's own detail where a developer can read it, and never where the payer can.
+ *
+ * The payer-facing surfaces — the notice region, the document's error paragraphs, the field errors, the dialogs' live regions — are read and announced, and a caught message can carry a validator's echo of a rejected value or an internal path the payer can act on nowhere; a surface that answers such a failure therefore states a fixed sentence and reports the failure itself here.
+ * It never throws, because a failure to report must not become the failure the caller is unwinding.
+ */
+export function reportInternalFailure(context: string, error: unknown): void {
+	try {
+		if (typeof console !== "undefined" && typeof console.error === "function") console.error(`${context}:`, error);
+	} catch {
+		// A console this environment refuses is not a second failure for the caller to carry.
+	}
 }
