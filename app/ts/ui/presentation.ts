@@ -93,7 +93,7 @@ function clip(value: string, max: number): string {
 /**
  * The widest payee address the payment section displays: {@link MAX_PAYOUT_ADDRESS_LENGTH}, the longest address any of this app's payout-address validators accepts.
  *
- * The bound is the display's own: the address the section shows is the one a payer copies into a wallet, so it is drawn from the true maximum across every accepted family and form — an EVM address, a transparent, Sapling, or unified Zcash address, and a Monero standard, subaddress, or integrated one — rather than from one family's validator constant, which an address of another family's longer form would be silently cut against.
+ * The bound is the display's own: the address the section shows is the one a payer copies into a wallet, so it is drawn from the true maximum across every accepted family and form — an EVM address, a transparent, Sapling, unified, or TEX Zcash address, and a Monero standard, subaddress, or integrated one — rather than from one family's validator constant, which an address of another family's longer form would be silently cut against.
  * It is applied fail closed by {@link paymentAddressText} rather than as a clip: the figure is the true maximum, so no address a validator accepts reaches it, and one that ever did — a family growing a longer form, or a validator admitting a code point the display strip removes — is refused outright instead of being displayed, and copied, with the clip's own annotation on it.
  */
 const MAX_PAYMENT_ADDRESS_CHARS = MAX_PAYOUT_ADDRESS_LENGTH;

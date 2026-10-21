@@ -39,7 +39,7 @@ export { base58xmr } from "../../js/vendor/scure-base/index.js";
 /** BIP 173 bech32, the 5-bit-word codec behind the `bc1` (Bitcoin) and `zs1` (Zcash) address prefixes; those prefixes are the human-readable part plus the `1` separator, and the six trailing characters are the checksum over the prefix and data. */
 export { bech32 } from "../../js/vendor/scure-base/index.js";
 
-/** BIP 350 bech32m, the codec behind the `bc1p` (Bitcoin) and `u1` (Zcash) address prefixes, which shares bech32's 5-bit-word layout and the same six-character checksum position but uses a different checksum constant. */
+/** BIP 350 bech32m, the codec behind the `bc1p` (Bitcoin), `u1`, and `tex1` (Zcash) address prefixes, which shares bech32's 5-bit-word layout and the same six-character checksum position but uses a different checksum constant. */
 export { bech32m } from "../../js/vendor/scure-base/index.js";
 
 /**

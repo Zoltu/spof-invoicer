@@ -1745,7 +1745,7 @@ test("a Monero invoice renders its link and the symbol of that same URI, with no
 	}
 });
 /**
- * The transparent Zcash form the payout validator accepts beside Sapling and unified.
+ * The transparent Zcash form the payout validator accepts beside Sapling, unified, and TEX.
  *
  * An invoice naming one reached no link, view, or PDF assertion before: the shielded and unified spellings carry the other Zcash fixtures, so a transparent payee is rendered here through the same seams.
  */

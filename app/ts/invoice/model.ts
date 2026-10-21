@@ -418,7 +418,7 @@ function chainField(value: unknown, path: string, asset: Asset): NetworkId {
  *
  * The rules belong to the dispatcher: an EVM asset re-encodes the address to its EIP-55 checksum and refuses the zero address or a token's own contract, a Zcash asset reads the transparent, Sapling, mainnet unified, and TEX forms, and a Monero asset the standard, subaddress, and integrated ones.
  * Every refusal it raises reaches the field this module read the value from, bounded with the same cap the other wrapped messages use, because the message embeds the rejected value.
- * The dispatcher's own error travels with it as the `cause`, so a surface that acts on the refusal — rather than showing its message — reads the class the validator raised: a testnet unified container is a `TestnetUnifiedAddressError` here rather than a wording to match.
+ * The dispatcher's own error travels with it as the `cause`, so a surface that acts on the refusal — rather than showing its message — reads the class the validator raised: the network refusals are the validator's own classes here — `TestnetUnifiedAddressError` for a unified container under the testnet `utest` or regtest `uregtest` part, `TestnetTexAddressError` for a TEX address under `textest` — rather than a wording to match.
  */
 function payoutAddress(value: unknown, path: string, asset: Asset): PayoutAddress {
 	try {

@@ -1,4 +1,4 @@
-/** The suite for `app/js/wallet/zcash-address.js`: the transparent, Sapling, mainnet TEX, and mainnet unified forms, the TEX address accepted on its Bech32m checksum, `tex` part, and 20-byte payload and stored in the spelling the payee published rather than rewritten into its `t1` twin, the TEX and Sapling lengths each form's own characters are refused for, the testnet `textest` TEX address and the testnet or regtest unified container refused by name, the mainnet unified container accepted on its Bech32m checksum, human-readable part, length, and payload floor, the two cases BIP-173 spells a Bech32 string in and the transparent spelling the module refuses rather than folds, the two spellings of one Bech32 address normalizing to a single stored text, the checksum, version, human-readable-part, payload-width and length refusals (the Sapling one naming its own 90-character bound and its 78 characters, the TEX one its 90-character bound, its 42 characters, and its 20-byte payload, the unified one the QR budget that refused it), the merely unified-shaped pastes refused as malformed encodings, the unified length figure that keeps the widest payment link inside the QR symbol, the `zcash:` payment link refused as a link rather than as the Sprout address whose prefix it shares, the Sprout prefix refused in either case it is spelled, the Sapling and unified word counts that map to no whole number of payload bytes, the whitespace-padded pastes that are never trimmed into an address, and the refusal message as the invoice model wraps it; the accepted vectors are librustzcash's `zcash_address` crate round-trips plus ZIP-320's own reference-implementation vector for the TEX address, and the refusal vectors are built here with `@scure/base`'s encoders, so each is refused at the check that produces it rather than at the text prefix that dispatches it. */
+/** The suite for `app/js/wallet/zcash-address.js`: the transparent, Sapling, mainnet TEX, and mainnet unified forms, the TEX address accepted on its Bech32m checksum, `tex` part, and 20-byte payload and stored in the spelling the payee published rather than rewritten into its `t1` twin, the TEX and Sapling lengths each form's own characters are refused for, the testnet `textest` TEX address and the testnet or regtest unified container refused by name, the mainnet unified container accepted on its Bech32m checksum, human-readable part, length, and payload floor, the two cases BIP-173 spells a Bech32 string in and the transparent spelling the module refuses rather than folds, the two spellings of one Bech32 address normalizing to a single stored text, the payee hint pinned to the accepted forms and their prefixes, the checksum, version, human-readable-part, payload-width and length refusals (the Sapling one naming its own 90-character bound and its 78 characters, the TEX one its 90-character bound, its 42 characters, and its 20-byte payload, the unified one the QR budget that refused it), the merely unified-shaped pastes refused as malformed encodings, the unified length figure that keeps the widest payment link inside the QR symbol, the `zcash:` payment link refused as a link rather than as the Sprout address whose prefix it shares, the Sprout prefix refused in either case it is spelled, the Sapling and unified word counts that map to no whole number of payload bytes, the whitespace-padded pastes that are never trimmed into an address, and the refusal message as the invoice model wraps it; the accepted vectors are librustzcash's `zcash_address` crate round-trips plus ZIP-320's own reference-implementation vector for the TEX address, and the refusal vectors are built here with `@scure/base`'s encoders, so each is refused at the check that produces it rather than at the text prefix that dispatches it. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -9,9 +9,9 @@ import { encodeQr } from "../app/js/util/qr.js";
 import {
 	InvalidZcashAddressError,
 	MAX_ZCASH_ADDRESS_LENGTH,
-	MIN_UNIFIED_PAYLOAD_BYTES,
 	TestnetTexAddressError,
 	TestnetUnifiedAddressError,
+	ZCASH_ADDRESS_FORMS,
 	isZcashAddress,
 	requireZcashAddress,
 } from "../app/js/wallet/zcash-address.js";
@@ -106,6 +106,21 @@ test("requireZcashAddress accepts the transparent, Sapling, TEX, and mainnet uni
 	assert.equal(TEX.length, 42, "a TEX address is 42 characters");
 	assert.equal(TEX.startsWith("tex1"), true, "and is spelled under the mainnet `tex` part");
 	assert.equal(UNIFIED.startsWith("u1"), true, "a unified address is spelled under the mainnet `u` part");
+});
+
+test("the payout-address hint names exactly the forms this validator accepts", () => {
+	// The module keys its hint by the accepted-form union, so a form added without a hint entry fails to compile; this pins the four forms and the prefixes that union is read at, so a renamed or dropped entry is caught here rather than only in the hint that renders it.
+	assert.deepEqual(
+		ZCASH_ADDRESS_FORMS.map(({ name, prefixes }) => [name, [...prefixes]]),
+		[["transparent", ["t1", "t3"]], ["Sapling", ["zs1"]], ["unified", ["u1"]], ["TEX", ["tex1"]]],
+	);
+
+	// Every accepted vector leads with a prefix its own form states, so a prefix the hint shows and the text this validator dispatches on are one statement.
+	for (const [form, address] of [["transparent", T1], ["transparent", T3], ["Sapling", SAPLING], ["unified", UNIFIED], ["TEX", TEX]]) {
+		const hint = ZCASH_ADDRESS_FORMS.find(({ name }) => name === form);
+		assert.ok(hint !== undefined, `${form} is named by the hint`);
+		assert.equal(hint.prefixes.some((prefix) => address.startsWith(prefix)), true, `${form} ${address.slice(0, 8)}`);
+	}
 });
 
 test("a mainnet unified address is accepted on its container alone, in either case BIP-173 spells", () => {
@@ -555,8 +570,7 @@ test("anything that is not a string throws a TypeError carrying a bounded previe
 });
 
 test("a container too short to carry one typed receiver is refused", () => {
-	// The floor is the smallest container a legal address can have: ZIP 316 pads the one-byte mainnet human-readable part to a 16-byte field and prefixes the item list with it, F4Jumble preserves the length, and the shortest item is a 20-byte transparent hash framed by a typecode and a length — 16 + 22 = 38 bytes.
-	assert.equal(MIN_UNIFIED_PAYLOAD_BYTES, 38);
+	// The floor is the smallest container a legal address can have: ZIP 316 pads the one-byte mainnet human-readable part to a 16-byte field and prefixes the item list with it, F4Jumble preserves the length, and the shortest item is a 20-byte transparent hash framed by a typecode and a length — 16 + 22 = 38 bytes. The figure is pinned literally by the refusals below and by the accepted boundary at it.
 
 	const empty = bech32m.encode("u", [], false);
 	assert.equal(empty.startsWith("u1"), true, "an empty container is still dispatched as a unified candidate");
@@ -596,13 +610,13 @@ test("a container whose data words are not whole payload bytes is refused for th
 });
 
 test("a mainnet TEX address is accepted in either case, and kept in the spelling the payee published", () => {
-	// ZIP-320's transparent-source-only address: the 20-byte HASH160 of the script below, spelled under the Bech32m \`tex\` part, and a form a payee may publish as their payout address.
+	// ZIP-320's transparent-source-only address: the 20-byte HASH160 of the script below, spelled under the Bech32m `tex` part, and a form a payee may publish as their payout address.
 	assert.equal(requireZcashAddress(TEX), TEX, "the spelling the payee wrote is the one that is stored");
 	assert.equal(isZcashAddress(TEX), true);
 	assert.equal(requireZcashAddress(TEX.toUpperCase()), TEX, "either case BIP-173 spells is one address, returned in the lower-case spelling its checksum covers");
 	assert.equal(isZcashAddress(TEX.toUpperCase()), true);
 
-	// A TEX address and its \`t1\` twin name one script, and the accepted value is never rewritten into the twin's spelling: the payee published the \`tex1\` one.
+	// A TEX address and its `t1` twin name one script, and the accepted value is never rewritten into the twin's spelling: the payee published the `tex1` one.
 	assert.equal(requireZcashAddress(TEX_TWIN), TEX_TWIN, "the twin is accepted in its own spelling");
 	assert.notEqual(requireZcashAddress(TEX), TEX_TWIN);
 	const texPayload = bech32m.fromWords(bech32m.decode(TEX, false).words);
@@ -652,11 +666,14 @@ test("a TEX-shaped paste is refused for the check it fails, not for the form it 
 	assert.match(reason(`T${TEX.slice(1)}`), /^zcash-address: not a Zcash payout address — it mixes upper and lower case, and Bech32m spells a string either uniformly lower case or uniformly upper case; value: /);
 
 	// The bound binds before the decode, so a flood is refused on its length rather than decoded into a payload sized from the input.
-	assert.match(reason(`tex1${"q".repeat(200_000)}`), /^zcash-address: not a Zcash payout address — expected at most 90 characters for a TEX tex1 address, got 200004/);
+	assert.match(reason(`tex1${"q".repeat(200_000)}`), /^zcash-address: not a Zcash payout address — expected at most 90 characters for a mainnet TEX tex1 address, got 200004/);
+
+	// The part the refusal names is the one the paste itself spells: a `textest1` flood is refused under the testnet part its own text names rather than under the mainnet `tex1` that text also leads with.
+	assert.match(reason(`textest1${"q".repeat(200_000)}`), /^zcash-address: not a Zcash payout address — expected at most 90 characters for a testnet TEX textest1 address, got 200008/);
 });
 
 test("a testnet TEX address is refused by the network its part names", () => {
-	// ZIP-320 pairs mainnet's \`tex\` with testnet's \`textest\`, so a paste under the testnet part is a real address on another network rather than a malformed one.
+	// ZIP-320 pairs mainnet's `tex` with testnet's `textest`, so a paste under the testnet part is a real address on another network rather than a malformed one.
 	const testnet = bech32m.encode("textest", bech32m.toWords(new Uint8Array(20)), false);
 	assert.equal(testnet.length, 46, "the testnet part spells a longer address than the mainnet one");
 	assert.equal(isZcashAddress(testnet), false);
@@ -670,6 +687,12 @@ test("a testnet TEX address is refused by the network its part names", () => {
 
 	// The other spelling of the same address is still that network's address.
 	assert.throws(() => requireZcashAddress(testnet.toUpperCase()), TestnetTexAddressError);
+
+	// A paste of a length no address of its own part has is refused for that length, and the figure is the part's own: the testnet part is four characters longer than the mainnet one, so a `textest` paste one character short is refused for 46 rather than for the 42 a mainnet address takes.
+	const short = testnet.slice(0, -1);
+	assert.equal(short.length, 45);
+	assert.match(refusalMessage(() => requireZcashAddress(short)), /^zcash-address: not a Zcash payout address — expected 46 characters for a testnet TEX textest1 address, got 45; value: /);
+	assert.equal(refusalError(() => requireZcashAddress(short)) instanceof TestnetTexAddressError, false, "the paste never decoded, so it names no network");
 
 	// The clause names the network, so the refusal still reads as one wherever the invoice model clips it.
 	const shown = boundMessage(refusalMessage(() => requireZcashAddress(testnet)), WRAPPED_MESSAGE_MAX);
