@@ -59,6 +59,9 @@ The link that serves the app from your own node is the one where that website an
 
 ## Screenshots
 
+These images are illustrative rather than produced by the build: nothing in this repository captures or refreshes them, so they can lag the interface they show — the address sizing on the shared invoice and the payment panel's copy controls are changes they predate.
+The app as it runs is the record of what it renders today.
+
 ![The invoice form with a business name, two line items, and a total.](docs/screenshots/create-invoice.png)
 
 *Start with your own details, then add what you are billing for.*

@@ -107,6 +107,11 @@ function dialogOf(handle) {
 	return findAll(handle.element, (node) => hasClass(node, "pay-dialog"))[0];
 }
 
+/** The summary row that names `label`: its `<dt>` reads first, so the row's text opens with the label however much the copy control beside its value puts after that. */
+function summaryRow(dialog, label) {
+	return findAll(dialog, (node) => hasClass(node, "pay-term") && textOf(node).startsWith(label))[0];
+}
+
 /** The transaction hash the panel shows: the text of the fitted value element that holds it. */
 function hashOf(node) {
 	const field = findAll(node, (child) => hasClass(child, "pay-hash"))[0];
@@ -480,12 +485,13 @@ test("the panel shows the hash as text with a copy control, and falls back to se
 		assert.ok(hasClass(receipt, "fit-sized"), "and its row is one the ladder sizes, which is what paints the cue beside a hash the panel cannot hold whole");
 		assert.equal(findAll(dialog, (node) => node.tagName === "a").length, 0, "no block-explorer link");
 
-		const copyControl = byText(dialog, "button", "Copy")[0];
+		const copyControl = byText(receipt, "button", "Copy")[0];
 		assert.ok(hasClass(copyControl, "pay-copy"), "the receipt row's copy control carries the class the stylesheet keeps out of a text selection, so a drag over the row cannot add its face to the hash");
+		assert.equal(copyControl.attributes["aria-label"], "Copy transaction hash", "named for the value it hands over, so the panel's three Copy buttons are told apart");
 		click(copyControl);
 		await drain();
 		assert.deepEqual(written, [TX_HASH]);
-		assert.equal(findAll(dialog, (node) => hasClass(node, "pay-copy-status"))[0].textContent, "Copied");
+		assert.equal(findAll(receipt, (node) => hasClass(node, "pay-copy-status"))[0].textContent, "Copied");
 		assert.equal(notices.calls.at(-1).tone, "success");
 
 		const offline = openPayPanel(usdcInvoice(), { notice: noticeRecorder(), clipboard: null });
@@ -493,15 +499,71 @@ test("the panel shows the hash as text with a copy control, and falls back to se
 		await drain();
 		const offlineDialog = dialogOf(offline);
 		const offlineHash = findAll(offlineDialog, (node) => hasClass(node, "pay-hash"))[0];
+		const offlineReceipt = findAll(offlineDialog, (node) => hasClass(node, "pay-result"))[0];
 		const selections = fake.document.selections;
-		click(byText(offlineDialog, "button", "Copy")[0]);
+		click(byText(offlineReceipt, "button", "Copy")[0]);
 		await drain();
 		assert.equal(selections.length, 1, "without a clipboard the hash is selected for a manual copy");
 		assert.equal(selections[0].node, offlineHash, "and the selection is taken over the value element that holds the hash, whose characters are the value itself");
 		assert.equal(
-			findAll(offlineDialog, (node) => hasClass(node, "pay-copy-status"))[0].textContent,
+			findAll(offlineReceipt, (node) => hasClass(node, "pay-copy-status"))[0].textContent,
 			"Press Ctrl/Cmd+C to copy",
 		);
+	} finally {
+		installed.restore();
+		fake.restore();
+	}
+});
+
+test("the panel's amount and recipient each hand over their whole value through the control the receipt uses", async () => {
+	// The amount and the recipient are the two strings a payer checks before paying, and the panel drew them fitted and scrollable with no way to take them away whole: each now carries the control the receipt's hash carries, so the exact value a wallet takes is one click from the clipboard rather than a selection of whatever the fitted box happened to show.
+	const fake = installInteractiveDocument();
+	const installed = installWindow({ ethereum: mockProvider() });
+	try {
+		const written = [];
+		const handle = openPayPanel(usdcInvoice(), {
+			notice: noticeRecorder(),
+			clipboard: { writeText: async (text) => written.push(text) },
+		});
+		assert.ok(handle, "the panel opens, and its summary is drawn before any wallet is touched");
+		const dialog = dialogOf(handle);
+		const terms = [
+			["Amount due", "357 USDC"],
+			["Recipient", PAYEE],
+		];
+		for (const [label, value] of terms) {
+			const row = summaryRow(dialog, label);
+			assert.ok(row !== undefined, `the summary draws the ${label} row`);
+			const box = findAll(row, (node) => hasClass(node, "pay-term-value"))[0];
+			assert.equal(textOf(box), value, `${label} is drawn as its own text, whole, which is the string a wallet takes`);
+			assert.equal(box.attributes["aria-label"], label, "the value is a focus stop named by its term, so a payer arrowing along it hears which value it holds");
+			const control = byText(row, "button", "Copy")[0];
+			assert.ok(control !== undefined, `${label} carries a copy control beside its value`);
+			assert.equal(control.attributes["aria-label"], `Copy ${label}`, "named for the term it copies, so the panel's three Copy buttons are told apart");
+			assert.ok(hasClass(control, "pay-copy"), "and carrying the class the stylesheet keeps out of a text selection");
+			const status = findAll(row, (node) => hasClass(node, "pay-copy-status"))[0];
+			assert.deepEqual(status.children, [], "whose status is built with no child node, so `:empty` matches it while it has nothing to say");
+			click(control);
+			await drain();
+			assert.equal(written.at(-1), value, `${label}'s control hands the clipboard the term's own string rather than the fitted box's text`);
+			assert.equal(status.textContent, "Copied", "and confirms the copy in its own status line");
+			assert.doesNotMatch(textOf(row), /cut off|scroll it/, "the row carries no cue in its own text, because a stylesheet paints that rather than the builder");
+		}
+		assert.deepEqual(written, ["357 USDC", PAYEE], "each control copied its own value, in turn");
+		handle.close();
+
+		// With no clipboard the control falls back to selecting the value element itself, so the characters a payer copies are the value and nothing else.
+		const offline = openPayPanel(usdcInvoice(), { notice: noticeRecorder(), clipboard: null });
+		const offlineDialog = dialogOf(offline);
+		const offlineRow = summaryRow(offlineDialog, "Recipient");
+		const offlineValue = findAll(offlineRow, (node) => hasClass(node, "pay-term-value"))[0];
+		const selections = fake.document.selections;
+		click(byText(offlineRow, "button", "Copy")[0]);
+		await drain();
+		assert.equal(selections.length, 1, "without a clipboard the recipient is selected for a manual copy");
+		assert.equal(selections[0].node, offlineValue, "and the selection is taken over the value element that holds it");
+		assert.equal(findAll(offlineRow, (node) => hasClass(node, "pay-copy-status"))[0].textContent, "Press Ctrl/Cmd+C to copy");
+		offline.close();
 	} finally {
 		installed.restore();
 		fake.restore();
@@ -723,7 +785,7 @@ test("the whole pay flow performs zero network I/O apart from the injected provi
 		});
 		click(byText(handle.element, "button", "Connect wallet & pay")[0]);
 		await drain();
-		click(byText(dialogOf(handle), "button", "Copy")[0]);
+		click(byText(findAll(dialogOf(handle), (node) => hasClass(node, "pay-result"))[0], "button", "Copy")[0]);
 		await drain();
 
 		assert.equal(hashOf(dialogOf(handle)), TX_HASH);

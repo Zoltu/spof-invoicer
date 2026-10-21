@@ -2081,10 +2081,10 @@ test("a verbatim payment row is no taller than the value it draws, and an empty 
 	assert.equal(declaration(value, "scrollbar-width"), undefined, "the base rule hides no scrollbar, so an engine that paints one shows a value that overflows it");
 	assert.equal(declaration(value, "overflow-x"), "auto", "and the value scrolls its own overflow");
 	assert.equal(ruleBody(invoiceCss, ".payment-value::-webkit-scrollbar"), undefined, "no WebKit rule hides the scrollbar that overflow draws either");
-	// The bar is not a cue every engine paints — an overlay-scrollbar engine draws one only once the payer scrolls, and the states in which no fit ever lands carry no rung at all — so the cue a value may be clipped by is a line of text on the row itself, painted for every state of a row the ladder sizes that no rung holding the value covers. The ladder-agreement test in `tests/fit-value.test.mjs` holds that cue, and the states that silence it, to the ladder.
-	const sizedCue = ruleBody(invoiceCss, ".payment-term.fit-sized::after");
-	assert.ok(sizedCue !== undefined, "invoice.css states the cue a value the ladder sizes carries, on the row rather than in the value's scroll box");
-	assert.equal(declaration(sizedCue, "content"), '"If the value is cut off, scroll it."', "worded as an instruction conditioned on the clip rather than a claim that the value continues, so it is true beside a value a fit has just shown whole — the common case for every address, amount, and hash — and beside the 311-character address that is genuinely clipped, and it names the scroll box this term gives its value whether or not a copy control sits beside it");
+	// The bar is not a cue every engine paints — an overlay-scrollbar engine draws one only once the payer scrolls, and the states in which no fit ever lands carry no rung at all — so the cue a value may be clipped by is a line of text on the row itself, painted in the state a fit has not shown whole. The ladder-agreement test in `tests/fit-value.test.mjs` holds that cue, the state it is painted on, and the state it is absent from, to the ladder.
+	const sizedCue = ruleBody(invoiceCss, ".payment-term.fit-sized.fit-cue::after");
+	assert.ok(sizedCue !== undefined, "invoice.css states the cue a value the ladder sizes carries, on the row rather than in the value's scroll box, in the state the row carries while no measurement has shown its value whole");
+	assert.equal(declaration(sizedCue, "content"), '"If the value is cut off, scroll it."', "worded as an instruction conditioned on the clip rather than a claim that the value continues, so it reads true beside a cued value that is whole — one no fit has settled — and beside the 311-character address that is genuinely clipped, and it names the scroll box this term gives its value whether or not a copy control sits beside it");
 	assert.equal(declaration(sizedCue, "user-select"), "none", "and the rule that paints the cue states the one exclusion a stylesheet can make from a selection, which is all this suite can read: the cue is generated content of the row and never a text node, so the value's own text and every string the app copies are free of it, and the residual a browser's selection could still carry is stated in the rule's own comment");
 
 	// Neither affordance is part of the text a payer selects, which is what makes a select-all of the section read one label and one value per line; both also keep their own width on the row rather than stretching.
@@ -2095,8 +2095,8 @@ test("a verbatim payment row is no taller than the value it draws, and an empty 
 });
 
 /**
- * The cue every row a value the ladder sizes is drawn in carries, as both stylesheets state it and as every assertion below is held to.
- * It is worded as an instruction conditioned on the clip rather than as a claim that the value continues, so it is true beside a value a fit has just shown whole and beside one that is cut off, and it names the scroll box such a row gives its value whether or not a copy control sits beside it.
+ * The cue a row whose value may be cut off carries, as both stylesheets state it and as every assertion below is held to.
+ * It is worded as an instruction conditioned on the clip rather than as a claim that the value continues, so it reads true beside a cued value that is whole — one no fit has settled — and beside one that is cut off, and it names the scroll box such a row gives its value whether or not a copy control sits beside it.
  */
 const CUE_TEXT = "If the value is cut off, scroll it.";
 
@@ -2126,7 +2126,7 @@ test("the clipping cue is scoped to the screen, so the printed page never draws 
 		assert.equal(rule.at, "@media screen", `${rule.selectors.join(", ")} states the cue inside \`@media screen\`, so no print engine can draw it beside the print twin of the same value`);
 	}
 
-	// The whole treatment of that cue is screen-only, and nothing on the screen silences it: a cue shown only on paper is the same defect seen from the other side, and a state that switched the cue off would be exactly the missing cue a clipped value must never have.
+	// The whole treatment of that cue is screen-only, and no rule silences it where it is painted: a cue shown only on paper is the same defect seen from the other side, and a state that switched a cued row's cue off would be exactly the missing cue a clipped value must never have. The one state that carries no cue is the row a fit's own measurement showed whole, which is the state the ladder-agreement test in `tests/fit-value.test.mjs` holds.
 	const sizedRows = cssRules(invoiceCss).filter((rule) => rule.selectors.some((selector) => selector.startsWith(".payment-term.fit-sized")));
 	assert.ok(sizedRows.length > 0, `the cue's own rule is read: ${sizedRows.map((rule) => rule.selectors.join(", ")).join(" | ")}`);
 	assert.deepEqual(
@@ -2144,14 +2144,14 @@ test("the clipping cue is scoped to the screen, so the printed page never draws 
 	assert.ok(panelCue.length > 0, "app.css states the panel's own version of the cue");
 	for (const rule of panelCue) {
 		assert.ok(
-			rule.selectors.every((selector) => /^\.pay-(?:term|account|balance|result)\.fit-sized/.test(selector)),
+			rule.selectors.every((selector) => /^\.pay-(?:term|account|balance|result)\.fit-sized\.fit-cue/.test(selector)),
 			`${rule.selectors.join(", ")} states the cue on the panel's own rows — the summary terms, the two wallet strings, and the receipt's transaction hash — which are drawn inside the dialog print.css hides`,
 		);
 		assert.equal(rule.at, "@media screen", `${rule.selectors.join(", ")} states the panel's cue inside \`@media screen\`, so the sentence rests on the panel's own query rather than on print.css hiding the dialog it is drawn in`);
 	}
 
 	// The cue's placement on the panel's rows is part of the same screen-only treatment, for the same reason: a rule that kept its declarations and lost its query would leave the panel's cue off paper only for as long as print.css went on hiding the whole dialog.
-	const panelCueTreatment = cssRules(appCss).filter((rule) => rule.selectors.some((selector) => /^\.pay-(?:term|account|balance|result)\.fit-sized::after$/.test(selector)));
+	const panelCueTreatment = cssRules(appCss).filter((rule) => rule.selectors.some((selector) => /^\.pay-(?:term|account|balance|result)\.fit-sized\.fit-cue::after$/.test(selector)));
 	assert.ok(panelCueTreatment.length > 0, "app.css states how the panel's cue is placed on its rows");
 	for (const rule of panelCueTreatment) {
 		assert.equal(rule.at, "@media screen", `${rule.selectors.join(", ")} places the panel's cue on the screen alone, the cue and the box it is drawn in alike`);
@@ -2181,8 +2181,8 @@ test("the cue is generated content of a row and never a text node, so no string 
 		for (const selector of selectors) {
 			assert.ok(selector.endsWith("::after"), `${name}'s ${selector} paints the cue as generated content rather than as an element carrying it`);
 			assert.ok(
-				/^\.(?:payment-term|pay-term|pay-account|pay-balance|pay-result)\.fit-sized::after$/.test(selector),
-				`${name}'s ${selector} generates the cue on the row a value the ladder sizes is drawn in, beside the value rather than in it`,
+				/^\.(?:payment-term|pay-term|pay-account|pay-balance|pay-result)\.fit-sized\.fit-cue::after$/.test(selector),
+				`${name}'s ${selector} generates the cue on the cue state of the row a value the ladder sizes is drawn in, beside the value rather than in it`,
 			);
 			for (const valueSelector of VALUE_BOXES) {
 				assert.ok(

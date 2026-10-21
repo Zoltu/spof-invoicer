@@ -14,7 +14,7 @@ import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 import { installWindow, mockProvider, noticeRecorder, word } from "./helpers/wallet-mock.mjs";
 import { browserLayoutProbe } from "../app/js/app/layout-probe.js";
 import { createInvoice } from "../app/js/invoice/model.js";
-import { FIT_RUNGS, FIT_SCALE_CLASS, fitValue, printFitRung, printedSegments } from "../app/js/ui/fit-value.js";
+import { FIT_CUE_CLASS, FIT_RUNGS, FIT_SCALE_CLASS, fitValue, printFitRung, printedSegments } from "../app/js/ui/fit-value.js";
 import { VIEW_BUILD_RELEASE_FAILED_MESSAGE } from "../app/js/ui/messages.js";
 import { openPayPanel } from "../app/js/ui/pay.js";
 import { renderPaymentSection } from "../app/js/ui/payment-section.js";
@@ -97,7 +97,7 @@ function phaseOf(rung) {
  * The measurement follows the face the row's class list states, the way a real box reports the layout the class produced, so what the search cost is observable from outside the module.
  */
 function measurementSequence(boxes) {
-	const row = fakeRow("payment-term");
+	const row = fakeRow();
 	const measured = [];
 	const probe = fakeProbe(() => {
 		const applied = row.rungs[0] ?? null;
@@ -149,9 +149,10 @@ function probeWhoseFirstStopThrows(inner) {
 
 /**
  * A row with the two attribute methods the fitter uses, and a record of every class list it writes, because the row is the only element the fitter may touch.
+ * The default is the row a surface builds: the term's own class and the cue state `ui/fit-value.ts` names, which is what a row carries before any measurement has settled it, because a surface cannot know whether the value it is about to fit will be whole.
  * `onWrite` runs after every write, which is how a test hands the row the layout report a rewritten box causes.
  */
-function fakeRow(classes = "payment-term", onWrite = null) {
+function fakeRow(classes = `payment-term ${FIT_CUE_CLASS}`, onWrite = null) {
 	const attributes = { class: classes };
 	const classWrites = [];
 	return {
@@ -268,7 +269,7 @@ test("no fitting rung yields the residual rung rather than a smaller font", () =
 	);
 	// The residual rung is a fallback rather than a candidate: it is never applied to be measured, which is what keeps a value from being priced at a face the ladder does not search.
 	const measured = [];
-	const row = fakeRow("payment-term");
+	const row = fakeRow();
 	const probe = fakeProbe(() => {
 		measured.push(row.rungs[0] ?? null);
 		return { content: 4000, box: 100 };
@@ -307,7 +308,7 @@ test("a fit measures a phase at its largest rung, then once per rung it steps do
  * Every measurement is recorded with the rung the row carried when it was taken, so a test can hold both the rung the search wrote and the measurement that refused the rung the reading named.
  */
 function stickyFace(boxes, stickiness) {
-	const row = fakeRow("payment-term");
+	const row = fakeRow();
 	const measured = [];
 	const probe = fakeProbe(() => {
 		const applied = row.rungs[0] ?? null;
@@ -382,7 +383,7 @@ test("the print ladder's break points follow print.css's own page geometry and t
 
 /**
  * Every surface a fitted value is drawn on: the row a rung's class is written on, the element inside that row which carries the value, and the stylesheet that draws that surface, because a surface's row geometry and its rungs are stated in one file.
- * The `fit-sized` class every one of those rows carries is what the stylesheet paints the cue that the value may be cut off on: it states that the row's value is one the ladder sizes, which is a fact about the row no rung class can state, because the states that clip are exactly the ones no rung was ever written in — and because a value a measurement showed whole can still be drawn in a wider face than any measurement priced, so no class a fit writes silences the cue either.
+ * The `fit-sized` class every one of those rows carries states that the row's value is one the ladder sizes, which is a fact about the row no rung class can state; the cue that the value may be cut off is the second class `ui/fit-value.ts` exports, which the surface writes as it builds the row — the one state no measurement has settled — and which a fit clears only on a rung its own measurement showed holding the value.
  */
 const SIZED_ROW_CLASS = "fit-sized";
 
@@ -453,28 +454,28 @@ test("both stylesheets agree with the ladder the module states", () => {
 		const bars = rules[stylesheet].filter((rule) => rule.selectors.includes(`${selector}::-webkit-scrollbar`) && declaration(rule.body, "height") === "6px");
 		assert.equal(bars.length, 1, `${stylesheet} states ${row}'s residual scrollbar once, in the engine rule the thin cue needs`);
 	}
-	// The bar is not a cue every engine paints: an engine with overlay scrollbars draws one only once the payer scrolls, and the states in which no fit ever lands — no `ResizeObserver`, no probe, a value not yet laid out — carry no rung at all, so the cue is painted on the row's own sized state, and nothing a fit writes switches it off.
+	// The bar is not a cue every engine paints: an engine with overlay scrollbars draws one only once the payer scrolls, and the states in which no fit ever lands — no `ResizeObserver`, no probe, a value not yet laid out — carry no rung at all, so the cue is painted on the row's own cue state, which a surface writes as it builds the row and a fit clears only on a rung its own measurement showed holding the value.
 	for (const { row, value, stylesheet } of VALUE_SURFACES) {
-		const cueSelector = `${row}.${SIZED_ROW_CLASS}::after`;
+		const cueSelector = `${row}.${SIZED_ROW_CLASS}.${FIT_CUE_CLASS}::after`;
 		const cue = appliedDeclaration(stylesheets[stylesheet], cueSelector, "content");
-		assert.ok(cue !== undefined && cue !== "none" && cue !== '""', `${stylesheet} states ${row}'s cue on the row a value the ladder sizes is drawn in, where a clip cannot hide it and where it is painted whether or not the engine paints the bar and whether or not a fit was ever reached`);
+		assert.ok(cue !== undefined && cue !== "none" && cue !== '""', `${stylesheet} states ${row}'s cue on the cue state of the row a value the ladder sizes is drawn in, where a clip cannot hide it and where it is painted whether or not the engine paints the bar and wherever no fit settled the row`);
 		assert.equal(
 			appliedDeclaration(stylesheets[stylesheet], cueSelector, "user-select"),
 			"none",
 			`${row}'s cue states the one exclusion a stylesheet can make from a selection, which is all this suite can read: what keeps the sentence out of a value's own string is its placement, pinned in the cue suite in tests/view.test.mjs`,
 		);
-		// Nothing may silence the cue, and the ladder is read rather than restated: no rung class may turn it off, because the fitting writes each candidate rung before it measures the value at that rung and a fit that throws leaves the last candidate on the row, and no completed fit may turn it off either, because no measurement can see the advance the run is later drawn at.
-		const silences = (selector) => appliedDeclaration(stylesheets[stylesheet], selector, "content") === "none";
+		// The other half: a row the ladder sizes carries no cue for being sized. Every ordinary address, amount, and hash is drawn on a row a measurement showed whole, and a sentence under each of them would be a line the payer reads on every invoice rather than on the one whose value is clipped.
+		assert.equal(appliedDeclaration(stylesheets[stylesheet], `${row}.${SIZED_ROW_CLASS}::after`, "content"), undefined, `${stylesheet} paints no cue on ${row} merely because the ladder sizes its value, so a value a fit showed whole carries no extra line`);
 		for (const { rung } of FIT_RUNGS.screen) {
 			assert.equal(
-				silences(`${row}.${SIZED_ROW_CLASS}.${rung}::after`),
-				false,
-				`${stylesheet} lets no rung silence ${row}'s cue, so a candidate rung a failed fit left behind cannot leave a value that may be clipped drawn as whole`,
+				appliedDeclaration(stylesheets[stylesheet], `${row}.${SIZED_ROW_CLASS}.${FIT_CUE_CLASS}.${rung}::after`, "content"),
+				undefined,
+				`${stylesheet} paints no cue on ${row} at ${rung}: the cue is the row's own class rather than a second statement per rung, so one place decides whether it is painted`,
 			);
 		}
-		// Nothing silences it at all, a completed fit's own state included: the advance the value's glyphs are drawn at can outgrow every size the page can observe, so a cue that waited for a measurement's confirmation would be missing exactly where the value is clipped.
-		const silencers = rules[stylesheet].filter((rule) => rule.selectors.some((selector) => selector.startsWith(`${row}.${SIZED_ROW_CLASS}`)) && declaration(rule.body, "content") === "none");
-		assert.deepEqual(silencers.map((rule) => rule.selectors.join(", ")), [], `${stylesheet} states no state of ${row} that silences the cue, so no value the ladder sizes is ever drawn as whole on the strength of a measurement that a wider face could have invalidated`);
+		// Nothing silences the cue where it is painted: no rule may set the content of a cued row's cue to nothing, because a state that switched it off would be exactly the missing cue a clipped value must never have.
+		const silencers = rules[stylesheet].filter((rule) => rule.selectors.some((selector) => selector.startsWith(`${row}.${SIZED_ROW_CLASS}.${FIT_CUE_CLASS}`)) && declaration(rule.body, "content") === "none");
+		assert.deepEqual(silencers.map((rule) => rule.selectors.join(", ")), [], `${stylesheet} states no state of a cued ${row} that silences the cue`);
 		// The cue is the value's neighbour, so nothing in this rung may respell, respace, or mask the run it sits beside.
 		const rungValue = `${row}.${residual.rung} ${value}`;
 		for (const property of ["text-overflow", "letter-spacing", "transform", "mask-image", "-webkit-mask-image"]) {
@@ -527,7 +528,7 @@ test("both stylesheets agree with the ladder the module states", () => {
 });
 
 test("a fit writes one class on the row and replaces the previous one", () => {
-	const row = fakeRow("payment-term");
+	const row = fakeRow();
 	const value = fakeValue();
 	let box = 400;
 	// The measurement follows the face the row's class list states, the way a real box reports the layout the class produced.
@@ -538,7 +539,7 @@ test("a fit writes one class on the row and replaces the previous one", () => {
 	assert.deepEqual(
 		row.className.split(/\s+/).sort(),
 		[phaseRungs("inline")[0], "payment-term"].sort(),
-		"one rung class beside the class the row was built with, and no second class of the fit's own that a stylesheet could silence the cue with",
+		"one rung class beside the class the row was built with, and no cue, because that rung is one the fit's own measurement showed holding the value",
 	);
 	box = 280;
 	probe.fire();
@@ -553,33 +554,33 @@ test("a fit writes one class on the row and replaces the previous one", () => {
 });
 
 test("a hidden or detached box leaves the current rung alone", () => {
-	const unmeasurable = fakeRow("payment-term");
+	const unmeasurable = fakeRow();
 	const stopUnmeasurable = fitValue({ row: unmeasurable, value: fakeValue() }, fakeProbe(() => null));
-	assert.equal(unmeasurable.className, "payment-term", "a box that cannot be measured keeps the stylesheet's base rung");
+	assert.equal(unmeasurable.className, `payment-term ${FIT_CUE_CLASS}`, "a box that cannot be measured keeps the stylesheet's base rung and the cue no verdict has cleared");
 	assert.deepEqual(unmeasurable.classWrites, [], "and the fit writes no class at all rather than guessing a rung");
 	stopUnmeasurable();
 
 	const kept = phaseRungs("inline")[2];
-	const untouched = fakeRow(`payment-term ${kept}`);
+	const untouched = fakeRow(`payment-term ${FIT_CUE_CLASS} ${kept}`);
 	fitValue({ row: untouched, value: fakeValue() }, fakeProbe(() => ({ content: 300, box: 0 })));
-	assert.equal(untouched.className, `payment-term ${kept}`, "a box with no width yet keeps the rung the row already carries");
+	assert.equal(untouched.className, `payment-term ${FIT_CUE_CLASS} ${kept}`, "a box with no width yet keeps the rung the row already carries");
 
 	const detachedValue = fakeValue();
 	detachedValue.isConnected = false;
-	const detachedRow = fakeRow("payment-term");
+	const detachedRow = fakeRow();
 	fitValue({ row: detachedRow, value: detachedValue }, fakeProbe(() => ({ content: 300, box: 200 })));
-	assert.equal(detachedRow.className, "payment-term", "a value the document no longer holds is not fitted at all");
+	assert.equal(detachedRow.className, `payment-term ${FIT_CUE_CLASS}`, "a value the document no longer holds is not fitted at all, so its row keeps the cue a row with no measurement carries");
 
 	// The browser adapter answers `null` when the layout reports no widths at all rather than reading the absence as a zero-width box, which would write the residual rung onto every row.
 	assert.equal(browserLayoutProbe.measure(fakeValue()), null, "a value no layout has measured is no measurement, not a box of no width");
-	const adapterRow = fakeRow("payment-term");
+	const adapterRow = fakeRow();
 	const stopAdapter = fitValue({ row: adapterRow, value: fakeValue() }, browserLayoutProbe);
-	assert.equal(adapterRow.className, "payment-term", "so an unmeasurable page keeps the CSS base rung");
+	assert.equal(adapterRow.className, `payment-term ${FIT_CUE_CLASS}`, "so an unmeasurable page keeps the CSS base rung and the cue");
 	stopAdapter();
 });
 
 test("a box that stops reporting a width loses the rung it had rather than keeping a stale fits", () => {
-	// The row carries the rung a previous fit wrote, and that rung silences the stylesheet's cue. A measurement taken at that rung that reports no width at all is no evidence the value still fits, and keeping the rung would leave the cue off on the strength of a verdict nothing has taken since, so the rung is dropped and the row falls back to the state its stylesheet paints the cue on.
+	// The row carries the rung a previous fit wrote, and that fit cleared the cue when its own measurement showed the value whole. A measurement taken at that rung that reports no width at all is no evidence the value still fits, and keeping the rung would leave the cue off on the strength of a verdict nothing has taken since, so the rung is dropped and the row falls back to the cue's state.
 	const stale = phaseRungs("inline")[1];
 	for (const second of [null, { content: 0, box: 0 }]) {
 		const row = fakeRow(`payment-term ${stale}`);
@@ -593,13 +594,13 @@ test("a box that stops reporting a width loses the rung it had rather than keepi
 		);
 		stop();
 		assert.deepEqual(row.rungs, [], `a measurement of ${JSON.stringify(second)} at the rung the row carried drops it, so no unconfirmed rung is left on the row for the fit to have written`);
-		assert.equal(row.className, "payment-term", "leaving the row in the base state its stylesheet states and on which the cue that the value may be cut off is painted");
+		assert.equal(row.className, `payment-term ${FIT_CUE_CLASS}`, "leaving the row in the base state its stylesheet states with the cue that the value may be cut off painted on it");
 	}
 });
 
 test("a probe that throws leaves the row in the state that paints the cue, never on an unconfirmed rung", () => {
 	// The search writes each candidate rung on the row before it measures the value at that rung, so the rung a row carries when a probe throws is one nothing confirmed — and a rung a failed fit leaves behind would draw the value at a size no measurement priced, while the cue is painted beside it whatever rung it carries. The failure still reaches the caller that caused the fit.
-	const row = fakeRow("payment-term");
+	const row = fakeRow();
 	let taken = 0;
 	const probe = fakeProbe(() => {
 		taken += 1;
@@ -609,11 +610,11 @@ test("a probe that throws leaves the row in the state that paints the cue, never
 	assert.throws(() => fitValue({ row, value: fakeValue() }, probe), /the probe failed/, "the failure reaches the caller that caused the fit rather than being swallowed");
 	assert.equal(taken, 3, "the probe threw on a later rung of the search, with a candidate already written on the row");
 	assert.deepEqual(row.rungs, [], "and the row lost that candidate, so no unconfirmed rung keeps the cue switched off");
-	assert.equal(row.className, "payment-term", "leaving the row in the base state its stylesheet states and on which the cue that the value may be cut off is painted");
+	assert.equal(row.className, `payment-term ${FIT_CUE_CLASS}`, "leaving the row in the base state its stylesheet states with the cue that the value may be cut off painted on it");
 
 	// The same for a fit a later report starts: the rung an earlier fit confirmed stands only until a report would renew it, and a report whose probe throws renews nothing.
 	const confirmed = phaseRungs("inline")[0];
-	const refitRow = fakeRow("payment-term");
+	const refitRow = fakeRow();
 	let reports = 0;
 	const refit = fakeProbe(() => {
 		reports += 1;
@@ -634,13 +635,13 @@ test("a probe that throws leaves the row in the state that paints the cue, never
 	assert.equal(reported[0][0], "fitted value refit:", "under the fitter's own context, so a developer reads which route failed");
 	assert.equal(reported[0][1]?.message, "the refit failed", "and with the failure itself, not a replacement for it");
 	assert.deepEqual(refitRow.rungs, [], "and the row falls back to the cue's state rather than keeping a rung the failing report never confirmed");
-	assert.equal(refitRow.className, "payment-term", "which is the state the stylesheet marks as possibly clipped");
+	assert.equal(refitRow.className, `payment-term ${FIT_CUE_CLASS}`, "which is the state the stylesheet marks as possibly clipped");
 	release();
 });
 
 test("a second subscription that throws releases the first, so a row the surface drops leaves no observer behind", () => {
 	// A fitted value watches the value and, when its surface built one, the scale box; the release that ends both is the value the call returns, so a second subscription that throws returns none and the first would be stranded on a row the surface goes on to drop.
-	const row = fakeRow("payment-term");
+	const row = fakeRow();
 	const value = fakeValue();
 	const scale = fakeValue();
 	const probe = fakeProbe(() => ({ content: 120, box: 240 }));
@@ -670,7 +671,7 @@ test("a second subscription that throws releases the first, so a row the surface
 		};
 	};
 	assert.throws(
-		() => fitValue({ row: fakeRow("payment-term"), value: fakeValue(), scale: fakeValue() }, failing),
+		() => fitValue({ row: fakeRow(), value: fakeValue(), scale: fakeValue() }, failing),
 		(thrown) => {
 			assert.match(thrown.message, /the scale box refused the subscription/, "the caller is told about the subscription that could not be taken, not about the cleanup's failure");
 			assert.match(String(thrown.cause?.message), /the stop failed/, "and the release that failed beside it is carried on that failure rather than lost");
@@ -680,7 +681,7 @@ test("a second subscription that throws releases the first, so a row the surface
 });
 
 test("the first fit runs before the call returns for a mounted value, and on the first report after mount for a detached one", () => {
-	const mountedRow = fakeRow("payment-term");
+	const mountedRow = fakeRow();
 	const mountedProbe = fakeProbe(() => ({ content: DEMAND.inline, box: 400 }));
 	const stopMounted = fitValue({ row: mountedRow, value: fakeValue() }, mountedProbe);
 	assert.deepEqual(mountedRow.rungs, [phaseRungs("inline")[0]], "a value the document holds is fitted before the call returns, so its rung is in place before the page draws it");
@@ -688,7 +689,7 @@ test("the first fit runs before the call returns for a mounted value, and on the
 	stopMounted();
 
 	// A value built into a subtree nothing has mounted yet has no layout to measure, so the call fits nothing; the subscription is taken all the same, and its first report is what fits the value once it is mounted.
-	const detachedRow = fakeRow("payment-term");
+	const detachedRow = fakeRow();
 	const detachedValue = fakeValue();
 	detachedValue.isConnected = false;
 	const detachedProbe = fakeProbe(() => ({ content: DEMAND.inline, box: 400 }));
@@ -702,7 +703,7 @@ test("the first fit runs before the call returns for a mounted value, and on the
 });
 
 test("a resize re-fits upward and downward", () => {
-	const row = fakeRow("pay-term");
+	const row = fakeRow(`pay-term ${FIT_CUE_CLASS}`);
 	let box = 400;
 	const probe = fakeProbe(() => ({ content: demandAt(row.rungs[0] ?? null), box }));
 	const stop = fitValue({ row, value: fakeValue() }, probe);
@@ -764,7 +765,7 @@ function synchronousProbe(measure) {
 test("a report that lands while a fit is running does not re-enter it", () => {
 	// The row reports every write through the probe built beneath it: its callback runs only when a fit writes, which is after both stand, and each report lands inside the fit that caused it.
 	let box = 400;
-	const row = fakeRow("payment-term", () => probe.report());
+	const row = fakeRow(`payment-term ${FIT_CUE_CLASS}`, () => probe.report());
 	const probe = synchronousProbe(() => ({ content: demandAt(row.rungs[0] ?? null), box }));
 	const stop = fitValue({ row, value: fakeValue() }, probe);
 	assert.deepEqual(row.rungs, [phaseRungs("inline")[0]], "the first fit settles the value while the row stands at the base rung");
@@ -778,12 +779,12 @@ test("a report that lands while a fit is running does not re-enter it", () => {
 		probe.measured - measured <= 6,
 		"so the fit is not re-entered by it: one run measures a phase at most three times, and a run started inside it would measure the value again and again",
 	);
-	assert.equal(row.classWrites.length, 2, "the first fit writes its candidate rung before any subscription stands, and the second writes the one rung that changed, because a write that would leave the class list as it is is skipped");
+	assert.equal(row.classWrites.length, 3, "the first fit writes its candidate rung and then the verdict that clears the cue, both before any subscription stands, and the third writes the one rung that changed, because a write that would leave the class list as it is is skipped");
 	stop();
 });
 
 test("the release stops further fitting", () => {
-	const row = fakeRow("payment-term");
+	const row = fakeRow();
 	let box = 400;
 	const probe = fakeProbe(() => ({ content: demandAt(row.rungs[0] ?? null), box }));
 	const stop = fitValue({ row, value: fakeValue() }, probe);
@@ -801,7 +802,7 @@ test("the release stops further fitting", () => {
 
 test("a dropped or never-mounted value is released by its owner, not by a later layout report", () => {
 	// `onResize` promises no notification for a target that has left the document, so nothing may wait for one: the value that is dropped and the value that is never connected are both released by the release the caller holds.
-	const row = fakeRow("payment-term");
+	const row = fakeRow();
 	const value = fakeValue();
 	const probe = fakeProbe(() => ({ content: demandAt(row.rungs[0] ?? null), box: 400 }));
 	const stop = fitValue({ row, value }, probe);
@@ -817,7 +818,7 @@ test("a dropped or never-mounted value is released by its owner, not by a later 
 	// The same holds for a value that was built and never connected: the subscription that fits it once it is mounted is the owner's to release.
 	const mounted = fakeValue();
 	mounted.isConnected = false;
-	const unmountedRow = fakeRow("payment-term");
+	const unmountedRow = fakeRow();
 	const unmountedProbe = fakeProbe(() => ({ content: 300, box: 200 }));
 	const stopUnmounted = fitValue({ row: unmountedRow, value: mounted }, unmountedProbe);
 	assert.equal(unmountedProbe.targets.length, 1, "a value nothing has mounted still takes the subscription that would fit it");
@@ -931,8 +932,8 @@ test("a payment section rendered with no layout probe keeps the base rung", () =
 		assert.deepEqual(rows.map(rungsOf), rows.map(() => []), "with nothing able to measure the page, every row keeps the size the stylesheet states");
 		assert.deepEqual(
 			rows.map((row) => row.attributes.class),
-			model.payment.map((term) => (term.verbatim === true ? `payment-term ${SIZED_ROW_CLASS}` : "payment-term")),
-			"no rung class is written when no measurement can be taken, and the row of every value a wallet takes verbatim still says the ladder sizes it, which is the state the stylesheet paints its cue on",
+			model.payment.map((term) => (term.verbatim === true ? `payment-term ${SIZED_ROW_CLASS} ${FIT_CUE_CLASS}` : "payment-term")),
+			"no rung class is written when no measurement can be taken, and the row of every value a wallet takes verbatim still says the ladder sizes it and that its value may be cut off, which is the state its stylesheet paints the cue on",
 		);
 
 		// `fit: null` is how a caller asks for no fitting at all, so it takes no probe and no subscription rather than falling back to the browser's.
@@ -1033,7 +1034,18 @@ test("a printed value past the floor's line breaks where the module put it, and 
 		undefined,
 		"no rule marks a segment's boundary and leaves the line inside a segment unmarked: every printed line of the value carries the one rule",
 	);
-});
+
+	// Nothing drawn onto a printed line can be mistaken for part of the value: no rule that draws the twin states hyphenation, an ellipsis, or a text transform, so a long value wraps at the column's edge and its glyphs and characters are the value's own — the only mark at a line's end is the border the run rule paints, and the value is never shortened to fit.
+	for (const rule of cssRules(PRINT_CSS)) {
+		if (!rule.selectors.some((selector) => selector.includes("payment-value-print"))) continue;
+		for (const property of ["hyphens", "-webkit-hyphens", "text-overflow", "text-transform", "text-indent"]) {
+			assert.equal(
+				declaration(rule.body, property),
+				undefined,
+				`${rule.selectors.join(", ")} states no ${property}, so a printed value is neither hyphenated, elided, respelled, nor indented away from its first character`,
+			);
+		}
+	}});
 
 test("the payment panel fits the amount, the recipient, and the connected account with one class per row", async () => {
 	const fake = installInteractiveDocument();
@@ -1387,7 +1399,7 @@ test("a section whose build throws and whose release throws surfaces the app's o
 
 test("a change to the value's drawn font size re-measures it, which the value's own box cannot report", () => {
 	// The value's box is as wide as its column whatever face the value is drawn in, so a later minimum-font-size setting, or a stylesheet rule overriding a rung's size, grows the run past that box while the box reports the same width as before. The scale box drawn inside the value is set in that same face and is the one box that changes, so the fit is told and steps down; without it the value would keep a rung no measurement had taken since the face grew, with the cue switched off by that rung's confirmation.
-	const row = fakeRow("payment-term");
+	const row = fakeRow();
 	const value = fakeValue();
 	const scale = fakeValue();
 	const box = 400;
@@ -1410,22 +1422,27 @@ test("a change to the value's drawn font size re-measures it, which the value's 
 	assert.ok(measurements > measured, "the report from the scale box re-measures the value rather than leaving the face the box last saw");
 	assert.ok(row.classWrites.length > writes, "and writes the rung its own measurement of the grown run supports");
 	assert.ok(demandAt(row.rungs[0] ?? null) * faceGrowth <= box, "which is a rung the grown run fits in the box it has, so the value is not left clipped under a rung a shrinking box once confirmed");
-	assert.deepEqual(row.className.split(/\s+/).filter((name) => name !== "payment-term"), [row.rungs[0]], "and the rung its own measurement of the grown run supported is the only class the fit writes, so the cue stays painted beside a value whose glyphs may still be drawn wider than that measurement");
+	assert.deepEqual(row.className.split(/\s+/).filter((name) => name !== "payment-term"), [row.rungs[0]], "and the rung its own measurement of the grown run supported is the only class the fit writes beside the row's own, the cue being cleared by that measurement");
 
 	// A face the floor cannot hold either is not confirmed at all: the residual rung is the state that certainly scrolls, so the cue stays painted beside it.
 	faceGrowth = 3;
 	probe.runs[1]();
 	assert.deepEqual(row.rungs, [SCREEN_RUNG_NAMES[SCREEN_RUNG_NAMES.length - 1]], "a face no rung of either phase holds takes the residual rung");
-	assert.equal(row.className.split(/\s+/).filter((name) => name !== "payment-term").length, 1, "and the fit writes no other class beside it, so a value it could not show whole keeps the cue that says so");
+	assert.deepEqual(
+		row.className.split(/\s+/).filter((name) => name !== "payment-term").sort(),
+		[FIT_CUE_CLASS, SCREEN_RUNG_NAMES[SCREEN_RUNG_NAMES.length - 1]].sort(),
+		"and it writes the cue beside that rung, so a value it could not show whole keeps the sentence that says so",
+	);
 	stop();
 });
 
 test("a fit that cannot finish leaves no confirmation behind, even when its own recovery cannot write", () => {
 	// The search writes each candidate rung before it measures the value at that rung, so a probe that throws there leaves a candidate on the row and nothing confirmed: the cue is painted whatever the clean-up then does, which is why a recovery that fails is never the state the cue rests on.
-	const row = fakeRow("payment-term");
+	const row = fakeRow();
 	const write = row.setAttribute.bind(row);
+	// The row accepts a write that carries a rung, so the search's candidates land, and refuses the one a recovery writes without one, which is the write a failed fit cannot complete.
 	row.setAttribute = (name, value) => {
-		if (!/\bfit-/.test(String(value))) throw new Error("the row refused the clean-up");
+		if (!/\bfit-(?:inline|stacked|residual)/.test(String(value))) throw new Error("the row refused the clean-up");
 		write(name, value);
 	};
 	const probe = fakeProbe(() => {
@@ -1440,14 +1457,67 @@ test("a fit that cannot finish leaves no confirmation behind, even when its own 
 	}
 	assert.equal(failure?.message, "the probe stopped measuring", "the caller receives the fit's own failure rather than the recovery's");
 	assert.deepEqual(row.rungs, [phaseRungs("inline")[0]], "the candidate the search had written is still on the row");
-	assert.equal(row.className, `payment-term ${phaseRungs("inline")[0]}`, "and it carries that one candidate and nothing else, so no class a failed write left behind switches the cue off");
+	assert.deepEqual(
+		row.className.split(/\s+/).sort(),
+		["payment-term", FIT_CUE_CLASS, phaseRungs("inline")[0]].sort(),
+		"and it carries that one candidate beside the cue the surface wrote, so no class a failed write left behind switches the cue off",
+	);
 });
 
-test("a fit writes one rung class and nothing that could silence the cue, the residual rung included", () => {
-	const row = fakeRow("payment-term");
+test("the cue is painted only where a value may be cut off: absent on a value the fit showed whole, and on the rung that scrolls", () => {
+	// The cue is a sentence under a row, and a row that carries it on every invoice is a defect the payer sees everywhere rather than a guard: a value the fit's own measurement held on one line is drawn without it, and only a state no measurement settled — the residual rung here — carries it.
+	const fake = installInteractiveDocument();
+	try {
+		const model = buildInvoiceViewModel(evmInvoice(), VIEW_OPTIONS.today);
+		const whole = fakeProbe(() => ({ content: 120, box: 240 }));
+		const fitted = renderPaymentSection(model, { fit: whole });
+		document.body.append(fitted);
+		whole.fire();
+		const fittedRows = findAll(fitted, (node) => hasClass(node, SIZED_ROW_CLASS));
+		assert.ok(fittedRows.length > 0, "the section draws the rows whose values the ladder sizes");
+		assert.ok(
+			fittedRows.every((row) => rungsOf(row).length === 1),
+			"each of them is measured and set at a rung its own measurement showed holding the value",
+		);
+		assert.deepEqual(
+			fittedRows.filter((row) => hasClass(row, FIT_CUE_CLASS)).map((row) => String(row.attributes.class)),
+			[],
+			"and none of them carries the cue, so an ordinary invoice draws no extra line under its address, its amount, or its link",
+		);
+		fitted.release();
+
+		const nothing = fakeProbe(() => ({ content: 4000, box: 100 }));
+		const scrolling = renderPaymentSection(model, { fit: nothing });
+		document.body.append(scrolling);
+		nothing.fire();
+		const residual = SCREEN_RUNG_NAMES[SCREEN_RUNG_NAMES.length - 1];
+		const cued = findAll(scrolling, (node) => hasClass(node, SIZED_ROW_CLASS));
+		assert.ok(cued.length > 0, "the same section draws the same rows for a box no rung can hold");
+		assert.ok(
+			cued.every((row) => rungsOf(row)[0] === residual),
+			"each value no rung holds takes the residual rung, which is the state that certainly scrolls",
+		);
+		assert.deepEqual(
+			cued.filter((row) => !hasClass(row, FIT_CUE_CLASS)).map((row) => String(row.attributes.class)),
+			[],
+			"and every one of those rows carries the cue that says the value may be cut off, because no measurement showed it whole",
+		);
+		scrolling.release();
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a fit writes one rung class, and the cue exactly where its own measurement did not show the value whole", () => {
+	const row = fakeRow();
 	fitValue({ row, value: fakeValue() }, fakeProbe(() => ({ content: 4000, box: 100 })));
-	assert.deepEqual(row.rungs, [SCREEN_RUNG_NAMES[SCREEN_RUNG_NAMES.length - 1]], "a value no rung of either phase holds takes the residual rung");
-	assert.equal(row.className, `payment-term ${SCREEN_RUNG_NAMES[SCREEN_RUNG_NAMES.length - 1]}`, "and the row carries that rung and the class it was built with, so the state that certainly scrolls keeps the cue painted beside it");
+	const residual = SCREEN_RUNG_NAMES[SCREEN_RUNG_NAMES.length - 1];
+	assert.deepEqual(row.rungs, [residual], "a value no rung of either phase holds takes the residual rung");
+	assert.deepEqual(
+		row.className.split(/\s+/).sort(),
+		["payment-term", FIT_CUE_CLASS, residual].sort(),
+		"and the row carries that rung, the class it was built with, and the cue the state that certainly scrolls is owed",
+	);
 });
 
 test("the surfaces that fit a value draw the scale box inside it, and the values nothing fits carry none", () => {

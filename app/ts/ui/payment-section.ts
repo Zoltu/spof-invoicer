@@ -5,8 +5,9 @@
  * Every string and every module comes from `ui/presentation.ts`'s frozen view model, so the two surfaces cannot word, order, or encode the payment differently, and neither of them recomputes a value the model already states.
  *
  * The amount, the address, and the link are values a wallet takes verbatim, so each is drawn as ordinary text with an exact-copy control beside it: a payer selects and copies the value the way they would any other text on the page — one term per block, so selecting the whole section yields a label and a value per line — while one click on the control hands the clipboard that string itself rather than whatever a selection happened to span.
- * The stylesheet holds each value on one run, so neither the layout nor a text selection can put a line break inside a value that has none, and because a run that does not fit its column would be clipped, each verbatim value is handed to `ui/fit-value.ts`: that module sets the value at the first rung of the screen ladder that holds it on one line, in the search order its own module doc states, and leaves the residual rung — the value at the floor, scrolling — for a value no rung holds, with the cue that the value may be cut off painted on every state of a row the ladder sizes rather than on that rung alone.
- * The row of a value the ladder sizes says so with a `fit-sized` class, and `invoice.css` paints that same cue on every state of such a row, so a fit that never lands — an engine with no `ResizeObserver`, a section rendered with no probe, a value the document has not laid out yet — cannot leave a clipped address reading as a whole one, and neither can a fit that threw part-way and left a candidate rung behind, nor a completed fit whose run is later drawn with wider glyphs than any measurement reported.
+ * The stylesheet holds each value on one run, so neither the layout nor a text selection can put a line break inside a value that has none, and because a run that does not fit its column would be clipped, each verbatim value is handed to `ui/fit-value.ts`: that module sets the value at the first rung of the screen ladder that holds it on one line, in the search order its own module doc states, and leaves the residual rung — the value at the floor, scrolling — for a value no rung holds, where the row also carries the cue that the value may be cut off.
+ * The row of a value the ladder sizes says so with a `fit-sized` class, and the cue that the value may be cut off is the second class `ui/fit-value.ts` names, `fit-cue`, which the section writes here as it builds the row: `invoice.css` paints the cue on that class, so a fit that never lands — an engine with no `ResizeObserver`, a section rendered with no probe, a value the document has not laid out yet — leaves the cue painted, as does a fit that threw part-way, while the one state that clears it is a sizing rung the fit's own measurement showed holding the value.
+ * What that clearing leaves is one residual, stated rather than hidden: a run a later change of face widens past the measurement that showed it whole is drawn without the cue, which is the gap `ui/fit-value.ts` states beside the scale box and the hazard `docs/design/payment-safety-memo.md` records as accepted.
  * The terms no wallet takes verbatim — the asset's name and symbol, and the network's label — are held on no one-line run and are handed to no fitting: their value wraps, so a label longer than the column is drawn whole on the next line instead of running a clipped tail that reads as the whole label.
  * The fitting is a subscription of its own, so the section returns the `<footer>` it built carrying that release (`ui/release.ts`), and the surface that mounted the section is what runs it: a surface that replaces the section — the create screen rebuilding it for the next invoice — releases the one it is about to discard, and a surface that drops the whole document, as the router replaces the payer's document, carries the section's release on the document it returns.
  * The control's confirmation is a status line with a lifecycle: it is cleared after a pause so the section returns to its uniform resting height, and a repeated copy of the same value blanks the line first and re-sets it, so the change is one an assistive technology announces rather than an identical rewrite it may pass over.
@@ -22,6 +23,7 @@ import { h, type DomChild } from "../util/dom.js";
 import type { QrMatrix } from "../util/qr.js";
 import { copyWithFallback, type ClipboardLike, type CopyStatus } from "./clipboard.js";
 import {
+	FIT_CUE_CLASS,
 	FIT_SCALE_CLASS,
 	fitValue,
 	printFitRung,
@@ -48,8 +50,12 @@ export interface ConfirmationTimer {
 	after(clear: () => void): () => void;
 }
 
-/** The confirmation timer a rendered section uses: the wall clock's own pause, cancelled when a new copy replaces the confirmation. */
-const wallClockTimer: ConfirmationTimer = {
+/**
+ * The confirmation timer a rendered section uses: the wall clock's own pause, cancelled when a new copy replaces the confirmation.
+ *
+ * It is exported so the surfaces that copy through this module's `copyControlClick` — the invoice's payment section and the payment panel — put a confirmation up and take it down on one clock rather than each keeping a pause of its own.
+ */
+export const wallClockTimer: ConfirmationTimer = {
 	after(clear) {
 		const handle = setTimeout(clear, CONFIRMATION_MS);
 		return () => clearTimeout(handle);
@@ -163,13 +169,13 @@ export function renderPaymentSection(view: InvoiceViewModel, options: PaymentSec
  *
  * A verbatim value is fitted with the row it is drawn in, because the row is the layout the choice is measured against — the label's rail, the value's column, and the copy control all decide how much width the run has — and the row is also the element the chosen rung's class is written on.
  * The value element is the one {@link paymentValue} just built and handed back, so the fit is taken against the element itself rather than a search of the row for a class name that could be renamed out from under it, and the scale box it hands back with it is the element that reports a change to the value's drawn font size — the one change the value's own column-wide box cannot report (`ui/fit-value.ts`).
- * A term whose value is handed to the fitting carries `fit-sized`, which states what no rung class can: this row's value is one the ladder sizes, so `invoice.css` paints its cue that the value may be cut off on the row in every state of that row, a completed fit's included, because no measurement can see a run drawn with wider glyphs than the sizes it priced. A term no wallet takes verbatim carries no such class, because nothing sizes its value and its value wraps rather than scrolls, so nothing can clip it and no cue is owed.
+ * A term whose value is handed to the fitting carries `fit-sized`, which states what no rung class can: this row's value is one the ladder sizes. It carries `fit-cue` beside it, because the state a row is built in is a state no measurement has settled, and `ui/fit-value.ts` is the one thing that clears that class, on the one verdict its own measurement takes. A term no wallet takes verbatim carries neither class, because nothing sizes its value and its value wraps rather than scrolls, so nothing can clip it and no cue is owed.
  */
 function paymentTerm(term: InvoicePaymentTermView, clipboard: ClipboardLike | null, fitting: TermFitting): HTMLElement {
 	const built = paymentValue(term, clipboard);
 	const row = h(
 		"div",
-		{ class: built.value === null ? "payment-term" : "payment-term fit-sized" },
+		{ class: built.value === null ? "payment-term" : `payment-term fit-sized ${FIT_CUE_CLASS}` },
 		h("dt", {}, term.label),
 		h("dd", { class: term.verbatim === true ? "mono" : undefined }, ...built.children),
 	);

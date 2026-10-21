@@ -12,7 +12,8 @@
  * Everything the panel shows comes from `wallet/payment.ts` and `wallet/eip1193.ts`: the amount is the model's own total, the recipient is the invoice's validated payee, and a wrong network stops the flow with guidance and a switch control rather than a transaction.
  * The network it names is spelled by `ui/network-labels.ts`'s `networkLabel`, the same spelling the payer's document and the flow's guidance use.
  * The amount due, the recipient's address, and the receipt's transaction hash are values the payer checks and copies verbatim, and the connected account and the wallet's balance are strings the wallet reports; those five fitted values are handed to `ui/fit-value.ts` rather than left to wrap: that module holds the value on one line at the first rung of its ladder that fits the row, in the search order its own module doc states, and a value still wider than its column takes the residual rung, scrolling inside its own box and never breaking — the same scroll container contract `ui/payment-section.ts` gives the invoice's own payment values.
- * The cue that the value may be cut off is the sized row's rather than the residual rung's: `app.css` paints it on every state of a row whose value the ladder sizes, because a panel drawn with no probe, or on an engine with no `ResizeObserver`, reaches no rung at all and scrolls at the base size with nothing else to mark it, and because no completed fit can see the advance the value's glyphs are later drawn at.
+ * The three the payer carries away are drawn with a copy control beside them, and it is the control `ui/payment-section.ts` builds for the invoice's own verbatim values: one click hands the clipboard that term's own string rather than whatever a selection spanned, the confirmation blanks and re-sets so a repeated copy is announced, and the control falls back to selecting the value when the clipboard is unavailable or refuses. The connected account and the balance carry none: the panel draws them for the payer's reading rather than for a copy, so each is read through its own scroll box and focus stop.
+ * The cue that the value may be cut off is the row's own state: `app.css` paints it on the cue class `ui/fit-value.ts` names, which this panel writes as it builds each fitted row, and that module clears the class only on a rung its own measurement showed holding the value — so a panel drawn with no probe, or on an engine with no `ResizeObserver`, reaches no rung at all and keeps the cue painted beside a value scrolling at the base size.
  * All text is a text child of `util/dom.ts`'s `h()`, so no invoice field can become markup, and the transaction hash is drawn as plain selectable text with a copy control — the panel deliberately links to no block explorer, since resolving one would mean a network destination the app refuses to have.
  * That hash is one of the strings the payer carries away, so it is neither a form control's value nor an unfitted line: it is fitted like the addresses above it and carries the same cue on its row that the value may be cut off, because a receipt whose hash is cut at a phone's panel width with nothing said about it reads as a complete hash.
  * A provider-derived string that reaches this panel arrives one of two ways, and those two are the whole of the boundary: a wallet's announced label and a status line the flow reports are run through `util/text.ts`'s display-character pass, while the connected account and the receipt's transaction hash are values their own address and hex checks admit, and the wallet's reported balance is a decoded `bigint` the panel formats itself, so none of the three can carry a character that pass would remove.
@@ -35,12 +36,13 @@ import {
 	type PaymentPlan,
 	type PaymentReceipt,
 } from "../wallet/payment.js";
-import { copyWithFallback, type ClipboardLike } from "./clipboard.js";
-import { FIT_SCALE_CLASS, fitValue, type LayoutProbe, type TermFitting } from "./fit-value.js";
+import type { ClipboardLike } from "./clipboard.js";
+import { FIT_CUE_CLASS, FIT_SCALE_CLASS, fitValue, type LayoutProbe, type TermFitting } from "./fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import { networkLabel } from "./network-labels.js";
 import type { NoticeApi, NoticeTone } from "./notice.js";
 import { openOverlay, type OverlayHandle } from "./overlay.js";
+import { copyControlClick, wallClockTimer } from "./payment-section.js";
 import { createPayFlow, type PayFlowSnapshot } from "./pay-flow.js";
 import { releasable, runReleases, type ReleasableElement, type Release } from "./release.js";
 
@@ -126,10 +128,14 @@ export interface PayPanelOptions {
 	readonly fit?: LayoutProbe | null;
 }
 
-/** The parts of a summary term beyond its label and its text: the monospace face a value a wallet takes verbatim is drawn in, and the fitting that value is handed to. */
+/**
+ * The parts of a summary term beyond its label and its text: the fitting a verbatim value is handed to, and the clipboard its copy control hands that value over to.
+ *
+ * `verbatim` is present only for a value a wallet takes byte for byte — the amount due and the recipient's address — and its presence is what draws the value in the panel's monospace face, fits it to its column, gives it a copy control, and states that its row may be cut off. The two readings the panel makes for itself, the asset's name and the network's label, pass neither field.
+ */
 interface PayTermOptions {
-	readonly mono?: boolean;
-	readonly fit?: TermFitting | null;
+	readonly verbatim?: TermFitting | null;
+	readonly clipboard?: ClipboardLike | null;
 }
 
 /** The mounted panel: the overlay element plus the one way to dismiss it. */
@@ -236,7 +242,7 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 				tabindex: "-1",
 			},
 			payHeader(plan, close),
-			paySummary(plan, fit, dialogReleases),
+			paySummary(plan, fit, dialogReleases, clipboard),
 			statusRegion,
 			dynamic,
 			h("p", { class: "field-hint" }, "Only your wallet is contacted while this panel is open."),
@@ -247,7 +253,7 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 	 * Draw the frame the current snapshot describes into the body.
 	 *
 	 * The previous frame's rows leave the document before their releases run, and their releases run whether the new frame is drawn or not: a frame that cannot be built must not keep the subscriptions of the frame it replaced alive.
-	 * A failure here does not end the dialog. The amount and the recipient are the dialog's own rows, built and subscribed once, so they stay mounted and keep their fitting: a release run on them would switch their cue off while they were still on screen, and the next resize could clip a value nothing would refit.
+	 * A failure here does not end the dialog. The amount and the recipient are the dialog's own rows, built and subscribed once, so they stay mounted and keep their fitting: a release run on them would leave the rung their own measurement wrote on a value still on screen, with nothing left to refit it after the next resize.
 	 * The failure is stated in the body and the panel stays open, so the payer closes it themselves and a later snapshot may draw a later frame.
 	 */
 	function renderFrame(): void {
@@ -388,7 +394,7 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 		);
 		const row = h(
 			"p",
-			{ class: "pay-account fit-sized" },
+			{ class: `pay-account fit-sized ${FIT_CUE_CLASS}` },
 			h("span", { class: "pay-account-label" }, "Connected account"),
 			value,
 		);
@@ -412,7 +418,7 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 			`${fromBaseUnits(balance, plan.asset.decimals)} ${plan.asset.symbol}`,
 			scale,
 		);
-		const row = h("p", { class: "pay-balance fit-sized" }, "Wallet balance: ", value);
+		const row = h("p", { class: `pay-balance fit-sized ${FIT_CUE_CLASS}` }, "Wallet balance: ", value);
 		renderReleases.push(fitValue({ row, value, scale }, fit));
 		return row;
 	}
@@ -460,8 +466,8 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 	/**
 	 * The receipt: the transaction hash the wallet handed back, drawn as the panel's other verbatim values are.
 	 *
-	 * It is one selectable text run in a keyboard-reachable scroll container named by its label, fitted by the panel's own ladder, and its row carries `fit-sized` so `app.css` paints beside it the cue that the value may be cut off: a hash wider than the panel scrolls inside its box with the cue beside it rather than being cut at the panel's edge with nothing said, which is what a read-only field of the same width did.
-	 * Its copy control hands over the panel's own string either way, and the selection fallback selects this value's contents, the same two affordances the invoice's verbatim terms give.
+	 * It is one selectable text run in a keyboard-reachable scroll container named by its label, fitted by the panel's own ladder, and its row carries `fit-sized` with the cue class this panel writes on every row it fits: a hash wider than the panel scrolls inside its box with the cue beside it rather than being cut at the panel's edge with nothing said, which is what a read-only field of the same width did, and the fit clears that cue once its own measurement holds the hash on one line.
+	 * Its copy control is the one the amount and the recipient carry, so the receipt's confirmation follows the same lifecycle and falls back to selecting this value's contents.
 	 * The fit's release is collected with the frame's other rows, so the subscription ends when the next frame replaces this one.
 	 */
 	function hashBlock(receipt: PaymentReceipt): HTMLElement {
@@ -472,14 +478,10 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 			receipt.hash,
 			scale,
 		);
-		const status = h("span", { class: "pay-copy-status", role: "status" }, "");
-		const copy = h("button", { type: "button", class: "btn btn-secondary pay-copy", "aria-label": "Copy transaction hash" }, "Copy");
-		copy.addEventListener("click", () => {
-			copyWithFallback(receipt.hash, clipboard, value, status);
-		});
+		const [copy, status] = copyControl("transaction hash", receipt.hash, value, clipboard);
 		const row = h(
 			"div",
-			{ class: "pay-result fit-sized" },
+			{ class: `pay-result fit-sized ${FIT_CUE_CLASS}` },
 			h("span", { class: "pay-result-label" }, "Transaction hash"),
 			value,
 			h("div", { class: "pay-result-actions" }, copy, status),
@@ -517,54 +519,70 @@ function payHeader(plan: PaymentPlan, close: () => void): HTMLElement {
 	);
 }
 
-/** What the transaction will send, read off the plan so the panel cannot disagree with the wallet. */
-function paySummary(plan: PaymentPlan, fit: LayoutProbe | null, releases: Release[]): HTMLElement {
+/** What the transaction will send, read off the plan so the panel cannot disagree with the wallet, and how each value a wallet takes verbatim is handed over. */
+function paySummary(plan: PaymentPlan, fit: LayoutProbe | null, releases: Release[], clipboard: ClipboardLike | null): HTMLElement {
 	const fitting: TermFitting = { fit, releases };
 	return h(
 		"dl",
 		{ class: "pay-summary" },
-		payTerm("Amount due", `${plan.amountText} ${plan.asset.symbol}`, { mono: true, fit: fitting }),
+		payTerm("Amount due", `${plan.amountText} ${plan.asset.symbol}`, { verbatim: fitting, clipboard }),
 		payTerm("Asset", `${plan.asset.name} (${plan.asset.symbol})`),
-		payTerm("Recipient", toChecksumAddress(plan.recipient), { mono: true, fit: fitting }),
+		payTerm("Recipient", toChecksumAddress(plan.recipient), { verbatim: fitting, clipboard }),
 		payTerm("Network", networkLabel(plan.chainId)),
 	);
 }
 
 /**
- * One summary term: its label and its value, in a monospace face when the value is one a wallet takes verbatim — the amount due and the recipient's address.
+ * One summary term: its label and the value it states — in a monospace face, with a copy control beside it, when that value is one a wallet takes verbatim.
  *
  * A verbatim value is a keyboard-reachable scroll container named by its label, the contract `ui/payment-section.ts` gives the invoice's own verbatim payment values: a value wider than the panel's column scrolls inside its box and never breaks, focusing it is what lets a keyboard-only user arrow along to the tail, `ui/overlay.ts` counts it among the dialog's focus stops, and `app.css` rings it where the panel would otherwise leave a definition unringed.
  * The role, name, and focus stop are this helper's own choice for every term it builds, not part of what `ui/payment-section.ts` holds: `app.css` states the value's contract and the focus ring once for the class all four summary terms draw their value in, and the two readings the panel makes for itself take the wrapping state of that class rather than the scroll box; ARIA 1.2 does not let a bare `dd` carry a name, so the role is what the label needs.
+ * The `<dd>` holds the value beside what acts on it — the copy control and the status reporting that copy — and the value is an element of its own inside it, which is what the control is handed: it copies the string the payer reads, and it selects that element's contents when there is no clipboard to write to.
  * Whether a term's value is fitted is the other choice this helper makes: a value a wallet takes verbatim is handed to `ui/fit-value.ts` through the fitting it is given, and the release the fitter returns is added to the collector that fitting carries, so the dialog drops it with the row.
  * The amount's string carries the asset's symbol, so a symbol the row cannot hold shrinks that row rather than wrapping it, which is the trade a value that may not wrap makes.
  * The asset's name and the network's label are the panel's own readings of the plan and carry no rung: they are handed to no fitter, so neither takes a rung class, and both keep the panel's inherited text size in its ordinary face rather than the monospace one.
  * Their value wraps instead of scrolling, because neither string is one a wallet takes verbatim or a payer compares: a registry name or a network label longer than the panel's column is drawn whole on the next line rather than running a clipped tail that reads as the whole name, which is what a scroll box with no cue would show.
- * A term whose value is handed to the fitting carries `fit-sized`, which is what `app.css` paints the panel's cue that the value may be cut off on: the cue belongs to the state a value may be clipped in rather than to the residual rung, because a panel rendered with no probe, or on an engine with no `ResizeObserver`, never reaches a rung at all and its value scrolls at the base size with no other cue. The rows no fitter sizes carry no such class and are never cued: their value wraps, so neither of them can hide a character of what it reads.
+ * A term whose value is handed to the fitting carries `fit-sized` and the cue state `ui/fit-value.ts` names, which the panel writes as it builds the row because no measurement has settled that row yet; the fitter clears the cue on the one verdict of its own measurement. The rows no fitter sizes carry neither class and are never cued: their value wraps, so neither of them can hide a character of what it reads.
+ * The copy control is `ui/payment-section.ts`'s own, so the panel hands over the term's whole string — never the fitted box's text as a selection happened to span it — with the same confirmation lifecycle and the same `Copy <label>` name; the panel is drawn in a dialog `print.css` drops whole, so neither the control nor its confirmation can reach paper.
  */
 function payTerm(label: string, value: string, options: PayTermOptions = {}): HTMLElement {
-	const fitting = options.fit ?? null;
+	const verbatim = options.verbatim ?? null;
 	// The scale box is drawn inside a value the ladder sizes and nowhere else: it exists so a change to the value's drawn font size can be reported to the fitting, which `ui/fit-value.ts` states.
-	const scale = fitting === null ? null : h("span", { class: FIT_SCALE_CLASS, "aria-hidden": "true" });
+	const scale = verbatim === null ? null : h("span", { class: FIT_SCALE_CLASS, "aria-hidden": "true" });
 	const field = h(
-		"dd",
+		"span",
 		{ class: termValueClass(options), role: "group", "aria-label": label, tabindex: "0" },
 		value,
 		scale,
 	);
 	const row = h(
 		"div",
-		{ class: fitting === null ? "pay-term" : "pay-term fit-sized" },
+		{ class: verbatim === null ? "pay-term" : `pay-term fit-sized ${FIT_CUE_CLASS}` },
 		h("dt", { class: "pay-term-label" }, label),
-		field,
+		h("dd", { class: "pay-term-field" }, field, ...(verbatim === null ? [] : copyControl(label, value, field, options.clipboard ?? null))),
 	);
-	if (fitting !== null) fitting.releases.push(fitValue({ row, value: field, scale }, fitting.fit));
+	if (verbatim !== null) verbatim.releases.push(fitValue({ row, value: field, scale }, verbatim.fit));
 	return row;
 }
 
 /**
- * The class a term's value is drawn in: a value a wallet takes verbatim is one monospace run the ladder fits, and a value the panel reads itself wraps.
+ * The control that hands one verbatim term's value over whole, and the status that reports the copy.
+ *
+ * The click is `ui/payment-section.ts`'s `copyControlClick` on that module's wall-clock timer, so the panel copies through one seam rather than a second of its own: the same two outcomes, the same confirmation cleared after a pause, the same blanking of that confirmation before each copy so a repeated copy is announced, and the same fallback that selects the value when the clipboard is unavailable or refuses the write.
+ * The name carries the term's label, so the panel's three controls reading "Copy" are told apart.
+ * The status is built with no children at all rather than an empty string: `h()` turns a string child into a text node, and the stylesheet's `:empty` rule — what takes the status's reserved line out of flow while it is silent — does not match an element holding one.
+ */
+function copyControl(label: string, text: string, value: HTMLElement, clipboard: ClipboardLike | null): readonly DomChild[] {
+	const status = h("span", { class: "pay-copy-status", role: "status" });
+	const copy = h("button", { type: "button", class: "btn btn-secondary pay-copy", "aria-label": `Copy ${label}` }, "Copy");
+	copy.addEventListener("click", copyControlClick(text, clipboard, value, status, wallClockTimer));
+	return [copy, status];
+}
+
+/**
+ * The class a term's value is drawn in: a value a wallet takes verbatim is the one monospace run the ladder fits and a copy control hands over, and a value the panel reads for itself wraps.
  * The two states are stated as classes rather than left to a narrower selector because `app.css` draws one scroll box per state and the value is the one element that carries the difference.
  */
 function termValueClass(options: PayTermOptions): string {
-	return options.mono === true ? "pay-term-value mono" : "pay-term-value pay-term-value-wrapping";
+	return (options.verbatim ?? null) === null ? "pay-term-value pay-term-value-wrapping" : "pay-term-value mono";
 }

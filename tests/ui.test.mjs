@@ -5,6 +5,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { appliedDeclaration, cssRules, declaration, ruleBody } from "./helpers/css.mjs";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
 import { fakeProbe } from "./helpers/layout-probe.mjs";
 import { ZEC_PAYEE, XMR_PAYEE } from "./helpers/payee-vectors.mjs";
@@ -12,6 +13,7 @@ import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
 import { readSymbol } from "./helpers/qr-reader.mjs";
 import { refusalMessage } from "./helpers/refusals.mjs";
 import { findAll, findButton, hasClass, paymentValues, textOf } from "./helpers/tree.mjs";
+import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 import { nextTask } from "./helpers/wait.mjs";
 import { installWindow, mockProvider } from "./helpers/wallet-mock.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
@@ -41,11 +43,12 @@ import {
 	shareFailure,
 	shareSizeHint,
 } from "../app/js/ui/create.js";
+import { FIT_CUE_CLASS, FIT_RUNGS } from "../app/js/ui/fit-value.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { releasable } from "../app/js/ui/release.js";
 import { buildShareBundle, copyText } from "../app/js/ui/share.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
-import { base32nopad, utf8 } from "../app/js/util/encoding.js";
+import { base32nopad, base58xmr, keccak256, utf8 } from "../app/js/util/encoding.js";
 import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS } from "../app/js/util/icon-capacity.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 
@@ -999,6 +1002,149 @@ test("the create view rendered with no release slot at all still returns an elem
 		assert.ok(probe.targets.length > 0, "the created invoice's section took a subscription for each value a wallet takes verbatim");
 		create.release();
 		assert.equal(probe.targets.length - probe.unsubscribed.length, 0, "and the element the gate treats as a tree root releases every one of them");
+	} finally {
+		fake.restore();
+	}
+});
+
+/**
+ * The advance of one character in a monospace face, in em: the bound `MONO_ADVANCE_EM` in `app/ts/ui/fit-value.ts` states for the widest face a platform substitutes for it, repeated here as a figure of this suite's own so the model below is not the module's arithmetic read back.
+ */
+const MONO_ADVANCE_EM = 0.62;
+
+/**
+ * The room a copyable value has in the create screen's preview at the two window widths `app.css` lays the page out for, in CSS pixels: the 60rem `#app` container less its 1.25rem side padding, less the payment term's 7rem label rail and 0.5rem column gap, less the copy control drawn beside the value, which the stylesheet sizes to its own text rather than to a figure this suite could read.
+ * Both figures are stated rather than measured, because the suites drive a fake DOM with no CSS: what they model is the column the preview gives a value, and the fit below is the search that column's geometry earns.
+ */
+const PREVIEW_VALUE_BOX = { desktop: 730, phone: 114 };
+
+/**
+ * A mainnet Monero integrated address — the 106-character form the validator accepts — built the way `wallet/monero-address.ts` reads one: the `0x13` mainnet prefix, a 77-byte body, and the four-byte Keccak-256 checksum over everything before them, in Monero's block-padded base58.
+ * The body is deterministic filler, because what the validator checks is the prefix, the encoding length, and the checksum.
+ */
+function widestIntegratedMonero() {
+	const body = new Uint8Array(77 - 4);
+	body[0] = 0x13;
+	for (let index = 1; index < body.length; index += 1) body[index] = (index * 7) & 0xff;
+	const encoding = new Uint8Array(77);
+	encoding.set(body);
+	encoding.set(keccak256(body).subarray(0, 4), body.length);
+	return base58xmr.encode(encoding);
+}
+
+/** The addresses an invoice of each family carries, at the lengths the app's payment values reach, each named with the length it is drawn at. */
+const PREVIEW_ADDRESSES = [
+	{ asset: "zec", address: unifiedOfBytes(189), label: "the 311-character unified address the Zcash validator accepts" },
+	{ asset: "zec", address: ZEC_PAYEE, label: "the 78-character Sapling address" },
+	{ asset: "xmr", address: XMR_PAYEE, label: "the 95-character Monero address" },
+	{ asset: "xmr", address: widestIntegratedMonero(), label: "the 106-character Monero integrated address" },
+	{ asset: "usdc", address: PAYEE, label: "the 42-character EVM address" },
+];
+
+/** The font size, in CSS pixels, of the rung a row carries — or of the base rung, for a row no measurement has written a rung on yet, which is the size the stylesheet draws a value's terms at before any script runs. */
+function rungPx(row) {
+	const carried = String(row.attributes.class ?? "").split(" ");
+	const rung = FIT_RUNGS.screen.find((entry) => carried.includes(entry.rung));
+	return (rung ?? FIT_RUNGS.screen[0]).sizeRem * 16;
+}
+
+/** The payment term a fitted value is drawn in, read up the value's own parent chain: the term holds the `<dd>`, which holds the value. */
+function rowOfValue(value) {
+	let node = value.parentNode;
+	while (node !== null && !hasClass(node, "payment-term")) node = node.parentNode;
+	assert.ok(node !== null, "a fitted value hangs inside the payment term whose rung its fit writes");
+	return node;
+}
+
+/**
+ * A probe that lays the preview out the way a monospace face does: the value's characters at the size the row's rung states, against the box the suite states, so the search has to earn the rung a monospace run needs rather than being handed one.
+ * One box serves both phases of the ladder, which is stricter than the page, because the stacked phase gives a value a wider column — so a rung this model shows holding the value holds it on the page too.
+ */
+function previewProbe(box) {
+	return fakeProbe((value) => ({ content: [...textOf(value)].length * rungPx(rowOfValue(value)) * MONO_ADVANCE_EM, box }));
+}
+
+/** The rung an address of this length takes in a column `box` wide, re-derived from the ladder's own sizes rather than read back from the fit: the first rung, in the ladder's order, whose face holds it, or the residual rung where none does. */
+function expectedPreviewRung(address, box) {
+	const characters = [...address].length;
+	const sized = FIT_RUNGS.screen.slice(0, -1);
+	const rung = sized.find((entry) => characters * entry.sizeRem * 16 * MONO_ADVANCE_EM <= box);
+	return rung === undefined ? FIT_RUNGS.screen[FIT_RUNGS.screen.length - 1].rung : rung.rung;
+}
+
+/** Choose an asset in the create form, which the form reads on `change` rather than on `input`. */
+function chooseAsset(view, assetId) {
+	const control = controlNamed(view, "asset");
+	control.value = assetId;
+	control.dispatch("change");
+}
+
+/** Fill the create form with an invoice paying to `address` and submit it, returning the preview the submit drew. */
+function submitInvoicePayingTo(view, address) {
+	setControl(view, "payeeName", "Studio Example");
+	setControl(view, "payeeAddress", address);
+	setControl(view, "item-0-description", "Design work");
+	setControl(view, "item-0-quantity", "2");
+	setControl(view, "item-0-unitPrice", "150");
+	findAll(view, (node) => node.tagName === "form")[0].dispatch("submit");
+	return findAll(view, (node) => hasClass(node, "created-payment"))[0];
+}
+
+test("the create screen's preview draws a payment value in the face the payer's document draws it in, and the ladder settles every address it carries", () => {
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	// The preview is the section the payer's document carries, drawn under `.created-payment`, so the tokens its terms read are declared for that surface too: a declaration left invalid there falls back to the inherited face rather than to any face this stylesheet states.
+	for (const token of ["--inv-ink", "--inv-muted", "--inv-rule", "--inv-sans", "--inv-mono"]) {
+		const preview = appliedDeclaration(invoiceCss, ".created-payment", token);
+		assert.ok(preview !== undefined, "invoice.css declares " + token + " on the create screen's preview, so the value it sets is drawn in the face that token states");
+		assert.equal(preview, appliedDeclaration(invoiceCss, ".view-invoice", token), token + " resolves to the document's own value on the preview, so the two surfaces cannot drift");
+		const stated = cssRules(invoiceCss).filter((rule) => declaration(rule.body, token) !== undefined);
+		assert.equal(stated.length, 1, token + " is stated once for both surfaces rather than copied beside each");
+	}
+	// The chain from the section's markup to those tokens: a value a wallet takes verbatim is set in the monospace token, the term's own text in the sans one and the document's ink, and the symbol's dark modules in that same ink.
+	assert.equal(declaration(ruleBody(invoiceCss, ".payment-term dd.mono"), "font-family"), "var(--inv-mono)", "a verbatim value is drawn in the monospace face");
+	assert.equal(declaration(ruleBody(invoiceCss, ".payment-term dd"), "font-family"), "var(--inv-sans)", "and the term's own text in the sans face");
+	assert.equal(declaration(ruleBody(invoiceCss, ".payment-term dd"), "color"), "var(--inv-ink)", "in the document's ink");
+	assert.equal(declaration(ruleBody(invoiceCss, ".payment-term dt"), "color"), "var(--inv-muted)", "with the label in the muted ink");
+	assert.equal(declaration(ruleBody(invoiceCss, ".payment-qr"), "border"), "1px solid var(--inv-rule)", "the symbol's card in the document's rule colour");
+	assert.equal(declaration(ruleBody(invoiceCss, ".qr-module-dark"), "background"), "var(--inv-ink)", "and its dark modules in the document's ink, which an undeclared token draws as nothing");
+	// The box the face is set in neither wraps nor truncates the value: a value wider than it is scrolled, which is the guarantee the fit below keeps by choosing a size rather than a break.
+	assert.equal(appliedDeclaration(invoiceCss, ".payment-value", "white-space"), "nowrap", "a copyable value is held on one run whatever face it is set in");
+	assert.equal(appliedDeclaration(invoiceCss, ".payment-value", "overflow-x"), "auto", "and a value wider than its box scrolls it rather than clipping it");
+	assert.equal(appliedDeclaration(invoiceCss, ".payment-value", "text-overflow"), undefined, "with no ellipsis to shorten it");
+
+	const fake = installInteractiveDocument();
+	try {
+		for (const [width, box] of Object.entries(PREVIEW_VALUE_BOX)) {
+			for (const { asset, address, label } of PREVIEW_ADDRESSES) {
+				const probe = previewProbe(box);
+				const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder(), fit: probe });
+				try {
+					document.body.append(view);
+					chooseAsset(view, asset);
+					const preview = submitInvoicePayingTo(view, address);
+					// The section is built detached and mounted by the submit, so the first layout report after the mount is what fits it, exactly as the page's own observer delivers one.
+					probe.fire();
+					const row = findAll(preview, (node) => hasClass(node, "payment-term") && paymentValues(node).includes(address))[0];
+					const where = label + " at a " + width + " window";
+					assert.ok(row !== undefined, where + ": the preview draws the address, and draws its whole string rather than a shortened form of it");
+					const dd = findAll(row, (node) => node.tagName === "dd")[0];
+					assert.equal(dd.attributes.class, "mono", where + ": in the monospace face, the one the payer's document draws it in");
+					assert.ok(findButton(row, "Copy") !== undefined, where + ": with the copy control that hands the exact string over");
+					const carried = String(row.attributes.class).split(" ").filter((name) => FIT_RUNGS.screen.some((entry) => entry.rung === name));
+					assert.deepEqual(carried, [expectedPreviewRung(address, box)], where + ": the fit settles the row on the largest rung whose face holds the address, shrinking the font before it gives up the line");
+					const demand = [...address].length * rungPx(row) * MONO_ADVANCE_EM;
+					if (carried[0] === FIT_RUNGS.screen[FIT_RUNGS.screen.length - 1].rung) {
+						assert.ok(demand > box, where + ": the residual rung is taken only where the address outgrows the " + box + "px column at the screen floor");
+						assert.ok(hasClass(row, FIT_CUE_CLASS), where + ": and the row carries the cue that the value may be cut off, so the payer scrolls it rather than reading a prefix as the whole address");
+					} else {
+						assert.ok(demand <= box, where + ": the rung the fit chose holds the address whole on one line in the " + box + "px column");
+						assert.ok(!hasClass(row, FIT_CUE_CLASS), where + ": so no cue is painted beside a value the fit showed whole");
+					}
+				} finally {
+					view.release();
+				}
+			}
+		}
 	} finally {
 		fake.restore();
 	}

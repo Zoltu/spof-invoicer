@@ -1,16 +1,13 @@
 /*
  * The official invoice document.
  *
- * Loaded on every route, but it cannot reach the create form: the seven generic-looking names it uses — status badge, party role, meta label, section title, note line, document actions, totals table — are scoped under `.view-invoice`, and every other selector names a class only this view renders.
+ * Loaded on every route, but it cannot reach the create form: the seven generic-looking names it uses — status badge, party role, meta label, section title, note line, document actions, totals table — are scoped under `.view-invoice`, and every other selector names a class only this view renders, apart from the payment section's own, which the payee's create screen draws from the same renderer under `.created-payment`.
  * A serif face carries the document text for an official, paper-like feel, while the tabular data — parties, dates, item amounts, totals, payment details — uses a sans stack with tabular figures so currency columns line up.
  * The palette is restrained: deep navy ink, one blue accent for the total, and light rules.
  */
 
 .view-invoice {
-	--inv-ink: #10233f;
 	--inv-ink-soft: #4a5a72;
-	--inv-muted: var(--ink-muted);
-	--inv-rule: #dfe4ec;
 	--inv-rule-soft: #eceff4;
 	--inv-accent: var(--accent);
 	--inv-accent-surface: var(--accent-surface);
@@ -27,11 +24,23 @@
 	--inv-status-overdue-surface: #fdeceb;
 	--inv-zebra: #fafbfd;
 
-	--inv-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
 	--inv-serif: Georgia, "Times New Roman", Times, serif;
-	--inv-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
 	margin: 0 auto;
+}
+
+/*
+ * The ink, the muted ink, the rule colour, and the two faces the payment section draws its terms in, stated for both surfaces that section is drawn on.
+ * The payer's document nests it under `.view-invoice`, while the payee's create screen draws it under `.created-payment` with no such ancestor, and a token declared under the document alone is invalid in the preview: a declaration invalid at computed-value time falls back to the property's inherited or initial value rather than to any face this stylesheet states, which draws an address in the inherited proportional face where the payer's document draws it monospace and leaves the symbol's dark modules with no ink at all.
+ * The values are stated once for both surfaces rather than copied beside each, so the preview cannot drift from the document the payer reads, and `ui/fit-value.ts` measures a value in whatever face the page draws — so the preview's ladder is searched in the same face the payer's document draws its value in.
+ */
+.view-invoice,
+.created-payment {
+	--inv-ink: #10233f;
+	--inv-muted: var(--ink-muted);
+	--inv-rule: #dfe4ec;
+	--inv-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+	--inv-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* The chrome around the document is hidden in print via `.no-print`. */
@@ -472,7 +481,7 @@
 
 /*
  * The focusable verbatim value is a scroll container, so it needs the ring `app.css` gives only `a/button/input/select/textarea` — the same ring the itemized table's scroll box takes, both being focusable scroll regions this stylesheet draws.
- * Its colour falls back to the root-scoped `--accent` because the payment section is drawn on two surfaces: the payer's document nests it under `.view-invoice`, which declares `--inv-accent`, while the create screen draws it under `.created-payment` with no such ancestor, so a bare `--inv-accent` would leave the outline's shorthand invalid there and the ring gone.
+ * Its colour falls back to the root-scoped `--accent` because the payment section is drawn on two surfaces: the payer's document nests it under `.view-invoice`, which declares `--inv-accent`, while the create screen draws it under `.created-payment`, which declares the section's faces and rule colour but not this accent, so a bare `--inv-accent` would leave the outline's shorthand invalid there and the ring gone.
  */
 .payment-value-verbatim:focus-visible {
 	outline: 2px solid var(--inv-accent, var(--accent));
@@ -542,10 +551,10 @@
 /*
  * The cue that a value may be cut off: a line of text on the term's own row, beneath the value rather than over it, so a clipped value can never read as a complete address on an engine that paints no scrollbar until the payer scrolls.
  *
- * The cue belongs to the sized state rather than to the rung a fit happened to reach: the value of a `fit-sized` row is drawn in a scroll box at the base rung whenever no fitting rung sits on the row — an engine with no `ResizeObserver`, a section rendered with no probe, a value the document has not laid out yet — and an overlay-scrollbar engine paints no bar in any of those states, so a clipped prefix of an address would read as the whole address.
- * Every state of a sized row therefore carries the cue, and nothing a fit writes switches it off. A completed fit is no evidence that the value is still whole, because a change to the advance the value's glyphs are actually drawn at — a minimum-font-size setting, `text-size-adjust`, a mobile engine's font boosting, a late face substitution — grows the run without moving anything the page can observe (`ui/fit-value.ts` states that gap beside the scale box), so a cue that waited for a measurement's confirmation would be missing exactly where the value is clipped. A cue painted beside a value that is whole costs a payer one sentence; a missing cue beside a value that is clipped costs them the tail of an address. A term no wallet takes verbatim carries no cue at all, because nothing sizes its value and its value wraps, so nothing may clip it.
- * The fitting still re-measures when the value's computed font size changes, which is the one such change the value's column-wide box cannot report; the cue is what covers every change the fitting cannot see.
- * Its wording states no fact about whether the value is whole, because the cue is painted in both states: a sentence saying the value continues, or telling the payer to use Copy for the whole value, is false beside every value a fit has just shown whole — a 42-character EVM address, an amount, a link — and a cue that is wrong in the common case is one a payer learns to discount beside the 311-character address that is genuinely clipped, while an assistive technology announces the false sentence right after the value. "If the value is cut off, scroll it." is an instruction conditioned on the clip rather than a claim about it, so it reads true beside a whole value and beside a clipped one, and it names the scroll box and focus stop every cued row gives its value — the one affordance the panel's rows without a copy control have as well.
+ * It is painted on the one state a fit has not shown whole, which the row names with the cue class `ui/fit-value.ts` exports: the section writes that class on a term whose value the ladder sizes, because the state a row is built in is a state no measurement has settled, and the fitter clears it on the one verdict of its own measurement — a sizing rung that held the value on one line. So the residual rung carries the cue, where the value certainly scrolls, and so does every state nothing measured: an engine with no `ResizeObserver`, a section rendered with no probe, a value the document has not laid out yet, and a fit that threw. An address, an amount, or a link a fit showed whole carries no cue, which is what every ordinary invoice draws.
+ * What the cue does not cover is a value a later change of face widens past the measurement that showed it whole — a minimum font size, `text-size-adjust`, a mobile engine's font boosting, a late face substitution — because none of them moves anything the page can observe (`ui/fit-value.ts` states that gap beside the scale box). That residue is accepted rather than paid for on every invoice, and `docs/design/payment-safety-memo.md` records it as an accepted risk.
+ * A term no wallet takes verbatim carries no cue at all, because nothing sizes its value and its value wraps, so nothing may clip it.
+ * Its wording states no fact about whether the value is whole, and it does not have to: the cue stands only where a clip is possible and unproven, so "If the value is cut off, scroll it." is an instruction conditioned on the clip rather than a claim about it, and it reads true beside a cued value that is whole and beside one that is clipped. It names the scroll box and focus stop every cued row gives its value, and it names scrolling rather than copying because the value is read by arrowing along it whether or not a copy control sits beside it.
  * `app.css` states the same sentence beside the payment panel's own rows, so the two surfaces say one thing rather than two.
  * The cue is the value's neighbour in the row's grid, which is why it alters nothing the value draws: the run keeps its own glyphs — no ellipsis, no fade or mask over them, no respacing, and no transform — and stays the single scrollable line the rules above state.
  * It is generated content of the row, so it is never a text node of the document: a term's value is the term's own text and nothing else, which is the string the copy control is handed and the run any read of the rendered value picks up, so no path from a value to a copied string carries the sentence.
@@ -553,7 +562,7 @@
  * It is scoped to the screen because the printed page drops the on-screen run for its print twin, which carries the whole value.
  */
 @media screen {
-	.payment-term.fit-sized::after {
+	.payment-term.fit-sized.fit-cue::after {
 		content: "If the value is cut off, scroll it.";
 		grid-column: 1 / -1;
 		color: var(--inv-muted, var(--ink-muted));

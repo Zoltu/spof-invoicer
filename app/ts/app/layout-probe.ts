@@ -16,7 +16,7 @@ import { NOTHING_TO_RELEASE } from "../ui/release.js";
  * `measure` reports the width the run draws and the width of the box it is drawn in, both in fractional CSS pixels, and answers `null` for a value the platform lays out nothing for; what a fit makes of widths that say nothing is `ui/fit-value.ts`'s decision, and that module's doc states it.
  *
  * An engine without `ResizeObserver` is handed `NOTHING_TO_RELEASE`, and what that costs is the whole of the fitting rather than its re-fit on a resize: every surface in the app fits a value built into a subtree nothing has mounted yet, so `fitValue`'s `isConnected === false` guard returns before it measures anything and no rung is written at all.
- * The row then keeps the base rung its stylesheet states, which is why that stylesheet paints the cue that the value may be cut off for every state of a row the ladder sizes rather than for the residual rung alone.
+ * The row then keeps the base rung its stylesheet states and the cue class the surface wrote on it when it built the row, which is why a row no fit ever settled keeps the cue that the value may be cut off while a row a fit measured whole does not.
  */
 export const browserLayoutProbe: LayoutProbe = {
 	measure(value) {

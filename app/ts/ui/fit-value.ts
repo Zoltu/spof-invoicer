@@ -4,7 +4,7 @@
  * A payment value is a string a wallet takes verbatim — a payee address, an amount, a payment link — so it may never be wrapped, truncated, or respaced to fit, and the only lever its box has is the font size it is set at; the receipt's transaction hash is fitted the same way, because it is a string the payer reads character by character and copies out.
  * The app has two ladders — a screen ladder the browser measures a value against, and a print ladder the printed page draws a value on — and this module owns both and the search along each; {@link fitValue} keeps a value's screen rung current as its box resizes.
  * The screen ladder's rungs belong to two phases, and the search walks the phases in the ladder's own order, trying each phase's rungs largest first: every inline rung down to its 10px floor is tried before the first, larger stacked rung, so a value keeps the inline row whenever any inline rung at or above the floor holds it.
- * The inline phase is the row a value shares with its label, and, on the invoice's payment terms, with the copy control beside it; a panel term carries no copy control, and below the `640px` breakpoint `app.css` gives every panel term a line of its own whatever rung a fit writes, so an inline rung there sets the font size of a value the row already gives the panel's whole width. The row each phase is measured in is the stylesheet's to draw; this module only orders the two.
+ * The inline phase is the row a value shares with its label, and with the copy control beside it wherever the surface gives that value one: on the invoice's payment terms for every verbatim value, and on a payment panel term for the amount and the recipient, while its asset name and network label carry none. Below the `640px` breakpoint `app.css` gives every panel term a line of its own whatever rung a fit writes, so an inline rung there sets the font size of a value the row already gives the panel's whole width. The row each phase is measured in is the stylesheet's to draw; this module only orders the two.
  * {@link FIT_RUNGS} is the one published statement of both ladders: every screen rung's name, size, and phase, and every print rung's name and whether it wraps, with the point size each sized rung's rule states.
  * The screen search prices a phase from one measurement taken at that phase's largest rung, and writes a rung only after a measurement of the value with that rung in place, so an engine whose glyph advances do not follow its font size cannot settle on a rung its own measurement overflows: the proportional reading only proposes a candidate, a candidate whose measurement refuses it steps down to the next smaller rung of its phase and is measured in turn, and the residual rung is where a phase holding no measured rung leaves the search.
  * The screen ladder's rungs are stated once per surface in the stylesheet that draws that surface — `invoice.css` for the payment section's values, `app.css` for the payment panel's — and the print ladder's rungs in `print.css`.
@@ -17,14 +17,15 @@
  * A box that stops reporting a width once a rung has been applied is read the other way, because there the absent measurement is the evidence for the rung the search has in hand: the row loses its rung rather than keeping one nothing confirmed, so the value falls back to the state its stylesheet marks as possibly clipped rather than to a silent fits.
  * A probe that throws during a fit is read the same way for the same reason: a fit that cannot finish has confirmed no rung, so the row loses the one it was carrying before the failure reaches the caller rather than keeping a rung nothing measured.
  *
- * The cue that a value may be clipped is therefore painted in every state of a row whose value the ladder sizes, and nothing a fit writes switches it off: a completed fit is no evidence that the value is still whole, because the one change a fit cannot observe — the advance the value's glyphs are actually drawn at — can grow the run past a box that reports nothing new, and a cue painted beside a value that is whole costs a payer one sentence while a missing cue beside a value that is clipped costs them the tail of an address.
- * The fit still writes the rung its own measurement held, so the value is drawn as large as it can be; it just makes no claim, in the class list, that the value is whole.
+ * So the cue is painted on every state a fit has not shown whole, and cleared only on the one state it has: the residual rung, where the value scrolls by definition, and every state no measurement settled — the row a surface has just built, a box the page laid out nothing for, a value a report finds detached, a measurement that stopped reporting a width, and a fit that threw — carry the cue, while a sizing rung a measurement showed holding the value does not, and an ordinary address, amount, or hash therefore carries no extra line under it.
+ * That is the one place this module does not fail closed, and the price is stated rather than hidden: the changes the scale box below cannot see — a minimum font size, `text-size-adjust`, a mobile engine's font boosting, a late face substitution — can widen a run after a fit settled on a rung it measured, and a value widened that way is drawn with no cue. Painting the cue on the settled state as well would put a sentence under every value on every invoice to cover that residue, which is the trade `docs/design/payment-safety-memo.md` records as an accepted risk.
+ * The fit still writes the rung its own measurement held, so the value is drawn as large as it can be, and the cue class it leaves is the verdict that measurement took.
  *
  * The value's own box cannot report a change to the value's font size: a box is as wide as its column whatever face the value is drawn in, so a stylesheet rule that overrides a rung's size, or a change to the root font size every rem rung follows, can grow the run past the box while that box reports the same width as before, and a fit that only watched the box would never run again.
  * So the surface that builds a fitted value also builds the scale box {@link FIT_SCALE_CLASS} states — an `em`-sized, hidden element inside the value — and hands it to {@link fitValue}, which watches it beside the value: the scale box is sized from the value's computed font size, so a change to that size re-measures the value and the fit steps down to a rung its own measurement of the larger run supports. A surface that hands no scale box states that its value is fitted once and on its box's resizes alone.
  * What the scale box does not cover is the difference between the size a value is computed at and the advance its glyphs are actually drawn with: a browser minimum-font-size setting, `text-size-adjust` and the font boosting a mobile engine applies to a long run, and a face substituted after the first layout all change the used advance alone, leave every size the page can observe where it was, and report themselves to no observer the page may subscribe to. The cue below is what covers that gap.
  *
- * The stylesheets carry the other half of that: a row whose value a fitter sizes states it with a class of its own, and the surface's stylesheet paints the cue that the value may be cut off on that state, so a value the fit never reached is marked as possibly clipped rather than drawn as if a measurement had shown it whole.
+ * The stylesheets carry the other half of that: a row whose value a fitter sizes states it with `fit-sized`, and the cue that the value may be cut off is a second class on that row, {@link FIT_CUE_CLASS}, which the surface writes as it builds the row — a state no measurement has settled — and which this module clears only for a rung whose own measurement showed the box holding the value.
  *
  * The print twin is sized here too: print metrics are not measurable from script, so {@link printFitRung} maps a character count to the rung `print.css` declares, priced against the column the twin is laid out on a Letter page rather than the page's whole line, and shrinking to the print floor before it hands a longer value to the wrap that breaks it into segments.
  * That column is the one the printed page draws, not one a printed page is guaranteed to give the twin — another page size or a changed margin leaves a narrower column, which no script can see before the page prints — so `print.css` states every rung as a line that keeps the value's characters and may break them, and a price taken against a wider column costs paper a visible continuation rather than the tail of an address.
@@ -99,10 +100,19 @@ export const FIT_RUNGS = {
  * The class of the scale box a surface draws inside a value the ladder sizes, and the one thing that reports a change to the value's drawn font size to the fit.
  *
  * It is an empty, hidden, absolutely positioned element sized `1em` in each direction, so its own size follows the value's computed font size and nothing else: the box it is drawn in is a fixed column whatever face the value is set at, which is why the value's own box cannot report that change (`app.css` states the rule).
- * What it reports is a change to the value's computed font size — a re-sized rung, a changed root font size, an inherited size — and it reports nothing of a change to the used advance alone: a browser minimum-font-size setting, `text-size-adjust`, a mobile engine's font boosting, and a late face substitution leave every size the page can observe where it was. That gap is why the cue that the value may be cut off is painted in every state of a fitted row and no class a fit writes switches it off.
+ * What it reports is a change to the value's computed font size — a re-sized rung, a changed root font size, an inherited size — and it reports nothing of a change to the used advance alone: a browser minimum-font-size setting, `text-size-adjust`, a mobile engine's font boosting, and a late face substitution leave every size the page can observe where it was. That gap is the residual the module doc states: a value one of them widens after a fit settled keeps the rung that fit wrote, and clears the cue with it.
  * The surface that builds the value builds this too, because the element has to sit inside the value to inherit its face; {@link fitValue} is what subscribes to it.
  */
 export const FIT_SCALE_CLASS = "fit-scale";
+
+/**
+ * The class of the state a fitted row carries while its value may be cut off, and the one class `invoice.css` and `app.css` paint the cue "If the value is cut off, scroll it." on.
+ *
+ * The surface that builds a row writes it, because the row's first state — built, not yet laid out, and fitted by nothing — is a state no measurement has settled; {@link fitValue} is the only thing that clears it, and it clears it only for a sizing rung whose own measurement showed the box holding the value.
+ * A row keeps it at the residual rung, where the value scrolls by definition, and in every state the fit could not settle: a box the page laid out nothing for, a value a report finds detached, a measurement that stopped reporting a width, and a fit that threw.
+ * The one state it is absent from is a sizing rung a measurement showed whole, which a wider face than that measurement priced can still outgrow — the gap the module doc states, and the residual the design memo records.
+ */
+export const FIT_CUE_CLASS = "fit-cue";
 
 /** One rung of the screen ladder: the class the fitter writes, the phase whose geometry decides the row, or `residual` for the last rung, which belongs to no phase, and the font size in rem its rule states. */
 type ScreenRung = (typeof FIT_RUNGS.screen)[number];
@@ -291,8 +301,8 @@ export function fitValue(target: FitTarget, probe: LayoutProbe | null): Release 
 	/**
 	 * Fit the value as it is laid out now, and leave the row with no rung when that cannot be done.
 	 *
-	 * The rung the search lands on is one its own measurement showed holding the value, and the stylesheet's cue that the value may be cut off stays painted beside it whatever rung that is: the cue belongs to the row rather than to the rung, because a value a measurement showed whole can still be drawn in a larger face that no observer reports (the module doc states which changes those are).
-	 * A fit that throws replaces the search's last candidate with the row's no-rung state before the failure reaches the caller, and only a recovery that itself throws leaves that candidate in place; the cue is painted in either state, so no value that may be clipped rests on a verdict nothing took.
+	 * The rung the search lands on is one its own measurement showed holding the value, so a sizing rung it lands on is the one state that clears the cue: the residual rung keeps it, and so does a search that measured nothing at all, because neither is a verdict that the value is whole.
+	 * A fit that throws replaces the search's last candidate with the row's no-rung, cued state before the failure reaches the caller, and only a recovery that itself throws leaves that candidate in place; the cue is painted in either state, so no value that may be clipped rests on a verdict nothing took.
 	 */
 	const fit = (): void => {
 		try {
@@ -300,15 +310,16 @@ export function fitValue(target: FitTarget, probe: LayoutProbe | null): Release 
 			if (before === null || before.box <= 0) return;
 			// A measurement is of the value with a rung applied, so the search's own verdicts are the width each rung finally drawn was drawn at.
 			const measureAt = (candidate: ScreenFitClass): FitMeasurement | null => {
-				applyRung(target.row, candidate);
+				applyFit(target.row, candidate, null);
 				const measured = probe.measure(target.value);
 				return measured === null || measured.box <= 0 ? null : measured;
 			};
 			const chosen = smallestFittingRung(measureAt);
-			applyRung(target.row, chosen);
+			// The cue is the verdict the search took: a sizing rung its own measurement showed holding the value clears it, while the residual rung and a search that measured nothing leave it painted, because neither is evidence that the value is whole.
+			applyFit(target.row, chosen, chosen === null || chosen === RESIDUAL_RUNG.rung);
 		} catch (error) {
 			try {
-				applyRung(target.row, null);
+				applyFit(target.row, null, true);
 			} catch {
 				// The row is left as the failed fit left it, which is the state a candidate write produces, so the cue is painted either way. There is no second route to the row's one class attribute, and the failure the caller asked about is the fit's own, not the recovery's.
 			}
@@ -362,15 +373,19 @@ export function fitValue(target: FitTarget, probe: LayoutProbe | null): Release 
 }
 
 /**
- * Write `rung` as the row's one rung class, keeping every class the row itself was built with, and write nothing when the class list already reads that way.
+ * Write `rung` as the row's one rung class and `cue` as its may-be-cut-off state, keeping every class the row itself was built with, and write nothing when the class list already reads that way.
  *
  * One `setAttribute("class", …)` replaces the whole list, so the swap stays a single write and no reader observes two rungs at once.
  * Skipping the write when it would change nothing keeps a re-fit that lands on the rung already applied from waking the observer.
- * A `null` rung removes the class the previous fit wrote, which is the row's may-be-clipped state rather than a verdict about it; the stylesheet's cue is painted there as it is in every other state of a row whose value the ladder sizes.
+ * A `null` rung removes the class the previous fit wrote, which is the row's may-be-clipped state rather than a verdict about it.
+ * A `null` `cue` leaves the cue class exactly as the row carries it, which is the state a candidate of the search is written in: an intermediate rung has taken no verdict yet, so it changes the value's size and neither adds nor clears the cue.
  */
-function applyRung(row: HTMLElement, rung: ScreenFitClass | null): void {
-	const kept = classNames(row).filter((name) => !isRung(name));
+function applyFit(row: HTMLElement, rung: ScreenFitClass | null, cue: boolean | null): void {
+	const existing = classNames(row);
+	const carried = existing.includes(FIT_CUE_CLASS);
+	const kept = existing.filter((name) => !isRung(name) && name !== FIT_CUE_CLASS);
 	if (rung !== null) kept.push(rung);
+	if (cue === null ? carried : cue) kept.push(FIT_CUE_CLASS);
 	const written = kept.join(" ");
 	if (written !== (row.getAttribute("class") ?? "")) row.setAttribute("class", written);
 }

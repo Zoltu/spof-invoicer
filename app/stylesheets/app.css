@@ -601,6 +601,58 @@ textarea:disabled {
 }
 
 /*
+ * The field box of a summary term: the term's value, and — when a wallet takes that value verbatim — the copy control that hands it over and the status that reports the copy, laid out on one line the way `invoice.css` lays out the invoice's own payment term.
+ * The value takes the room the label and the control leave it, and the control is centred rather than baseline-aligned for the reason that stylesheet states beside the invoice's own control: a baseline-aligned item is what the flex line is sized around, so the control's padding and half-leading would hold a verbatim row a fraction of a line taller than its neighbours.
+ * The rule states the box's own margin rather than inheriting the definition list's default indent, which is what the invoice's term states for the same reason: the box is a column of the row rather than a quotation of the label above it.
+ */
+.pay-term-field {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.35rem 0.5rem;
+	min-width: 0;
+	margin: 0;
+}
+
+.pay-term-field .pay-term-value {
+	flex: 1 1 0;
+}
+
+/*
+ * The copy control sits inside the line box its value is drawn on rather than setting its row's height, and the rule is scoped under the term so it outranks the single-class `.btn` padding it is layered on whatever order the stylesheets load in — the invoice's own control states the same two reasons.
+ */
+.pay-term .pay-copy {
+	align-self: center;
+	padding: 0.2rem 0.6rem;
+	font-size: 0.75rem;
+	line-height: 1;
+}
+
+/*
+ * The status a term's copy control reports into: silent until a copy runs, and on a line of its own once it has something to say, so a confirmation never reflows the value beside it.
+ * While it is silent it is taken out of flow and clipped to a single invisible pixel rather than hidden with `display: none`, because it is the `role="status"` live region that announces the copy and an element removed from the accessibility tree cannot announce the text that later fills it; the element is built with no children at all, which is what its `:empty` rule needs (`ui/pay.ts` states why).
+ */
+.pay-term-field .pay-copy-status {
+	flex: 0 0 auto;
+}
+
+.pay-term-field .pay-copy-status:not(:empty) {
+	flex-basis: 100%;
+}
+
+.pay-term-field .pay-copy-status:empty {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	border: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+/*
  * Every value a wallet takes verbatim is held on one line and never broken, and a value wider than its column scrolls inside its own box rather than escaping the dialog.
  * `.pay-term-value` is the class all four summary terms draw their value in, so the fitted amount and recipient and the plain Asset and Network rows share one statement of the panel's value box, which the two wallet-reported values and the receipt's transaction hash are named beside; the wrapping state below is the one value that leaves that contract, and it leaves it as a state of a value rather than as a second box.
  * The two break properties are stated at their initial values here as `invoice.css`'s note on `.payment-value` states them for the invoice's own payment values: both inherit, so an ancestor's break rule would otherwise reach these values.
@@ -622,7 +674,7 @@ textarea:disabled {
 /*
  * The scale box every value the ladder sizes carries inside it: empty, hidden, out of the flow, and sized one em in each direction, so its own size follows the value's drawn font size and nothing else.
  * It exists because the value's box cannot report a change to the value's font size — a value set in a larger face inside a column of the same width — while this box, sized from that same computed font size, can, and the fitting re-measures when it does (`ui/fit-value.ts` states what the box reports and what it cannot, and `FIT_SCALE_CLASS` in that module the name).
- * It catches the change a rule or an inherited size makes to that computed size, and it catches nothing of a change to the advance the value's glyphs are actually drawn at: a browser minimum-font-size setting, `text-size-adjust`, a mobile engine's font boosting, and a late face substitution grow the run without moving this box. That is why the cue below, which says the value may be cut off, is painted in every state of a fitted row and never switched off.
+ * It catches the change a rule or an inherited size makes to that computed size, and it catches nothing of a change to the advance the value's glyphs are actually drawn at: a browser minimum-font-size setting, `text-size-adjust`, a mobile engine's font boosting, and a late face substitution grow the run without moving this box. The cue stated further down is what marks the states no fit has settled, and it is absent on the state a fit has: a value one of those changes widens after a fit settled is drawn with no cue, which is the residual `docs/design/payment-safety-memo.md` records as accepted.
  * It states visibility rather than taking the box out of the layout, because a hidden box still has a size to report and a `display: none` one would have none; it carries no text and is `aria-hidden`, so a selection of the value still yields the value alone.
  * The document's payment values draw the same element and, being `invoice.css`'s rather than this stylesheet's, take this one rule: it is stated here because both surfaces share it and `app.css` is the sheet the document loads as well.
  */
@@ -814,7 +866,7 @@ textarea:disabled {
 
 /*
  * The residual rung as the panel states it: no rung of either phase holds the value, so it keeps the floor's font size, scrolls its overflow, and keeps the whole width the stacked columns above give it.
- * The thin bar below is painted only by an engine that draws one before the payer scrolls, which is why the cue stated further down belongs to the row rather than to this rung, and why the row's own columns are what the cue is drawn beside rather than a substitute for them.
+ * The thin bar below is painted only by an engine that draws one before the payer scrolls, which is why the cue stated further down is a line of text on the row as well as this bar, and why the row's own columns are what the cue is drawn beside rather than a substitute for them.
  */
 .pay-term.fit-residual .pay-term-value,
 .pay-account.fit-residual .pay-account-value,
@@ -834,10 +886,10 @@ textarea:disabled {
 
 /*
  * The cue that a value may be cut off: the thin bar above is not painted by an overlay-scrollbar engine until the payer scrolls, and the panel has states in which no rung is ever written at all — a panel rendered with no probe, an engine with no `ResizeObserver`, and any frame before the first layout report — in which a value scrolls at the base size inside a box that draws no bar.
- * So the cue belongs to the sized state of the row rather than to the residual rung: every state of a `fit-sized` row carries it, and nothing a fit writes switches it off. A completed fit is no evidence that the value is still whole, because a change to the advance the value's glyphs are actually drawn at — a minimum-font-size setting, `text-size-adjust`, a mobile engine's font boosting, a late face substitution — grows the run without moving anything the page can observe (`ui/fit-value.ts` states that gap beside the scale box), so a cue that waited for a measurement's confirmation would be missing exactly where the value is clipped. A cue painted beside a value that is whole costs a payer one sentence; a missing cue beside a value that is clipped costs them the tail of an address. The Asset and Network rows carry none, because no fitter sizes them and their value wraps, so neither can hide a character of what it reads.
- * The fitting still re-measures when the value's computed font size changes, which is the one such change the value's column-wide box cannot report; the cue is what covers every change the fitting cannot see.
- * Its wording states no fact about whether the value is whole, because the cue is painted in both states: a sentence saying the value continues is false beside every value a fit has just shown whole — a 42-character EVM address, an amount, a balance, a 66-character hash — and a cue that is wrong in the common case is one a payer learns to discount beside the 311-character address that is genuinely clipped, while an assistive technology announces the false sentence right after the value. "If the value is cut off, scroll it." is an instruction conditioned on the clip rather than a claim about it, so it reads true beside a whole value and beside a clipped one.
- * It names scrolling because scrolling is the affordance every row the cue is painted on has: the receipt's transaction hash carries a copy control, while the amount, the recipient, the connected account, and the balance are read through their own scroll box and focus stop, so naming Copy here would be false on four of these rows. `invoice.css` states the same sentence beside the invoice's own terms, so the two surfaces say one thing rather than two.
+ * It is painted on the row's own cue class, which this panel writes as it builds each fitted row and which `ui/fit-value.ts` clears only on a rung its own measurement showed holding the value: so the residual rung carries it, where the value certainly scrolls, and so does every state no measurement settled — the panel drawn with no probe and the engine with no `ResizeObserver` among them — while a value a fit showed whole carries no extra line, which is every ordinary panel. The Asset and Network rows carry none, because no fitter sizes them and their value wraps, so neither can hide a character of what it reads.
+ * What the cue does not cover is a value a later change of face widens past the measurement that showed it whole — a minimum font size, `text-size-adjust`, a mobile engine's font boosting, a late face substitution — none of which moves anything the page can observe (`ui/fit-value.ts` states that gap beside the scale box). That residue is accepted rather than paid for on every panel, and `docs/design/payment-safety-memo.md` records it as an accepted risk.
+ * Its wording states no fact about whether the value is whole, and it does not have to: the cue stands only where a clip is possible and unproven, so "If the value is cut off, scroll it." is an instruction conditioned on the clip rather than a claim about it, and it reads true beside a cued value that is whole and beside one that is clipped.
+ * It names scrolling rather than copying because scrolling is the affordance every row the cue is painted on has, whether or not a copy control sits beside it: the amount, the recipient, and the receipt's hash carry one, while the connected account and the balance are read through their own scroll box and focus stop alone, so naming Copy here would be false on those two rows. `invoice.css` states the same sentence beside the invoice's own terms, so the two surfaces say one thing rather than two.
  * Each of the panel's fitted rows states a cue beside its value rather than over it, which is why the value's run keeps its own glyphs — no ellipsis, no fade or mask over them, no respacing, and no transform — and stays the single scrollable line the rules above state.
  * The cue is generated content of the row, so it is never a text node of the document: a value's own text is the value and nothing else, which is the string every copy control is handed and the run any read of the rendered value picks up, so no path from a value to a copied string carries the sentence.
  * `user-select: none` is what keeps the sentence out of a mouse selection that spans the row, and it is the only exclusion a stylesheet can state here: no test in this repository can observe a selection or a copied string, because the suites drive a fake DOM with no CSS. The residual is that an engine which serializes generated content into a copied selection can paste the sentence after the value; what the placement above pins is that the cue sits outside the value's own box and outside every string the app copies.
@@ -845,21 +897,21 @@ textarea:disabled {
  * It is scoped to the screen for the reason `invoice.css` states beside the invoice's own cue: the printed page draws no panel at all and draws each invoice value whole, so a cue that reached paper would mark a complete value as possibly cut off. The query is the panel's own rather than an inherited effect of `print.css` hiding the dialog the panel is drawn in, so the sentence stays off paper whatever that hiding comes to say.
  */
 @media screen {
-	.pay-term.fit-sized::after,
-	.pay-account.fit-sized::after,
-	.pay-balance.fit-sized::after,
-	.pay-result.fit-sized::after {
+	.pay-term.fit-sized.fit-cue::after,
+	.pay-account.fit-sized.fit-cue::after,
+	.pay-balance.fit-sized.fit-cue::after,
+	.pay-result.fit-sized.fit-cue::after {
 		content: "If the value is cut off, scroll it.";
 		color: var(--ink-muted);
 		user-select: none;
 	}
 
-	.pay-term.fit-sized::after {
+	.pay-term.fit-sized.fit-cue::after {
 		grid-column: 1 / -1;
 	}
 
-	.pay-account.fit-sized::after,
-	.pay-balance.fit-sized::after {
+	.pay-account.fit-sized.fit-cue::after,
+	.pay-balance.fit-sized.fit-cue::after {
 		flex: 0 0 100%;
 	}
 }
