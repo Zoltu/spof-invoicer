@@ -1,4 +1,4 @@
-/** The suite for `app/js/payment/links.js`: the ZIP-321, Monero, and EIP-681 links one invoice becomes, the amount each one carries for its caller, the network refusal a hand-built invoice meets, the QR budget every link stays inside — measured in bytes, and pinned at the worst case each family can build rather than for the Zcash family alone — the canonical payee address the link carries and the document draws, the amount premise the Zcash address budget rests on, and the surface the module exports. */
+/** The suite for `app/js/payment/links.js`: the ZIP-321, Monero, and EIP-681 links one invoice becomes, the amount each one carries for its caller, the network refusal a hand-built invoice meets, the QR budget every link stays inside — measured in bytes, and pinned at the worst case each family can build rather than for the Zcash family alone — the canonical payee address the link carries and the document draws — a TEX payee included, carried in the spelling the payee published — the amount premise the Zcash address budget rests on, and the surface the module exports. */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -20,6 +20,9 @@ import { USDC, USDT } from "./helpers/tokens.mjs";
 import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** A mainnet TEX address from ZIP-320's own reference implementation: a Zcash payee form the validator accepts beside the transparent, Sapling, and unified ones. */
+const TEX_PAYEE = "tex1s2rt77ggv6q989lr49rkgzmh5slsksa9khdgte";
 
 /** A mainnet unified address: the second Zcash payee form the payout validator accepts. */
 const UNIFIED = "u1qpatys4zruk99pg59gcscrt7y6akvl9vrhcfyhm9yxvxz7h87q6n8cgrzzpe9zru68uq39uhmlpp5uefxu0su5uqyqfe5zp3tycn0ecl";
@@ -154,6 +157,11 @@ test("a Zcash invoice becomes its ZIP-321 link, with no optional label or messag
 
 	const unified = buildPaymentLink(zecInvoice({ payee: { name: "Studio Example", address: UNIFIED } }));
 	assert.equal(unified.uri, `zcash:${UNIFIED}?amount=1.23456789`, "a unified payee is carried the same way");
+
+	// A TEX payee reaches the link verbatim, in the spelling the payee published rather than in its `t1` twin's.
+	const tex = buildPaymentLink(zecInvoice({ payee: { name: "Studio Example", address: TEX_PAYEE } }));
+	assert.equal(tex.uri, `zcash:${TEX_PAYEE}?amount=1.23456789`);
+	assert.equal(tex.payee, TEX_PAYEE, "and the link exposes that spelling as the payee it carries");
 });
 
 test("a Monero invoice becomes its link, with no optional recipient name", () => {

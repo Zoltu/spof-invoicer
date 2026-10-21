@@ -1386,10 +1386,13 @@ test("the payout field resolves the family through the same helper the dispatche
 });
 
 test("the Zcash placeholder names every form the validator accepts", () => {
-	// The hint and the validator describe one set of forms, and `wallet/zcash-address.ts` takes the `t3` P2SH spelling as well as `t1`, `zs1`, and `u1`: a payee pasting a `t3` address must see their own form in the field.
+	// The hint and the validator describe one set of forms, and `wallet/zcash-address.ts` takes the `t3` P2SH spelling as well as `t1`, `zs1`, `u1`, and `tex1`: a payee pasting a `t3` address must see their own form in the field, and a payee who publishes a TEX address must not be told its shape is wrong.
 	const placeholder = payoutAddressPlaceholder(ASSET_REGISTRY.zec);
-	for (const form of ["t1", "t3", "zs1", "u1"]) assert.ok(placeholder.includes(form), `${form} missing from ${placeholder}`);
-	assert.match(payoutAddressGuidance(ASSET_REGISTRY.zec), /t1\/t3/);
+	for (const form of ["t1", "t3", "zs1", "u1", "tex1"]) assert.ok(placeholder.includes(form), `${form} missing from ${placeholder}`);
+	const guidance = payoutAddressGuidance(ASSET_REGISTRY.zec);
+	assert.match(guidance, /t1\/t3/);
+	assert.match(guidance, /TEX \(tex1\)/, "the guidance names the TEX form the validator accepts");
+	assert.equal(guidance.includes("wallet"), false, "and carries no caution about a wallet that cannot send to one");
 });
 
 /**

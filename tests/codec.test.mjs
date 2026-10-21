@@ -566,7 +566,7 @@ test("a privacy-chain invoice carries its own network slug and payout form throu
 		"an EVM payee in a Zcash invoice",
 		() => make({ asset: "zec", chainId: "zcash" }),
 		InvalidInvoiceError,
-		/payee\.address: zcash-address: not a Zcash payout address — expected a mainnet transparent t1\/t3, Sapling zs1, or unified u1 address/,
+		/payee\.address: zcash-address: not a Zcash payout address — expected a mainnet transparent t1\/t3, Sapling zs1, unified u1, or TEX tex1 address/,
 	);
 	rejects(
 		"a testnet unified payee in a mainnet Zcash invoice",
