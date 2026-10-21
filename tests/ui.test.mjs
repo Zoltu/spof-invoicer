@@ -1,4 +1,4 @@
-/** The suite for the create and share UI and the app shell: form state and totals, the payout-address placeholder and guidance per family, the share dialog, route dispatch, the chrome, and hostile text kept inert as text. */
+/** The suite for the create and share UI and the app shell: form state and totals, the payout-address placeholder and guidance per family, the guidance carrying no unsupported-wallet notice in place of the forms it names, the share dialog, route dispatch, the chrome, and hostile text kept inert as text. */
 
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -44,6 +44,7 @@ import {
 	shareSizeHint,
 } from "../app/js/ui/create.js";
 import { FIT_CUE_CLASS, FIT_RUNGS } from "../app/js/ui/fit-value.js";
+import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/messages.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { releasable } from "../app/js/ui/release.js";
 import { buildShareBundle, copyText } from "../app/js/ui/share.js";
@@ -1390,9 +1391,9 @@ test("the Zcash placeholder names every form the validator accepts", () => {
 	const placeholder = payoutAddressPlaceholder(ASSET_REGISTRY.zec);
 	for (const form of ["t1", "t3", "zs1", "u1", "tex1"]) assert.ok(placeholder.includes(form), `${form} missing from ${placeholder}`);
 	const guidance = payoutAddressGuidance(ASSET_REGISTRY.zec);
-	assert.match(guidance, /t1\/t3/);
+	assert.match(guidance, /t1\/t3/, "the guidance names the transparent pair the validator accepts");
 	assert.match(guidance, /TEX \(tex1\)/, "the guidance names the TEX form the validator accepts");
-	assert.equal(guidance.includes("wallet"), false, "and carries no caution about a wallet that cannot send to one");
+	assert.equal(guidance.includes(UNSUPPORTED_WALLET_MESSAGE), false, "and carries no unsupported-wallet notice in place of the forms it names");
 });
 
 /**

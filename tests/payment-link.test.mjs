@@ -15,14 +15,11 @@ import { QR_MAX_TEXT_BYTES, encodeQr } from "../app/js/util/qr.js";
 import { MAX_EVM_ADDRESS_LENGTH } from "../app/js/wallet/address.js";
 import { MAX_MONERO_ADDRESS_LENGTH } from "../app/js/wallet/monero-address.js";
 import { InvalidZcashAddressError, requireZcashAddress } from "../app/js/wallet/zcash-address.js";
-import { PAYEE, XMR_PAYEE, ZEC_PAYEE } from "./helpers/payee-vectors.mjs";
+import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TEX_PAYEE } from "./helpers/payee-vectors.mjs";
 import { USDC, USDT } from "./helpers/tokens.mjs";
 import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-
-/** A mainnet TEX address from ZIP-320's own reference implementation: a Zcash payee form the validator accepts beside the transparent, Sapling, and unified ones. */
-const TEX_PAYEE = "tex1s2rt77ggv6q989lr49rkgzmh5slsksa9khdgte";
 
 /** A mainnet unified address: the second Zcash payee form the payout validator accepts. */
 const UNIFIED = "u1qpatys4zruk99pg59gcscrt7y6akvl9vrhcfyhm9yxvxz7h87q6n8cgrzzpe9zru68uq39uhmlpp5uefxu0su5uqyqfe5zp3tycn0ecl";
@@ -159,9 +156,9 @@ test("a Zcash invoice becomes its ZIP-321 link, with no optional label or messag
 	assert.equal(unified.uri, `zcash:${UNIFIED}?amount=1.23456789`, "a unified payee is carried the same way");
 
 	// A TEX payee reaches the link verbatim, in the spelling the payee published rather than in its `t1` twin's.
-	const tex = buildPaymentLink(zecInvoice({ payee: { name: "Studio Example", address: TEX_PAYEE } }));
-	assert.equal(tex.uri, `zcash:${TEX_PAYEE}?amount=1.23456789`);
-	assert.equal(tex.payee, TEX_PAYEE, "and the link exposes that spelling as the payee it carries");
+	const tex = buildPaymentLink(zecInvoice({ payee: { name: "Studio Example", address: ZEC_TEX_PAYEE } }));
+	assert.equal(tex.uri, `zcash:${ZEC_TEX_PAYEE}?amount=1.23456789`);
+	assert.equal(tex.payee, ZEC_TEX_PAYEE, "and the link exposes that spelling as the payee it carries");
 });
 
 test("a Monero invoice becomes its link, with no optional recipient name", () => {

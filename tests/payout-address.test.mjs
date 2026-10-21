@@ -1,4 +1,4 @@
-/** The suite for `app/js/wallet/payout-address.js`: the family dispatch, the Zcash branch's TEX vector accepted and its testnet spelling refused by name, the rules it shares with `assets/registry.js`'s loader — a non-EVM family's kind, contract address, and network, an EVM asset's stated `kind` and its EIP-55 checksummed contract address, a stated `decimals`, and the canonical EVM chain id — the default EVM family an asset stating none is read as, the EVM branch's two guards and the fail-closed token-contract check that keeps the second one from passing unread, total over the kinds that can reach it so no kind skips it by name and total over an asset that states no kind at all, which is refused rather than classified by the contract address it carries, its own clause for a non-string address, which the invoice validator wraps under the field path it read the value from, the address-shape clause it reads from `wallet/address.ts` rather than restating, the refusals of an address that belongs to another family, the mainnet unified address the Zcash branch accepts and the testnet one it refuses by name, and the shape checks that keep a `null` or primitive asset and a non-string address inside the module's own error contract; the privacy-chain branches are driven with the minimal `family`-only assets they need, which is the one place this dispatcher is laxer than the loader, and the shape rules both readers apply as one statement — an asset the loader admits for its shape being one the dispatcher accepts, and the fault either reports being the other's own wording of the same rule. */
+/** The suite for `app/js/wallet/payout-address.js`: the family dispatch, the rules it shares with `assets/registry.js`'s loader — a non-EVM family's kind, contract address, and network, an EVM asset's stated `kind` and its EIP-55 checksummed contract address, a stated `decimals`, and the canonical EVM chain id — the default EVM family an asset stating none is read as, the EVM branch's two guards and the fail-closed token-contract check that keeps the second one from passing unread, total over the kinds that can reach it so no kind skips it by name and total over an asset that states no kind at all, which is refused rather than classified by the contract address it carries, its own clause for a non-string address, which the invoice validator wraps under the field path it read the value from, the address-shape clause it reads from `wallet/address.ts` rather than restating, the refusals of an address that belongs to another family, the mainnet unified address the Zcash branch accepts and the testnet one it refuses by name, the Zcash branch's TEX vector accepted and its testnet spelling refused by name, and the shape checks that keep a `null` or primitive asset and a non-string address inside the module's own error contract; the privacy-chain branches are driven with the minimal `family`-only assets they need, which is the one place this dispatcher is laxer than the loader, and the shape rules both readers apply as one statement — an asset the loader admits for its shape being one the dispatcher accepts, and the fault either reports being the other's own wording of the same rule. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,6 +8,7 @@ import { InvalidChecksumError, addressShapeMessage, normalizeAddress, toChecksum
 import { InvalidMoneroAddressError } from "../app/js/wallet/monero-address.js";
 import { UnreadableTokenContractError, UnsupportedPayoutFamilyError, requirePayoutAddress } from "../app/js/wallet/payout-address.js";
 import { InvalidZcashAddressError, TestnetTexAddressError, TestnetUnifiedAddressError } from "../app/js/wallet/zcash-address.js";
+import { ZEC_TEX_PAYEE, ZEC_TEX_TESTNET_PAYEE } from "./helpers/payee-vectors.mjs";
 import { refusalError, refusalMessage } from "./helpers/refusals.mjs";
 import { USDC, USDC_LOWER } from "./helpers/tokens.mjs";
 
@@ -25,12 +26,6 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 /** A mainnet Sapling address, one of the Zcash forms this module accepts. */
 const ZCASH_ADDRESS = "zs1z7rejlpsa98s2rrrfkwmaxu53e4ue0ulcrw0h4x5g8jl04tak0d3mm47vdtahatqrlkngh9slya";
-
-/** A mainnet TEX address from ZIP-320's own reference implementation: the transparent-source-only spelling of the same script `t1VmmGiyjVNeCjxDZzg7vZmd99WyzVby9yC` names. */
-const TEX_ADDRESS = "tex1s2rt77ggv6q989lr49rkgzmh5slsksa9khdgte";
-
-/** A testnet TEX address, which the Zcash branch refuses by name so no testnet address reaches a mainnet-only invoice. */
-const TEX_TESTNET = "textest1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqggnfr9";
 
 /** A mainnet unified address: a Bech32m container the Zcash branch accepts on its checksum, human-readable part, and length, reading nothing behind it. */
 const UNIFIED_ADDRESS = "u1qpatys4zruk99pg59gcscrt7y6akvl9vrhcfyhm9yxvxz7h87q6n8cgrzzpe9zru68uq39uhmlpp5uefxu0su5uqyqfe5zp3tycn0ecl";
@@ -61,9 +56,9 @@ test("the Zcash and Monero branches validate against their own syntax", () => {
 	assert.equal(requirePayoutAddress(ZCASH_ADDRESS, ZCASH), ZCASH_ADDRESS);
 	assert.equal(requirePayoutAddress(MONERO_ADDRESS, MONERO), MONERO_ADDRESS);
 
-	assert.equal(requirePayoutAddress(TEX_ADDRESS, ZCASH), TEX_ADDRESS, "a mainnet TEX address is a payable Zcash payee, stored in the spelling the payee wrote");
-	assert.equal(requirePayoutAddress(TEX_ADDRESS.toUpperCase(), ZCASH), TEX_ADDRESS, "and either spelling BIP-173 gives it is the one address");
-	assert.throws(() => requirePayoutAddress(TEX_TESTNET, ZCASH), TestnetTexAddressError, "a testnet TEX address is refused by name");
+	assert.equal(requirePayoutAddress(ZEC_TEX_PAYEE, ZCASH), ZEC_TEX_PAYEE, "a mainnet TEX address is a payable Zcash payee, stored in the spelling the payee wrote");
+	assert.equal(requirePayoutAddress(ZEC_TEX_PAYEE.toUpperCase(), ZCASH), ZEC_TEX_PAYEE, "and either spelling BIP-173 gives it is the one address");
+	assert.throws(() => requirePayoutAddress(ZEC_TEX_TESTNET_PAYEE, ZCASH), TestnetTexAddressError, "a testnet TEX address is refused by name");
 
 	assert.equal(requirePayoutAddress(UNIFIED_ADDRESS, ZCASH), UNIFIED_ADDRESS, "a mainnet unified address is a payable Zcash payee");
 	assert.equal(requirePayoutAddress(UNIFIED_ADDRESS.toUpperCase(), ZCASH), UNIFIED_ADDRESS, "and either spelling BIP-173 gives it is the one address");

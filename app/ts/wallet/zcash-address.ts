@@ -7,7 +7,7 @@
  * A unified address is accepted, not certified: ZIP 316 wraps its receivers in an F4Jumble encoding this module does not implement, so nothing behind the container is read and no set of receivers is claimed — the Bech32m checksum, the mainnet human-readable part `u`, the length bound below, and the payload size floor below are the whole of what {@link ZcashAddress}'s unified member certifies.
  * The payload is measured rather than parsed: ZIP 316 spells the receivers a container carries as the concatenation of one or more `typecode || length || addr` items and requires at least one of them, and prefixes that list with the human-readable part padded to 16 bytes before F4Jumble preserves the length, so a container shorter than {@link MIN_UNIFIED_PAYLOAD_BYTES} is below the smallest item list the grammar can spell and is refused rather than certified as a payee.
  * A unified address is the default receiving form in modern wallets, so refusing the form outright would leave this app unable to invoice most Zcash payees.
- * A TEX address is ZIP-320's transparent-source-only spelling of an unshielded one: its payload is the 20-byte HASH160 a `t1`/`t3` address of the same script carries beside its version bytes, with no version byte of its own, so the two spellings name one script and this module certifies the payload and nothing behind it — the Bech32m checksum, the mainnet human-readable part `tex`, the 42-character length a 20-byte payload takes, and that payload width.
+ * A TEX address is ZIP-320's transparent-source-only spelling of an unshielded one: its payload is the 20-byte HASH160 a `t1`/`t3` address of the same script carries beside its version bytes, with no version bytes of its own, so the two spellings name one script and this module certifies the payload and nothing behind it — the Bech32m checksum, the mainnet human-readable part `tex`, the 42-character length a 20-byte payload takes, and that payload width.
  * An accepted TEX address is stored exactly as the payee wrote it, Bech32 case normalisation aside, and is never rewritten into the `t1…` or `t3…` spelling of the same hash: the spelling the payee published is the one an invoice carries.
  * The bound is drawn from what the address is turned into rather than from the address format: a ZIP-321 `zcash:` payment link carries the scheme, the address, `?amount=`, and the amount, and `payment/schemes.ts` derives {@link MAX_ZCASH_ADDRESS_LENGTH} from the capacity contract this app's budget and encoder share (`util/qr-capacity.ts`'s 412 bytes at version 15, level M) less what such a link spends on everything but the address — so the bound a container is held to and the ceiling its own link is encoded at are one derivation rather than two figures kept in step by hand, and a longer container is refused where the payee can still see what they pasted.
  * Every accepted form is mainnet-only: a testnet `tm`/`t2` transparent string, a testnet or regtest `ztestsapling`/`zregtest` Sapling one, Sprout's `zc`, a TEX address under the testnet `textest` part, and a unified container under another human-readable part — the testnet `utest` (`utest1…`) or the regtest `uregtest` — are all refused.
@@ -121,10 +121,10 @@ function bech32TextLength(hrp: string, payloadBytes: number): number {
 const SAPLING_PAYLOAD_BYTES = 43;
 
 /** The human-readable part a mainnet Sapling address carries, read by the text length below and by the part check {@link saplingRefusal} applies. */
-const SAPLING_HRP = "zs";
+const SAPLING_MAINNET_HRP = "zs";
 
 /** The characters a mainnet Sapling address occupies, derived from its payload width rather than stated beside it, as each TEX part length is: the human-readable part, the separator, the 69 words a 43-byte payload takes, and the checksum. */
-const SAPLING_TEXT_LENGTH = bech32TextLength(SAPLING_HRP, SAPLING_PAYLOAD_BYTES);
+const SAPLING_TEXT_LENGTH = bech32TextLength(SAPLING_MAINNET_HRP, SAPLING_PAYLOAD_BYTES);
 
 /**
  * The longest paste the uniform-case probe at the end of {@link classifyZcashAddress} case-maps: the longer of {@link MAX_TRANSPARENT_TEXT_LENGTH} and {@link SAPLING_TEXT_LENGTH}, 78 characters.
@@ -143,14 +143,16 @@ const MAX_CASE_PROBE_TEXT_LENGTH = Math.max(MAX_TRANSPARENT_TEXT_LENGTH, SAPLING
 const MAX_BECH32_TEXT_LENGTH = 90;
 
 /**
- * The text prefixes the accepted forms are dispatched by: the transparent `t1`/`t3` pair and Sapling's `zs1`.
+ * The transparent and Sapling text prefixes a candidate is dispatched on, each read off the table its own form is stated in: the `t1`/`t3` pair from {@link TRANSPARENT_VERSIONS}, and `zs1` from {@link SAPLING_MAINNET_HRP} by {@link bech32PrefixOf}.
  *
- * Each prefix is read off the table its form is stated in — the transparent pair from {@link TRANSPARENT_VERSIONS}, the Sapling prefix from {@link SAPLING_HRP} by {@link bech32PrefixOf}, and the unified and TEX prefixes below from {@link UNIFIED_HRPS} and {@link TEX_HRPS} — so the text a string is dispatched by and the version or part that admits it cannot drift apart.
+ * The unified and TEX prefixes are derived the same way from their own tables — {@link UNIFIED_TEXT_PREFIX} from {@link UNIFIED_HRPS} and {@link TEX_TEXT_PREFIX} from {@link TEX_HRPS} — so a form's text prefix is always spelled from the part that admits it, and a form added later states its prefix where its parts are listed rather than being written into this block or into the dispatch.
+ * Because every prefix is read off its own form's table, the text a string is dispatched by and the version or part that admits it cannot drift apart.
  * A leading text prefix is not the human-readable part: a Bech32 string's part runs up to its last `1`, so a string that starts `zs1` can carry another part and still satisfy that other part's own checksum — the decoded part, not the leading text, is what admits a Sapling address.
  * Text leading with a Bech32 prefix is therefore a candidate that decodes under that part, not yet an accepted address.
  */
 const TRANSPARENT_TEXT_PREFIXES: readonly string[] = TRANSPARENT_VERSIONS.map(({ prefix }) => prefix);
-const SAPLING_TEXT_PREFIX = bech32PrefixOf(SAPLING_HRP);
+const SAPLING_TEXT_PREFIX = bech32PrefixOf(SAPLING_MAINNET_HRP);
+
 /** Sprout's mainnet Base58Check prefix; Sprout cannot receive funds, so the prefix is named rather than left to the generic refusal, and it is probed in either case because it is the form the paste points at rather than a spelling this module accepts. */
 const SPROUT_TEXT_PREFIX = "zc";
 
@@ -233,7 +235,8 @@ interface NetworkRefusalClass<Network extends UnpayableZcashNetwork> {
 /**
  * The {@link UnpayableHrpNetwork} for `hrp` on `network`, refused by the error class `Construct`.
  *
- * The entry states its network once and the refusal it carries names that same network, so an entry cannot be listed under one network and refused as another; and the class is named rather than wrapped, so a table states one builder per part and no adapter function stands between the table and the error class.
+ * The entry states its network once and the refusal it carries names that same network, so an entry cannot be listed under one network and refused as another.
+ * This factory is the one adapter between the table and the error class: it closes over the entry's `network` and hands it to the class's constructor beside the paste and the reason, so each row of a table states a part, a network, and a class rather than a small builder function of its own.
  */
 function unpayablePart<Network extends UnpayableZcashNetwork>(
 	hrp: string,
@@ -243,12 +246,17 @@ function unpayablePart<Network extends UnpayableZcashNetwork>(
 	return { hrp, network, refusal: (value, reason) => new Construct(value, network, reason) };
 }
 
-/** The bytes a TEX payload carries: the {@link TRANSPARENT_HASH_BYTES}-byte HASH160 a `t1`/`t3` transparent payload carries beside its version byte, with no version byte of its own, so the two spellings name one script. */
+/** The bytes a TEX payload carries: the {@link TRANSPARENT_HASH_BYTES}-byte HASH160 a `t1`/`t3` transparent payload carries beside its version bytes, with no version bytes of its own, so the two spellings name one script. */
 const TEX_PAYLOAD_BYTES = TRANSPARENT_HASH_BYTES;
 
-/** The human-readable part and the text prefix a mainnet TEX address carries: ZIP-320's `tex`, spelled into `tex1…` by the Bech32 separator, so the prefix the payee hint renders and the refusals that name it read one statement rather than a copy of it. */
-const TEX_HRP = "tex";
-const TEX_TEXT_PREFIX = bech32PrefixOf(TEX_HRP);
+/**
+ * The human-readable part a mainnet TEX address carries: ZIP-320's `tex`, which is the part {@link TEX_HRPS} admits and the one {@link bech32mRefusal} classifies a decoded TEX paste by.
+ * The name says which network's part it is because {@link TEX_HRPS} lists the testnet `textest` part beside it: the mainnet part is the one this module pays, not the form's only part.
+ */
+const TEX_MAINNET_HRP = "tex";
+
+/** The text prefix a mainnet TEX address leads with, spelled from {@link TEX_MAINNET_HRP} by {@link bech32PrefixOf}: the one statement of it that the payee hint renders, {@link classifyZcashAddress} dispatches on, and the refusals that name it read. */
+const TEX_TEXT_PREFIX = bech32PrefixOf(TEX_MAINNET_HRP);
 
 /**
  * The form an accepted address carries: which validator admitted it, and therefore whether a stored value is the lower-case spelling.
@@ -297,8 +305,9 @@ export { MAX_ZCASH_ADDRESS_LENGTH };
  * The item list is the concatenation of one or more items, each a `typecode` (`compactSize`), a `length` (`compactSize`), and that many bytes of receiver, and the shortest item the grammar can spell is a transparent P2PKH or P2SH receiver: a 20-byte hash, framed by one byte of typecode and one byte of length.
  * The 16 bytes of padded human-readable part plus those 22 bytes are therefore the smallest container a legal address can have, and one below that size cannot be the concatenation of receivers the grammar spells at all, so it is refused rather than certified as a payable mainnet address: the checksum, the human-readable part, and the length bound above admit a container of any payload whatever, which would otherwise be rendered to the payee as the address the invoice pays to.
  * The Sapling and Orchard receivers are 43 bytes, framed 45, so a container holding one of those is longer than this floor and is admitted on the same length check.
+ * It is exported so the suite that pins this boundary names the floor where it refuses and admits a container, rather than restating the figure beside it.
  */
-const MIN_UNIFIED_PAYLOAD_BYTES = 38;
+export const MIN_UNIFIED_PAYLOAD_BYTES = 38;
 
 const decodeBase58Check = base58check(sha256);
 
@@ -361,7 +370,7 @@ const UNIFIED_HRPS: readonly HrpNetwork[] = [
  * Only the mainnet entry is payable here: ZIP-320 pairs the testnet part with mainnet's, so a paste under `textest` is a real testnet address and is refused by name rather than as a malformed one, which is the same distinction the unified table above draws, and the testnet entry carries {@link TestnetTexAddressError} through {@link unpayablePart}, whose {@link NetworkRefusalClass} parameter holds that entry's `testnet` to the one network the class spells.
  */
 const TEX_HRPS: readonly HrpNetwork[] = [
-	{ hrp: TEX_HRP, network: MAINNET_NETWORK },
+	{ hrp: TEX_MAINNET_HRP, network: MAINNET_NETWORK },
 	unpayablePart("textest", "testnet", TestnetTexAddressError),
 ];
 
@@ -454,7 +463,7 @@ function mixedCaseReason(text: string, scheme: string): string | null {
 /**
  * The reason a paste of a length its form never has is refused with, or `null` when its length is the form's own: the expected and the obtained character counts, and never a check the paste passed.
  *
- * `form` names the form and part the length belongs to — `mainnet Sapling zs1`, `mainnet TEX tex1`, `testnet TEX textest1` — so each caller states its own form's figures and this states the wording once.
+ * `form` names the form and part the length belongs to — `Sapling zs1`, `mainnet TEX tex1`, `testnet TEX textest1` — so each caller states its own form's figures and this states the wording once.
  */
 function formLengthReason(text: string, expectedCharacters: number, form: string): string | null {
 	return text.length === expectedCharacters ? null : `expected ${expectedCharacters} characters for a ${form} address, got ${text.length}`;
@@ -503,18 +512,18 @@ function saplingRefusal(text: string): InvalidZcashAddressError | null {
 	}
 	const decoded = decodeSapling(text);
 	if (decoded === null) {
-		// A paste of a length no mainnet Sapling address has cannot be one whatever its checksum reads, so the length is what it is refused for; a paste of the form's own length is refused for the checksum it failed.
-		const length = formLengthReason(text, SAPLING_TEXT_LENGTH, `mainnet Sapling ${SAPLING_TEXT_PREFIX}`);
+		// A paste of a length the Sapling form never has cannot be one whatever its checksum reads, so the length is what it is refused for; a paste of the form's own length is refused for the checksum it failed.
+		const length = formLengthReason(text, SAPLING_TEXT_LENGTH, `Sapling ${SAPLING_TEXT_PREFIX}`);
 		if (length !== null) return new InvalidZcashAddressError(text, length);
 		return new InvalidZcashAddressError(text, checksumReason("Bech32"));
 	}
-	if (decoded.prefix !== SAPLING_HRP) {
+	if (decoded.prefix !== SAPLING_MAINNET_HRP) {
 		// The decoded part is read off the input and can be arbitrarily long on a hostile paste, so the refusal names the part it expected instead of echoing the one it found.
-		return new InvalidZcashAddressError(text, `expected the Bech32 human-readable part ${describe(SAPLING_HRP)} (mainnet Sapling)`);
+		return new InvalidZcashAddressError(text, `expected the Bech32 human-readable part ${describe(SAPLING_MAINNET_HRP)} (mainnet Sapling)`);
 	}
 	const payloadBytes = saplingPayloadBytes(decoded.words);
 	if (payloadBytes === null) {
-		// The checksum covers the words and the decode above verified it, so the failure is the word count rather than any check over the text; the count trails a fixed number into the message and the ten-character reason is what a user needs.
+		// The checksum covers the words and the decode above verified it, so the failure is the word count rather than any check over the text, and the reason names that count beside the padding rule it breaks.
 		return new InvalidZcashAddressError(text, paddingReason(decoded.words.length, "Bech32"));
 	}
 	if (payloadBytes !== SAPLING_PAYLOAD_BYTES) {
@@ -584,7 +593,7 @@ function bech32mPayloadBytes(words: number[]): number | null {
  * The bound is applied before the container is decoded, so a paste past it is never classified by the network its text prefix names — a bound this app applies to a mainnet address leaves no container to read.
  * It takes the paste and the bound, not the part: what refused the value is this app's QR budget rather than the form or the network its spelling names, so the part a Bech32m candidate carries says nothing about this refusal.
  */
-function overLengthUnifiedRefusal(text: string, maxTextLength: number): InvalidZcashAddressError {
+function unifiedOverLengthRefusal(text: string, maxTextLength: number): InvalidZcashAddressError {
 	return new InvalidZcashAddressError(
 		text,
 		`it is longer than the ${maxTextLength} characters a \`zcash:\` payment link carries in this app's QR symbol`,
@@ -602,10 +611,8 @@ function overLengthUnifiedRefusal(text: string, maxTextLength: number): InvalidZ
 interface Bech32mForm {
 	/** The form as the unknown-part refusal names it: `unified address` or `TEX address`. */
 	readonly label: string;
-	/** The human-readable parts the form is addressed under, each paired with the network it names and, on a network this app does not pay, the refusal a paste that decodes under it gets. */
+	/** The human-readable parts the form is addressed under, each paired with the network it names and, on a network this app does not pay, the refusal a paste that decodes under it gets; the first entry is the mainnet part, which is the payout part the form pays and its refusals name. */
 	readonly hrps: readonly HrpNetwork[];
-	/** The mainnet part of `hrps`: the constant that table's own {@link MAINNET_NETWORK} entry is built from, so the part its refusals name as the one this app pays and the part the table carries are one statement rather than a lookup that could miss. */
-	readonly mainnetHrp: string;
 	/** The bound the paste is measured against before its decode, and the limit its decode and its case probe read it under. */
 	readonly maxTextLength: number;
 	/** The refusal a paste past `maxTextLength` gets, handed that bound so the figure that refused the paste and the figure its reason quotes are one, worded by the form whose bound refused it and, for the fixed-length TEX text, by the part the paste's own spelling names. */
@@ -619,7 +626,8 @@ interface Bech32mForm {
 /**
  * The refusal a paste of a Bech32m form gets, or `null` when it is an accepted mainnet address of that form.
  *
- * `part` is the human-readable-part entry the paste's own spelling named, which {@link bech32mAnswer} resolved as it recognized the candidate and carried in: the two refusals that answer a paste before its container is read — the bound applied ahead of the decode, and the length a failed decode is reported for — are worded by the part the paste itself names, so no refusal looks that entry up a second time.
+ * `part` is the human-readable-part entry the paste's leading text names, which {@link bech32mAnswer} resolved as it recognized the candidate and carried in, and it words the TEX form's two refusals that answer a paste before its payload is read — the bound applied ahead of the decode, and the length a failed decode is reported for — while the unified form states no fixed text length and its bound refusal is worded by the QR budget that refused it.
+ * That entry is the part the leading text spells, not the part the decode produces: the two are the same for a well-formed paste and can differ for any other, since a string leading `tex1` can carry another part and still satisfy that part's checksum, so the decoded part is looked up in the form's table by {@link knownHrp} once the decode has produced it, and that lookup misses for a part the form does not carry even where the recognition step found a candidate.
  * The order of the checks is the reason each paste reads as it does: the bound comes before the decode, the decoded human-readable part decides the network, a paste of a length no address of the form has is refused for that length where the decode is what noticed it, and the payload is measured last, so a paste is refused for the one thing that is wrong with it.
  * The part decides the network before the payload is measured, so a well-formed address on another network is refused by name whatever its payload is, and only a mainnet one is held to the payload rule its form states.
  */
@@ -633,7 +641,7 @@ function bech32mRefusal(text: string, form: Bech32mForm, part: HrpNetwork): Inva
 	}
 	const decoded = decodeBech32m(text, form.maxTextLength);
 	if (decoded === null) {
-		// A paste of a length no address of this form has cannot be one whatever its checksum reads, so the length is what it is refused for; a paste of the form's own length is refused for the checksum it failed.
+		// The length answers a failed decode before the checksum does, for the reason the Sapling branch's own decode-failure comment records.
 		const length = form.lengthReason === null ? null : form.lengthReason(text, part);
 		if (length !== null) return new InvalidZcashAddressError(text, length);
 		return new InvalidZcashAddressError(text, checksumReason("Bech32m"));
@@ -646,7 +654,7 @@ function bech32mRefusal(text: string, form: Bech32mForm, part: HrpNetwork): Inva
 	if (known.network !== MAINNET_NETWORK) {
 		return known.refusal(
 			text,
-			`it decodes under the Bech32m human-readable part ${describe(known.hrp)} (${known.network}), and only the mainnet part ${describe(form.mainnetHrp)} is a payout address this app pays`,
+			`it decodes under the Bech32m human-readable part ${describe(known.hrp)} (${known.network}), and only the mainnet part ${describe(form.hrps[0].hrp)} is a payout address this app pays`,
 		);
 	}
 	const payloadBytes = bech32mPayloadBytes(decoded.words);
@@ -671,7 +679,7 @@ function texPartName(part: HrpNetwork): string {
 /**
  * The refusal a TEX candidate past the form's own {@link MAX_BECH32_TEXT_LENGTH} bound gets: the bound that refused it rather than the codec's generic checksum message, under the network and part the paste itself names.
  *
- * The bound is handed in as the form's own figure rather than restated here, so the length that refused the paste and the length the reason quotes are one number, as {@link overLengthUnifiedRefusal} takes its own.
+ * The bound is handed in as the form's own figure rather than restated here, so the length that refused the paste and the length the reason quotes are one number, as {@link unifiedOverLengthRefusal} takes its own.
  * A bound refusal answers a paste whose decode never ran, so the part is the one {@link bech32mAnswer} read off the paste's leading text and carried in here; a `textest1…` paste past the bound is then refused under the testnet part its own spelling names.
  */
 function texOverLengthRefusal(text: string, maxTextLength: number, part: HrpNetwork): InvalidZcashAddressError {
@@ -710,9 +718,8 @@ function texPayloadReason(bytes: number): string | null {
 const UNIFIED_FORM: Bech32mForm = {
 	label: "unified address",
 	hrps: UNIFIED_HRPS,
-	mainnetHrp: UNIFIED_MAINNET_HRP,
 	maxTextLength: MAX_ZCASH_ADDRESS_LENGTH,
-	overLength: overLengthUnifiedRefusal,
+	overLength: unifiedOverLengthRefusal,
 	lengthReason: null,
 	payloadReason: unifiedPayloadReason,
 };
@@ -725,7 +732,6 @@ const UNIFIED_FORM: Bech32mForm = {
 const TEX_FORM: Bech32mForm = {
 	label: "TEX address",
 	hrps: TEX_HRPS,
-	mainnetHrp: TEX_HRP,
 	maxTextLength: MAX_BECH32_TEXT_LENGTH,
 	overLength: texOverLengthRefusal,
 	lengthReason: texLengthReason,
@@ -765,13 +771,13 @@ type ZcashAddressVerdict =
 	| { readonly kind: "refused"; readonly error: InvalidZcashAddressError };
 
 /**
- * What one accepted form answers about a paste: that the paste is not a candidate of that form at all, that the form admits it, or the refusal that answered it.
+ * What one accepted form answers about a paste: that the paste is not a candidate of that form at all, that the form admits it and the answer names that form, or the refusal that answered it.
  *
- * A form resolves what its own refusals are worded by before it answers — {@link bech32mAnswer} resolves the human-readable-part entry a Bech32m paste's own spelling names — so a value the recognition step has already read reaches the refusal that needs it, and no refusal looks a part up a second time or treats a miss that step cannot have made.
+ * A form resolves what its own refusals are worded by before it answers — {@link bech32mAnswer} resolves the human-readable-part entry a Bech32m paste's leading text names — so a value the recognition step has already read reaches the refusal that needs it, and a refusal that needs the decoded part rather than the leading text looks that part up once the decode has produced it, as {@link bech32mRefusal} does through {@link knownHrp}.
  */
 type FormAnswer =
 	| { readonly kind: "not-a-candidate" }
-	| { readonly kind: "accepted" }
+	| { readonly kind: "accepted"; readonly form: AcceptedZcashForm }
 	| { readonly kind: "refused"; readonly error: InvalidZcashAddressError };
 
 /** A form's answer to a paste: the one function {@link classifyZcashAddress} asks, so the test that recognizes a candidate and the refusal that answers one are one reading of the text. */
@@ -781,41 +787,43 @@ type FormAnswerer = (text: string) => FormAnswer;
 function transparentAnswer(text: string): FormAnswer {
 	if (!TRANSPARENT_TEXT_PREFIXES.some((prefix) => text.startsWith(prefix))) return { kind: "not-a-candidate" };
 	const refusal = transparentRefusal(text);
-	return refusal === null ? { kind: "accepted" } : { kind: "refused", error: refusal };
+	return refusal === null ? { kind: "accepted", form: "transparent" } : { kind: "refused", error: refusal };
 }
 
 /** The answer the Sapling form gives about `text`: a paste leading with {@link SAPLING_TEXT_PREFIX} in either case is a candidate of it, and {@link saplingRefusal} answers it. */
 function saplingAnswer(text: string): FormAnswer {
 	if (!leadsWithPrefixInEitherCase(text, SAPLING_TEXT_PREFIX)) return { kind: "not-a-candidate" };
 	const refusal = saplingRefusal(text);
-	return refusal === null ? { kind: "accepted" } : { kind: "refused", error: refusal };
+	return refusal === null ? { kind: "accepted", form: "sapling" } : { kind: "refused", error: refusal };
 }
 
 /**
- * The answer a Bech32m form gives about `text`: a paste whose own spelling names one of the form's human-readable parts is a candidate of it, and the entry it names is carried into {@link bech32mRefusal}, which words the two length refusals by it.
+ * The answer a Bech32m form gives about `text`: a paste whose own spelling names one of the form's human-readable parts is a candidate of it, and the entry it names is carried into {@link bech32mRefusal}, which words the TEX form's two length refusals by it.
  *
- * Reading the part here rather than in the refusal is what makes a candidate and its part one lookup: the entry a paste names is decided once, and every refusal that names a part reads the one already decided.
+ * `acceptedForm` is the form this answerer answers for, so the acceptance it returns states the form that admitted the paste rather than leaving a caller to pair the answer with a key it already knew.
+ * Reading the part here rather than in the refusal is what makes a candidate and its leading text one lookup: the entry a paste's leading text names is decided once, and the refusals that answer a paste before its decode runs — the form's bound, and the length a failed decode is reported for — read that entry rather than looking one up again.
+ * The decoded part is a different reading of the paste, so {@link bech32mRefusal} looks it up once, after the decode, through {@link knownHrp}.
  */
-function bech32mAnswer(form: Bech32mForm): FormAnswerer {
+function bech32mAnswer(form: Bech32mForm, acceptedForm: AcceptedZcashForm): FormAnswerer {
 	return (text) => {
 		const part = hrpCandidate(text, form.hrps);
 		if (part === null) return { kind: "not-a-candidate" };
 		const refusal = bech32mRefusal(text, form, part);
-		return refusal === null ? { kind: "accepted" } : { kind: "refused", error: refusal };
+		return refusal === null ? { kind: "accepted", form: acceptedForm } : { kind: "refused", error: refusal };
 	};
 }
 
-/** The answer the unified form gives about a paste: {@link bech32mAnswer} over {@link UNIFIED_FORM}. */
-const unifiedAnswer: FormAnswerer = bech32mAnswer(UNIFIED_FORM);
+/** The answer the unified form gives about a paste: {@link bech32mAnswer} over {@link UNIFIED_FORM}, answering for the `unified` form. */
+const unifiedAnswer: FormAnswerer = bech32mAnswer(UNIFIED_FORM, "unified");
 
-/** The answer the TEX form gives about a paste: {@link bech32mAnswer} over {@link TEX_FORM}. */
-const texAnswer: FormAnswerer = bech32mAnswer(TEX_FORM);
+/** The answer the TEX form gives about a paste: {@link bech32mAnswer} over {@link TEX_FORM}, answering for the `tex` form. */
+const texAnswer: FormAnswerer = bech32mAnswer(TEX_FORM, "tex");
 
 /**
- * The answer each accepted form gives about a paste, keyed by the form {@link classifyZcashAddress} records for an acceptance: {@link transparentAnswer}, {@link saplingAnswer}, {@link unifiedAnswer}, and {@link texAnswer}.
+ * The answer each accepted form gives about a paste, keyed by the form its acceptance names: {@link transparentAnswer}, {@link saplingAnswer}, {@link unifiedAnswer}, and {@link texAnswer}.
  *
- * The mapping is total over {@link AcceptedZcashForm}, as {@link ADDRESS_FORM_HINTS} and {@link CASE_FOLDED_FORMS} are, so a form added to that key set states the answer that reads a paste for it before the module compiles, and no form is accepted whose branch is missing.
- * The form is stated once, as the entry's key, and the answer once, as its value; the record holds the key set total and says nothing about what a value names, so each answer is named for the form it reads and {@link classifyZcashAddress} reads it back under the same form it dispatches.
+ * This record is the single statement of which forms exist and in what order they are tried: the transparent `t1`/`t3` pair first, Sapling's `zs1` next, the mainnet unified `u1` after it, and the mainnet TEX `tex1` last, and {@link classifyZcashAddress} iterates the entries in that declaration order, so the first form that recognizes a paste answers it and a form declared later never sees one an earlier form claimed.
+ * The record is keyed by {@link AcceptedZcashForm}, as {@link ADDRESS_FORM_HINTS} and {@link CASE_FOLDED_FORMS} are, so the compiler refuses a record that omits one of those forms: the place a form is added is the place it is dispatched, and no companion order list has to be kept in step with it.
  */
 const FORM_ANSWERS: Readonly<Record<AcceptedZcashForm, FormAnswerer>> = Object.freeze({
 	transparent: transparentAnswer,
@@ -825,24 +833,11 @@ const FORM_ANSWERS: Readonly<Record<AcceptedZcashForm, FormAnswerer>> = Object.f
 });
 
 /**
- * The order {@link classifyZcashAddress} asks {@link FORM_ANSWERS} in: the transparent `t1`/`t3` pair first, Sapling's `zs1` next, the mainnet unified `u1` after it, and the mainnet TEX `tex1` last.
- *
- * The mapping above is keyed by form and carries no priority, so the order those branches run in is stated here: the first form that recognizes a paste answers it, and a form later in the list never sees one an earlier form claimed.
- * Every name here is a key of that mapping by type, and {@link UndispatchedForm} fails to compile for a form the list leaves out, so a form added to {@link AcceptedZcashForm} states its place in this order rather than being a form no paste is dispatched to.
- */
-const FORM_DISPATCH_ORDER = Object.freeze(["transparent", "sapling", "unified", "tex"] as const);
-
-/** The forms {@link AcceptedZcashForm} lists that {@link FORM_DISPATCH_ORDER} never tries: `never`, since the order names every one of them. */
-type UndispatchedForm = Exclude<AcceptedZcashForm, (typeof FORM_DISPATCH_ORDER)[number]>;
-
-/** A type parameter nothing can satisfy: read at {@link UndispatchedForm}, it fails to compile when that alias is not `never`, which is what holds {@link FORM_DISPATCH_ORDER} to every accepted form. */
-type DispatchesEveryForm<Form extends never = UndispatchedForm> = Form;
-
-/**
  * The verdict `text` gets: the form an accepted address carries, or the refusal that says why it is not one.
  *
  * Every acceptance path runs through here, so {@link isZcashAddress} and {@link requireZcashAddress} cannot disagree about what an address is, and each refusal is built with the error class that says why: a unified container or a TEX address on another network gets {@link TestnetUnifiedAddressError} or {@link TestnetTexAddressError} through the entry its own decoding matched, everything else {@link InvalidZcashAddressError}.
- * Each form is read through its own entry of {@link FORM_ANSWERS}, asked in the order {@link FORM_DISPATCH_ORDER} states, so the accepted form and the case rule {@link CASE_FOLDED_FORMS} states are read from the branch that decided the paste rather than from the text a second time.
+ * Each form is read through its own entry of {@link FORM_ANSWERS}, iterated in the order the record declares its entries, so the accepted form the answer carries and the case rule {@link CASE_FOLDED_FORMS} states are read from the branch that decided the paste rather than from the text a second time.
+ * `Object.values` returns a record's entries in declaration order for these identifier keys, which is why this table needs no companion order list to state the order the forms are tried in.
  * A `zcash:` payment link is read first, before any address form is considered: it is the one paste here that is not an address candidate at all, and the scheme's `zc` text prefix would otherwise dispatch it into the Sprout branch, whose reason is not true of it.
  */
 function classifyZcashAddress(text: string): ZcashAddressVerdict {
@@ -856,10 +851,10 @@ function classifyZcashAddress(text: string): ZcashAddressVerdict {
 			),
 		};
 	}
-	for (const form of FORM_DISPATCH_ORDER) {
-		const answered = FORM_ANSWERS[form](text);
+	for (const answer of Object.values(FORM_ANSWERS)) {
+		const answered = answer(text);
 		if (answered.kind === "not-a-candidate") continue;
-		return answered.kind === "accepted" ? { kind: "accepted", form } : answered;
+		return answered;
 	}
 	if (leadsWithPrefixInEitherCase(text, SPROUT_TEXT_PREFIX)) {
 		// Sprout is case-sensitive Base58Check like the transparent forms, but an upper-case spelling of it is not a spelling this module could ever accept either way, and the prefix is what tells the user which form they pasted.
@@ -896,6 +891,6 @@ export function requireZcashAddress(value: unknown): ZcashAddress {
 	if (verdict.kind === "refused") {
 		throw verdict.error;
 	}
-	// The accepted form decides the spelling: a Bech32 string's two spellings are one string, so an accepted Sapling, unified, or TEX address is returned in the lower-case spelling its checksum is computed over, while an accepted transparent address is returned as it came. The cast below claims only what this function has already checked — that the text is a payout address of the accepted form — and carries no second classification of its own; {@link ZcashAddress} is the total mapping {@link AcceptedFormAddresses} read at that form, whose members are derived from the prefix constants the dispatch reads, so a renamed prefix breaks that compile before any spelling can reach this cast, and no form can be admitted without its member, while the narrowing itself has no spelling TypeScript can prove — a `string` whose text begins `tex1` is not a `tex1${string}` to the checker — and this assertion is its one statement.
+	// The checker cannot narrow a `string` leading with `tex1` to the template-literal member the form names.
 	return (CASE_FOLDED_FORMS[verdict.form] ? value.toLowerCase() : value) as ZcashAddress;
 }
