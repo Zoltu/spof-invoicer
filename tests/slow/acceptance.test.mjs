@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { codeOnly, languageFor } from "../helpers/code-only.mjs";
 import { installInteractiveDocument } from "../helpers/dom.mjs";
 import { blockNetwork } from "../helpers/network-block.mjs";
-import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_UNIFIED_PAYEE } from "../helpers/payee-vectors.mjs";
+import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TEX_PAYEE, ZEC_UNIFIED_PAYEE } from "../helpers/payee-vectors.mjs";
 import { imageXObjects } from "../helpers/pdf-images.mjs";
 import { assertSymbolCellsInDom } from "../helpers/qr-dom.mjs";
 import { assertSymbolCells } from "../helpers/qr-symbol.mjs";
@@ -525,6 +525,40 @@ test("a Zcash invoice paying a mainnet unified address carries its link and its 
 		const grid = findAll(shell.content, (node) => hasClass(node, "payment-qr"))[0];
 		assert.ok(grid, "the link's symbol is rendered");
 		assertSymbolCellsInDom(grid, view.paymentQr);
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a Zcash invoice paying a mainnet TEX address carries its link and its symbol, and offers no wallet control", () => {
+	// A mainnet TEX payee takes the same document → link → symbol path the Sapling, unified, and Monero payees take, so the spelling it is published in is the one the link and the symbol carry.
+	const invoice = zecInvoice({ payee: { name: "Studio Example Ltd", address: ZEC_TEX_PAYEE } });
+	assert.equal(invoice.payee.address, ZEC_TEX_PAYEE, "the invoice keeps the spelling the payee published");
+	const link = buildPaymentLink(invoice);
+	assert.equal(link.uri, `zcash:${ZEC_TEX_PAYEE}?amount=1.5`, "the TEX payee reaches the link the invoice asks to be paid by, spelled as published");
+	assert.equal(link.payee, ZEC_TEX_PAYEE, "and the link carries that same spelling as the payee it pays to");
+
+	const fake = installInteractiveDocument();
+	try {
+		const shell = mountSharedLink(encodeShare(invoice));
+		const text = textOf(shell.content);
+		assert.ok(paymentValues(shell.content).includes(ZEC_TEX_PAYEE), "the rendered document carries the TEX address it pays to");
+		assert.ok(paymentValues(shell.content).includes("1.5"), "and the amount, in its own copyable value");
+		assert.ok(text.includes("1.5 ZEC"), "with the total due drawn in the asset's own figures");
+		assert.ok(paymentValues(shell.content).includes(link.uri), "and the payment link built from it");
+		assert.ok(text.includes(UNSUPPORTED_WALLET_MESSAGE), "beside the hand-off sentence the other privacy-chain invoices carry");
+		assert.equal(findButton(shell.content, "Pay"), undefined, "no injected-wallet control is offered for it");
+
+		const view = buildInvoiceViewModel(invoice, TODAY);
+		assert.equal(view.paymentLink, link.uri, "the view model behind that document carries the URI the link text shows");
+		assert.deepEqual(view.paymentQr.modules, encodeQr(link.uri).modules, "and its matrix is module for module the one that displayed URI encodes");
+		const grid = findAll(shell.content, (node) => hasClass(node, "payment-qr"))[0];
+		assert.ok(grid, "the link's symbol is rendered");
+		assertSymbolCellsInDom(grid, view.paymentQr);
+
+		// The exported page carries that same pair: the printed symbol is the matrix the displayed URI encodes.
+		const pages = buildInvoicePages(view, PDF_METRICS);
+		assertSymbolCells(pages[0], view);
 	} finally {
 		fake.restore();
 	}

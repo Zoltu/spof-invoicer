@@ -564,23 +564,28 @@ test("anything that is not a string throws a TypeError carrying a bounded previe
 	}
 });
 
-test("a container too short to carry one typed receiver is refused", () => {
-	// The floor is the smallest container a legal address can have: ZIP 316 pads the one-byte mainnet human-readable part to a 16-byte field and prefixes the item list with it, F4Jumble preserves the length, and the shortest item is a 20-byte transparent hash framed by a typecode and a length — 16 + 22 = 38 bytes. The figure is the module's own exported floor, pinned once here and named by the refusals below and by the accepted boundary at it.
-	assert.equal(MIN_UNIFIED_PAYLOAD_BYTES, 38, "the floor is the smallest container a legal address can have");
+test("a container shorter than the one a legal address carries is refused", () => {
+	// The floor is the smallest container a legal address can have: ZIP 316 prefixes the item list with the human-readable part padded to 16 bytes and jumbles the two together with a length-preserving F4Jumble, and it requires an address under the `u` part to carry at least one shielded receiver — a 43-byte Sapling or Orchard raw address framed by a one-byte typecode and a one-byte length — so no legal container is shorter than 16 + 45 = 61 bytes. The figure is the module's own exported floor, pinned once here and named by the refusals below and by the accepted boundary at it.
+	assert.equal(MIN_UNIFIED_PAYLOAD_BYTES, 61, "the floor is the smallest container a legal address can have");
+
+	// librustzcash's round-trip vector is that smallest legal container: one shielded receiver, and the padded human-readable part ahead of it, accepted as a payout address here.
+	assert.equal(UNIFIED.length, 106);
+	assert.equal(bech32m.fromWords(bech32m.decode(UNIFIED, false).words).length, MIN_UNIFIED_PAYLOAD_BYTES, "the accepted vector is a container of exactly the floor");
+	assert.equal(requireZcashAddress(UNIFIED), UNIFIED, "so the floor admits the smallest container a wallet publishes");
 
 	const empty = bech32m.encode("u", [], false);
 	assert.equal(empty.startsWith("u1"), true, "an empty container is still dispatched as a unified candidate");
 	assert.equal(bech32m.decode(empty, false).words.length, 0);
 	assert.equal(isZcashAddress(empty), false, "a container with no payload at all is not a payable address");
 	refusesAsMalformedEncoding(() => requireZcashAddress(empty));
-	assert.throws(() => requireZcashAddress(empty), new RegExp(`expected at least ${MIN_UNIFIED_PAYLOAD_BYTES} payload bytes for a container carrying one typed receiver, got 0`));
+	assert.throws(() => requireZcashAddress(empty), new RegExp(`expected at least ${MIN_UNIFIED_PAYLOAD_BYTES} payload bytes for a container carrying one shielded receiver, got 0`));
 
-	// A container of one to 37 bytes is below that floor: a legal one is at least the 16-byte padded human-readable part plus the 22-byte smallest item the grammar spells, so anything shorter cannot be a container at all — 22 bytes, the old figure, is the bare item list and is refused on the same check.
-	for (const byteLength of [1, 2, 22, 37]) {
+	// A container below that floor names no address a payee's wallet can have published, whatever its shape: 22 bytes is the bare item list of the shortest receiver the grammar spells — a 20-byte transparent hash framed by a typecode and a length — and 38 is that list behind the padded human-readable part, while both are shorter than the shielded receiver a `u` address must carry. Every width from an empty container up to the byte below the floor is refused on the same check.
+	for (const byteLength of [1, 2, 22, 37, 38, 45, 60]) {
 		const short = unifiedOfBytes(byteLength);
 		assert.equal(isZcashAddress(short), false, `${byteLength} bytes`);
 		refusesAsMalformedEncoding(() => requireZcashAddress(short));
-		assert.throws(() => requireZcashAddress(short), new RegExp(`expected at least ${MIN_UNIFIED_PAYLOAD_BYTES} payload bytes for a container carrying one typed receiver, got ${byteLength}`));
+		assert.throws(() => requireZcashAddress(short), new RegExp(`expected at least ${MIN_UNIFIED_PAYLOAD_BYTES} payload bytes for a container carrying one shielded receiver, got ${byteLength}`));
 	}
 
 	// The floor is inclusive: the smallest container a legal address can have is still an accepted payout address, in either spelling.
@@ -719,7 +724,14 @@ test("a Sapling paste of the wrong length is refused for that length, not for a 
 		/^zcash-address: not a Zcash payout address — expected 78 characters for a Sapling zs1 address, got 77; value: /,
 	);
 
-	// A character past the form reads the same way, and a paste of the form's own length with a broken checksum is still refused for the checksum itself.
+	// A shorter paste and a longer one read the same way: the branch is shared, so the reason quotes whichever count the paste carries.
+	const shorter = SAPLING.slice(0, -2);
+	assert.equal(shorter.length, 76);
+	assert.equal(isZcashAddress(shorter), false);
+	refusesAsMalformedEncoding(() => requireZcashAddress(shorter));
+	assert.match(refusalMessage(() => requireZcashAddress(shorter)), /^zcash-address: not a Zcash payout address — expected 78 characters for a Sapling zs1 address, got 76; value: /);
+
+	// And a paste of the form's own length with a broken checksum is still refused for the checksum itself.
 	assert.match(refusalMessage(() => requireZcashAddress(`${SAPLING}q`)), /^zcash-address: not a Zcash payout address — expected 78 characters for a Sapling zs1 address, got 79; value: /);
 	assert.match(refusalMessage(() => requireZcashAddress(tamperLastCharacter(SAPLING, BECH32_PAIR))), /^zcash-address: not a Zcash payout address — its Bech32 checksum or alphabet is wrong; value: /);
 });

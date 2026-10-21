@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { appliedDeclaration, cssRules, declaration, ruleBody } from "./helpers/css.mjs";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
 import { fakeProbe } from "./helpers/layout-probe.mjs";
-import { ZEC_PAYEE, XMR_PAYEE } from "./helpers/payee-vectors.mjs";
+import { XMR_PAYEE, ZEC_PAYEE, ZEC_TEX_PAYEE } from "./helpers/payee-vectors.mjs";
 import { assertSymbolCellsInDom } from "./helpers/qr-dom.mjs";
 import { readSymbol } from "./helpers/qr-reader.mjs";
 import { refusalMessage } from "./helpers/refusals.mjs";
@@ -45,6 +45,7 @@ import {
 } from "../app/js/ui/create.js";
 import { FIT_CUE_CLASS, FIT_RUNGS } from "../app/js/ui/fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/messages.js";
+import { openPayPanel } from "../app/js/ui/pay.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { releasable } from "../app/js/ui/release.js";
 import { buildShareBundle, copyText } from "../app/js/ui/share.js";
@@ -1394,6 +1395,202 @@ test("the Zcash placeholder names every form the validator accepts", () => {
 	assert.match(guidance, /t1\/t3/, "the guidance names the transparent pair the validator accepts");
 	assert.match(guidance, /TEX \(tex1\)/, "the guidance names the TEX form the validator accepts");
 	assert.equal(guidance.includes(UNSUPPORTED_WALLET_MESSAGE), false, "and carries no unsupported-wallet notice in place of the forms it names");
+});
+
+/**
+ * The shapes a caution about a valid address being unpayable takes, and the vocabulary the sweep below matches.
+ *
+ * A validated address is payable exactly like any other, so no surface may tell a payer that their wallet cannot send to it, that a ledger will not show the payment, that a memo is needed, or that paying it is harder than paying anything else.
+ * Each entry names a shape rather than a sentence, so unrelated copy can be reworded freely while a caution introduced anywhere on these surfaces is still caught; the check beside the Zcash hint compares one sentence with one message, which any other sentence of the same kind would pass.
+ * The one sentence these surfaces carry about wallets — `UNSUPPORTED_WALLET_MESSAGE`'s hand-off, which states where a wallet-less invoice is paid — cautions nothing and matches none of these, and the second test below pins that the vocabulary catches what it exists to catch.
+ */
+const WALLET_SUPPORT_CAUTIONS = [
+	// Whether a form is supported at all, which is what a caution about a wallet rests on.
+	/\bunsupported\b/i,
+	/\bnot (?:yet )?supported\b/i,
+	/\bwallets? (?:support|compatibility)\b/i,
+	// Which wallets can pay: any quantifier over wallets is the shape such a caution takes.
+	/\b(?:some|many|most|few|other|older|not (?:all|every)) wallets?\b/i,
+	/\bwallets?\b[^.]{0,80}\b(?:can(?:'|’)?t|cannot|do(?:es)?n(?:'|’)?t|won(?:'|’)?t|will not|would not|may not|might not|no longer)\b/i,
+	// A payer told they cannot pay, or the address that it cannot be paid.
+	/\b(?:can(?:'|’)?t|cannot|unable to|not able to) (?:be )?(?:pay|send|receive|scan)\b/i,
+	/\bnot (?:payable|spendable|accepted|recognized|recognised)\b/i,
+	/\bunpayable\b/i,
+	/\bonly (?:payable|spendable)\b/i,
+	// Ledger visibility, and the memo a payment is said to need: a caution about a memo is that the payment is not credited, shown, or matched without one, so these match a memo being required or its absence mattering rather than any use of the word.
+	/\bledgers?\b/i,
+	/\b(?:include|add|enter|attach|provide|put|write|leave)\b[^.]{0,60}\bmemos?\b/i,
+	/\bmemos?\b[^.]{0,60}\b(?:needs?|needed|requires?|required|necessary|must|should|so that|to (?:match|credit|identify|claim|reconcile))\b/i,
+	/\bmemos?\b[^.]{0,80}\bnot (?:be )?(?:credited|seen|shown|show|recognized|recognised|matched|reconciled)\b/i,
+	// How hard the paying is, ranked against another form's.
+	/\b(?:hard|harder|difficult|trickier|tricky|awkward|impossible) (?:to pay|than paying)\b/i,
+	/\b(?:needs?|requires?) (?:a|an) (?:wallet|shielded|sapling|orchard|transparent)\b/i,
+	/\bshielded (?:only|wallet|pool)\b/i,
+	/\btransparent[- ]source[- ]only\b/i,
+	// A payer told to check their wallet first.
+	/\b(?:check|confirm|verify|make sure) (?:that )?(?:your|the recipient's|the payee's) wallet\b/i,
+];
+
+/** The first caution shape `text` states, or `null` when it cautions nothing about a valid address being unpayable. */
+function walletSupportCaution(text) {
+	for (const pattern of WALLET_SUPPORT_CAUTIONS) {
+		const match = pattern.exec(text);
+		if (match !== null) return match[0];
+	}
+	return null;
+}
+
+/** Every string a rendered surface puts in front of a reader: the subtree's text, and every attribute value hanging off it, so a placeholder, an accessible name, and a field's value are read too. */
+function surfaceStrings(node) {
+	const strings = [textOf(node)];
+	for (const element of findAll(node, () => true)) {
+		for (const value of Object.values(element.attributes ?? {})) strings.push(String(value));
+	}
+	return strings;
+}
+
+/** The payment-link presentation of `invoice` as a reader meets it: the URI the document displays, and each term's label and value beside it. */
+function presentationStrings(invoice) {
+	const model = buildInvoiceViewModel(invoice, TOTAL_OPTIONS.today);
+	return [model.paymentLink, ...model.payment.flatMap((term) => [term.label, term.value])];
+}
+
+/**
+ * The user-facing documents a payor or payee reads: the top-level `README.md` and the markdown pages under `docs/`.
+ * `docs/design/` is left out because it holds the internal design notes, whose limitation notes are labelled as such and are addressed to whoever maintains the app rather than to either party of an invoice.
+ */
+function userFacingDocuments() {
+	return [join(root, "README.md"), ...markdownPagesUnder(join(root, "docs"))];
+}
+
+/** The markdown pages under `directory`, skipping the internal notes in `docs/design/` that {@link userFacingDocuments} leaves out. */
+function markdownPagesUnder(directory) {
+	if (directory === join(root, "docs", "design")) return [];
+	const pages = [];
+	for (const entry of readdirSync(directory, { withFileTypes: true })) {
+		const path = join(directory, entry.name);
+		if (entry.isDirectory()) pages.push(...markdownPagesUnder(path));
+		else if (entry.name.endsWith(".md")) pages.push(path);
+	}
+	return pages;
+}
+
+/** The blocks of prose `text` carries, one entry per block between blank lines, with the line breaks that lay the page out taken out so a caution keeps its shape when it wraps. */
+function proseBlocks(text) {
+	return text
+		.split(/\n\s*\n/)
+		.map((block) => block.replace(/\s+/g, " ").trim())
+		.filter((block) => block !== "");
+}
+
+/** A mainnet TEX payee's invoice: the mainnet spelling the payee vectors carry, on the asset that pays it. */
+function texInvoice() {
+	return createInvoice({
+		id: "INV-TEX-1",
+		issued: "2026-10-03",
+		payee: { name: "Studio Example", address: ZEC_TEX_PAYEE },
+		chainId: "zcash",
+		asset: "zec",
+		items: [line()],
+	});
+}
+
+test("no payer- or payee-facing surface cautions that a valid address may be unpayable", () => {
+	// A TEX payee is payable exactly like any other, so nothing a payee or a payer reads may hint that a wallet cannot send to it, that a ledger will not show the payment, that a memo is needed, or that paying it is harder than paying anything else. The check on the Zcash hint beside it compares one sentence with one message; this reads every string such a surface carries. The documents a payee or a payer is handed are read beside the screens, since a caution added to the README or to a page under `docs/` would reach them just as directly.
+	const surfaces = [];
+	const record = (label, strings) => surfaces.push({ label, strings });
+	for (const asset of Object.values(ASSET_REGISTRY)) {
+		record(`the ${asset.id} payout-address placeholder`, [payoutAddressPlaceholder(asset)]);
+		const guidance = payoutAddressGuidance(asset);
+		if (guidance !== null) record(`the ${asset.id} payout-address guidance`, [guidance]);
+	}
+	assert.equal(payoutAddressWarning(ZEC_TEX_PAYEE, ASSET_REGISTRY.zec), null, "a TEX payee earns no caution in the field's warning slot");
+	record("the payment-link presentation", presentationStrings(texInvoice()));
+
+	const notices = noticeRecorder();
+	openPayPanel(texInvoice(), { notice: notices, clipboard: null });
+	record("the payment panel", notices.calls.filter((call) => call !== null).map((call) => call.message));
+
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const asset = controlNamed(view, "asset");
+		asset.value = "zec";
+		asset.dispatch("change");
+		setControl(view, "payeeName", "Studio Example");
+		setControl(view, "payeeAddress", ZEC_TEX_PAYEE);
+		setControl(view, "item-0-description", "Design work");
+		setControl(view, "item-0-quantity", "2");
+		setControl(view, "item-0-unitPrice", "150");
+		record("the create form asked for a Zcash payee", surfaceStrings(view));
+		view.children[2].dispatch("submit");
+		const created = findAll(view, (node) => node.attributes?.class === "invoice-payment")[0];
+		assert.ok(created, "the created invoice's payment details are drawn on the payee's own screen");
+		record("the created invoice's payment details", surfaceStrings(created));
+		const dialog = document.body.children.find((child) => child.attributes?.class?.includes("dialog-backdrop"));
+		assert.ok(dialog, "the share dialog opens over the page");
+		record("the share dialog", surfaceStrings(dialog));
+		record("the payer's document", surfaceStrings(renderInvoiceView(texInvoice(), { ...TOTAL_OPTIONS, notice: noticeRecorder() })));
+	} finally {
+		fake.restore();
+	}
+
+	// A caution can be added to a document as easily as to a screen, so the same vocabulary reads the prose either party is given beyond the app.
+	const documents = userFacingDocuments();
+	const documentProse = documents.flatMap((path) => {
+		const blocks = proseBlocks(readFileSync(path, "utf8"));
+		record(path.slice(root.length + 1), blocks);
+		return blocks;
+	});
+
+	const cautions = [];
+	for (const surface of surfaces) {
+		for (const text of surface.strings) {
+			const caution = walletSupportCaution(text);
+			if (caution !== null) cautions.push(`${surface.label}: ${JSON.stringify(text)} states ${JSON.stringify(caution)}`);
+		}
+	}
+	assert.deepEqual(cautions, [], `a surface cautions that a valid address may be unpayable:\n${cautions.join("\n")}`);
+
+	// The sweep is worth its refusals only if it reads these surfaces, so the guidance, the field's hint, the payee's own spelling, and the one hand-off sentence they carry are all in what it read.
+	const read = surfaces.flatMap((surface) => surface.strings).join("\n");
+	assert.match(read, /TEX \(tex1\)/, "the sweep reads the Zcash guidance that names the TEX form");
+	assert.match(read, /The address this invoice pays to\./, "and the hint the payout-address field carries");
+	assert.ok(read.includes(ZEC_TEX_PAYEE), "and the payee's own spelling, as the document draws it");
+	assert.ok(read.includes(UNSUPPORTED_WALLET_MESSAGE), "and the hand-off sentence, which names where a wallet-less invoice is paid and cautions nothing");
+	assert.match(read, /Payment link/, "and the terms a payer copies from");
+	assert.equal(documents.some((path) => path.endsWith("README.md")), true, "and the top-level README is one of the documents it reads");
+	assert.match(documentProse.join("\n"), /Zcash/, "as is the README's own prose, which names the asset a payee is paid in");
+});
+
+test("the wallet-support guard catches the cautions it exists to catch", () => {
+	// A sweep that only ever passes is indistinguishable from one that matches nothing, so the vocabulary is driven against the shapes a caution takes and against the copy these surfaces legitimately carry.
+	const planted = [
+		"Some wallets can't pay a tex1 address.",
+		"This address is not supported by all wallets.",
+		"Your wallet may not be able to send to this address.",
+		"Wallets that do not yet support TEX addresses cannot pay it.",
+		"An unsupported wallet cannot pay this invoice.",
+		"The payment may not show in your wallet's ledger.",
+		"Include a memo so the recipient can match your payment.",
+		"A memo is required so the recipient can credit your payment.",
+		"Payments without a memo may not be credited.",
+		"Paying a TEX address is harder than paying a t1 address.",
+		"Check that your wallet supports this address before paying.",
+	];
+	for (const sentence of planted) {
+		assert.notEqual(walletSupportCaution(sentence), null, `the guard let this through: ${JSON.stringify(sentence)}`);
+	}
+	const innocuous = [
+		UNSUPPORTED_WALLET_MESSAGE,
+		payoutAddressGuidance(ASSET_REGISTRY.zec),
+		payoutAddressPlaceholder(ASSET_REGISTRY.zec),
+		payoutAddressGuidance(ASSET_REGISTRY.xmr),
+		"Invoice #INV-2026-0042 is due on 28 Oct 2026.",
+	];
+	for (const sentence of innocuous) {
+		assert.equal(walletSupportCaution(sentence), null, `the guard flagged the app's own copy: ${JSON.stringify(sentence)}`);
+	}
 });
 
 /**

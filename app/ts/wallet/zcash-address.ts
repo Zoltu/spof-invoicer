@@ -5,7 +5,7 @@
  * A transparent string is dispatched by its `t1`/`t3` text, but the two version bytes under that text are what admit it, and a version outside the mainnet pair is refused at that check even though the text prefix matched.
  * The forms those checks admit are stated once, in {@link ZCASH_ADDRESS_FORMS}, which they read through the constants below and the payee-facing hint `ui/create.ts` renders.
  * A unified address is accepted, not certified: ZIP 316 wraps its receivers in an F4Jumble encoding this module does not implement, so nothing behind the container is read and no set of receivers is claimed — the Bech32m checksum, the mainnet human-readable part `u`, the length bound below, and the payload size floor below are the whole of what {@link ZcashAddress}'s unified member certifies.
- * The payload is measured rather than parsed: ZIP 316 spells the receivers a container carries as the concatenation of one or more `typecode || length || addr` items and requires at least one of them, and prefixes that list with the human-readable part padded to 16 bytes before F4Jumble preserves the length, so a container shorter than {@link MIN_UNIFIED_PAYLOAD_BYTES} is below the smallest item list the grammar can spell and is refused rather than certified as a payee.
+ * The payload is measured rather than parsed: ZIP 316 spells the receivers a container carries as the concatenation of one or more `typecode || length || addr` items, prefixes that list with the human-readable part padded to 16 bytes, and jumbles the whole with a length-preserving F4Jumble, while the `u` part this module accepts is the one whose addresses must carry at least one shielded receiver — so no container a payee's wallet can publish is shorter than {@link MIN_UNIFIED_PAYLOAD_BYTES}, and one below it is refused rather than certified as a payee.
  * A unified address is the default receiving form in modern wallets, so refusing the form outright would leave this app unable to invoice most Zcash payees.
  * A TEX address is ZIP-320's transparent-source-only spelling of an unshielded one: its payload is the 20-byte HASH160 a `t1`/`t3` address of the same script carries beside its version bytes, with no version bytes of its own, so the two spellings name one script and this module certifies the payload and nothing behind it — the Bech32m checksum, the mainnet human-readable part `tex`, the 42-character length a 20-byte payload takes, and that payload width.
  * An accepted TEX address is stored exactly as the payee wrote it, Bech32 case normalisation aside, and is never rewritten into the `t1…` or `t3…` spelling of the same hash: the spelling the payee published is the one an invoice carries.
@@ -13,14 +13,14 @@
  * Every accepted form is mainnet-only: a testnet `tm`/`t2` transparent string, a testnet or regtest `ztestsapling`/`zregtest` Sapling one, Sprout's `zc`, a TEX address under the testnet `textest` part, and a unified container under another human-readable part — the testnet `utest` (`utest1…`) or the regtest `uregtest` — are all refused.
  * Neither the asset nor this validator carries a network, so for a unified address the decoded human-readable part is what tells mainnet from testnet: a container that decodes under the mainnet `u` is accepted, and one that decodes under any other part this module knows is refused as {@link TestnetUnifiedAddressError}, which names the network it addresses.
  * A TEX address is classified the same way and for the same reason: its decoded `textest` part is the only thing that says the paste addresses testnet, so it is refused as {@link TestnetTexAddressError}, which names that network rather than reporting a paste that is merely malformed.
- * A unified paste that is not such a container is refused as the malformed encoding it is — a broken checksum or alphabet, a mixed-case spelling, a container decoding under a part this module does not know, one whose data words are not a whole number of payload bytes, one carrying fewer payload bytes than the smallest container the ZIP-316 padding and item grammar can spell, and one longer than {@link MAX_ZCASH_ADDRESS_LENGTH} — rather than named as another network's address.
+ * A unified paste that is not such a container is refused as the malformed encoding it is — a broken checksum or alphabet, a mixed-case spelling, a container decoding under a part this module does not know, one whose data words are not a whole number of payload bytes, one carrying fewer payload bytes than a legal mainnet container has, and one longer than {@link MAX_ZCASH_ADDRESS_LENGTH} — rather than named as another network's address.
  * A TEX paste that is not such an address is refused as the malformed encoding it is — one longer than {@link MAX_BECH32_TEXT_LENGTH}, a mixed-case spelling, one of a character count no address of its own part has, a broken checksum or alphabet, one decoding under a part this module does not know, one whose data words are not a whole number of payload bytes, and a payload of another width than the {@link TEX_PAYLOAD_BYTES} its `t1`/`t3` twin carries — rather than named as another network's address, the distinction the container above draws.
  * A ZIP-321 `zcash:` payment link — the usual way one of these addresses gets copied — is refused as the link it is, not as the Sprout address whose `zc` text prefix the scheme shares, and never accepted in place of the address a link carries.
  * A Sprout spelling in either case is refused as a Sprout address, because it is the prefix that says which form the user pasted; the transparent case rule, which is about an accepted form's case-sensitive encoding, is not what is wrong with it.
  * Case is read the way the encoding defines it: a transparent `t1`/`t3` address is case-sensitive Base58Check, so a uniformly upper-case paste is refused as the different string it spells rather than case-folded into a spelling only this app produced, while a Bech32 candidate is read as BIP-173 defines it — either uniform case spells the same string, a mixed-case one spells nothing at all, and an accepted Sapling, unified, or TEX address is returned in the lower-case spelling the checksum is computed over.
  * Every branch bounds its input before the step that would grow with it: a transparent paste past {@link MAX_TRANSPARENT_TEXT_LENGTH} is refused ahead of Base58Check's quadratic conversion, a Sapling or TEX paste past {@link MAX_BECH32_TEXT_LENGTH} ahead of the word-to-byte conversion or the Bech32m decode, a unified paste past {@link MAX_ZCASH_ADDRESS_LENGTH} ahead of the Bech32m decode, and each case probe reads only text its own branch's bound already covers, so no branch case-maps or converts an unbounded paste, and each length refusal leads with the bound it applied rather than with the decoding step's own message.
  * A Bech32 or Bech32m paste the decoder refuses is refused for the length its form never has rather than for the decode's own reason, where the form has a fixed length: the length is reported as a detail of that failure, never read ahead of the decode, so a paste one character short of a Sapling address — which fails its checksum because a character is missing — is refused for being 77 characters where the form has 78, while a paste of the form's own length whose checksum really is wrong is refused for the checksum, and a unified container, which has no fixed length, is refused for the checksum alone.
- * A paste of another length whose checksum is instead valid over what it spells is not refused for its length at all: it decodes, so what answers it is that form's payload rule — a padding that is not a whole number of bytes, a payload width the form never has, or, for a unified container, the payload floor below, since a container is as long as the receivers it carries but one below the smallest item list the grammar can spell is refused rather than certified.
+ * A paste of another length whose checksum is instead valid over what it spells is not refused for its length at all: it decodes, so what answers it is that form's payload rule — a padding that is not a whole number of bytes, a payload width the form never has, or, for a unified container, the payload floor below, since a container is as long as the receivers it carries but one below the smallest legal set of them is refused rather than certified.
  * A refusal names the form it expected and never echoes a human-readable part it decoded that its own form's table does not carry, which is input-derived and can be arbitrarily long, while the part a network refusal names is read off one of those tables and is therefore a known short literal rather than text the paste wrote, so a hostile value cannot inflate the message it is refused with either way; the value itself trails as a bounded preview, which `util/errors.ts` also strips of the control, line-separator and bidi characters a rendered refusal must not carry.
  * A value of another type throws a `TypeError` — naming what arrived through that same bounded preview, so a non-string paste cannot inflate that message either; a string that fails any check throws {@link InvalidZcashAddressError} — its {@link TestnetUnifiedAddressError} or {@link TestnetTexAddressError} subclass only for an address on a network this app does not pay — whose message leads with the check that refused it and trails a bounded echo of the value, so the reason a user needs is not clipped away along with the value they pasted.
  */
@@ -298,16 +298,30 @@ export const ZCASH_ADDRESS_FORMS: readonly PayoutAddressForm[] = Object.freeze(O
 export { MAX_ZCASH_ADDRESS_LENGTH };
 
 /**
- * The fewest payload bytes a unified-address container may carry: 38, the smallest container a legal mainnet address can have.
+ * The bytes ZIP 316 pads the human-readable part to before F4Jumble, and therefore the bytes every container carries ahead of its item list.
  *
- * The bytes measured here are the container the Bech32m checksum covers, and ZIP 316 builds that container as F4Jumble over the item list prefixed by the human-readable part, the part padded with zero bytes to 16 bytes.
- * F4Jumble preserves the length of what it encodes, so the container is 16 bytes longer than the item list itself, and the padded `u` a mainnet address carries is 16 bytes.
- * The item list is the concatenation of one or more items, each a `typecode` (`compactSize`), a `length` (`compactSize`), and that many bytes of receiver, and the shortest item the grammar can spell is a transparent P2PKH or P2SH receiver: a 20-byte hash, framed by one byte of typecode and one byte of length.
- * The 16 bytes of padded human-readable part plus those 22 bytes are therefore the smallest container a legal address can have, and one below that size cannot be the concatenation of receivers the grammar spells at all, so it is refused rather than certified as a payable mainnet address: the checksum, the human-readable part, and the length bound above admit a container of any payload whatever, which would otherwise be rendered to the payee as the address the invoice pays to.
- * The Sapling and Orchard receivers are 43 bytes, framed 45, so a container holding one of those is longer than this floor and is admitted on the same length check.
- * It is exported so the suite that pins this boundary names the floor where it refuses and admits a container, rather than restating the figure beside it.
+ * The padding is what keeps the parts distinguishable once jumbled, so it is part of the container the Bech32m checksum covers rather than an annotation beside it.
  */
-export const MIN_UNIFIED_PAYLOAD_BYTES = 38;
+const UNIFIED_PADDED_PART_BYTES = 16;
+
+/**
+ * The bytes that frame each item in a container's item list: the `compactSize` typecode and the `compactSize` length of the receiver encoding that follows it.
+ *
+ * Each is one byte at the typecodes and receiver widths ZIP 316 defines today, the shorter `compactSize` form taking every value below 253.
+ */
+const RECEIVER_ITEM_PREFIX_BYTES = 2;
+
+/**
+ * The fewest payload bytes a unified-address container may carry: 61, the smallest container a legal mainnet address can have.
+ *
+ * The bytes measured here are the container the Bech32m checksum covers, and ZIP 316 builds that container as F4Jumble over the item list prefixed by the human-readable part padded with zero bytes to {@link UNIFIED_PADDED_PART_BYTES}, so the container is that much longer than the item list itself.
+ * The item list is the concatenation of one or more items, each a `typecode` (`compactSize`), a `length` (`compactSize`), and that many bytes of receiver.
+ * The `u` part this module accepts is the pre-Revision-2 spelling, whose addresses must carry at least one shielded receiver, and a shielded receiver is an Orchard or Sapling raw address of {@link SAPLING_PAYLOAD_BYTES} bytes — a diversifier and a `pk_d`, the width a Sapling address is — framed by {@link RECEIVER_ITEM_PREFIX_BYTES}, so the shortest item list that revision permits is 45 bytes.
+ * A transparent P2PKH or P2SH receiver is shorter still, a 20-byte hash framed the same way, but a container carrying only transparent receivers is not a legal address of that part, so a 22-byte item list names no address a payee's wallet can have published.
+ * One below this floor is therefore refused rather than certified as a payable mainnet address: the checksum, the human-readable part, and the length bound above admit a container of any payload whatever, which would otherwise be rendered to the payee as the address the invoice pays to.
+ * The floor is inclusive at the smallest legal container — librustzcash's 106-character round-trip vector is a 61-byte container holding one shielded receiver — and it is exported so the suite that pins this boundary names the floor where it refuses and admits a container rather than restating the figure beside it.
+ */
+export const MIN_UNIFIED_PAYLOAD_BYTES = UNIFIED_PADDED_PART_BYTES + RECEIVER_ITEM_PREFIX_BYTES + SAPLING_PAYLOAD_BYTES;
 
 const decodeBase58Check = base58check(sha256);
 
@@ -698,10 +712,10 @@ function texLengthReason(text: string, part: HrpNetwork): string | null {
 /**
  * The reason a unified container is refused for a payload below {@link MIN_UNIFIED_PAYLOAD_BYTES}, or `null` when it carries at least that much.
  *
- * The container decodes and its part is mainnet, so what is wrong with a shorter one is the payload: it is shorter than the padded human-readable part plus the smallest item the grammar spells, and certifying it would present an invoice paying an address that cannot exist.
+ * The container decodes and its part is mainnet, so what is wrong with a shorter one is the payload: it is shorter than the padded human-readable part plus the one shielded receiver an address of that part must carry, and certifying it would present an invoice paying an address that cannot exist.
  */
 function unifiedPayloadReason(bytes: number): string | null {
-	return bytes < MIN_UNIFIED_PAYLOAD_BYTES ? `expected at least ${MIN_UNIFIED_PAYLOAD_BYTES} payload bytes for a container carrying one typed receiver, got ${bytes}` : null;
+	return bytes < MIN_UNIFIED_PAYLOAD_BYTES ? `expected at least ${MIN_UNIFIED_PAYLOAD_BYTES} payload bytes for a container carrying one shielded receiver, got ${bytes}` : null;
 }
 
 /** The reason a TEX payload of another width is refused with, or `null` when it is the {@link TEX_PAYLOAD_BYTES} bytes the form carries: another width names a different script, not this form. */
