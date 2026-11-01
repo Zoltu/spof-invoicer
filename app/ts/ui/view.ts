@@ -8,7 +8,9 @@
  * The document is a letterhead, the parties and dates, an itemized table, a prominent total-due block, notes/terms, and payment details.
  * The letterhead's mark is the payee's own icon when the invoice carries one, in the place of the default brand mark rather than beside it, while the wordmark and tagline are drawn either way; a party's contact info is drawn as the lines it was stored with, one detail line per line.
  * Payment details is {@link renderPaymentSection}, the section `ui/payment-section.ts` owns and the payee's create screen draws from the same function: the payee address, the amount, and the payment link, each a plain-text value with its own copy control, beside the symbol of that same URI. A paid invoice draws the same section with the paid record's own title and terms in place of the payment terms, and no symbol, because the record states a transaction and a day rather than a link a wallet scans.
- * The actions around it (back to Create, Share, Save as PDF, Pay) are chrome, and the Pay control is the injected-wallet flow's alone: a Zcash or Monero invoice is paid by the payment link and QR code the document carries, so it is offered no control that would lead nowhere. A paid invoice offers no Pay control at all, whatever its family, because the payment the record states is the one the document reports and there is nothing left to start.
+ * The actions around it (back to Create, Share, Save as PDF, Mark as paid, Pay) are chrome, and the Pay control is the injected-wallet flow's alone: a Zcash or Monero invoice is paid by the payment link and QR code the document carries, so it is offered no control that would lead nowhere. A paid invoice offers no Pay control at all, whatever its family, because the payment the record states is the one the document reports and there is nothing left to start.
+ * An unpaid invoice also offers a Mark as paid control that opens the manual hash dialog in `ui/mark-paid.ts`, so a payer who has already sent the payment can attach the hash the wallet gave them without reopening the wallet flow; the control is offered for every family, because a privacy-chain payment's hash is as recordable as an EVM one, and it is absent on a paid invoice for the same reason the Pay control is.
+ * The manual dialog states the record as the payer's report, following `docs/design/payment-safety-memo.md`'s constraint that nothing here can confirm a payment.
  */
 
 import { requireAsset } from "../assets/registry.js";
@@ -18,6 +20,7 @@ import { reportInternalFailure } from "../util/errors.js";
 import { isWalletPayable } from "../wallet/payment.js";
 import type { ClipboardLike } from "./clipboard.js";
 import type { LayoutProbe } from "./fit-value.js";
+import { openMarkPaidDialog } from "./mark-paid.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import { VIEW_BUILD_RELEASE_FAILED_MESSAGE } from "./messages.js";
 import type { NoticeApi } from "./notice.js";
@@ -32,6 +35,9 @@ export type ExportPdfHandler = (invoice: Invoice) => void | Promise<void>;
 /** Hand a validated invoice to the wallet payment flow when one is supplied; may be asynchronous. */
 export type PayHandler = (invoice: Invoice) => void | Promise<void>;
 
+/** Hand the canonical transaction hash the payer typed to the surface that builds the paid link. */
+export type PaidHandler = (hash: string) => void;
+
 /** Everything the invoice view needs to render and to wire its actions. */
 export interface ViewOptions {
 	readonly notice: NoticeApi;
@@ -40,6 +46,12 @@ export interface ViewOptions {
 	readonly clipboard?: ClipboardLike | null;
 	readonly exportPdf?: ExportPdfHandler;
 	readonly pay?: PayHandler;
+	/**
+	 * Hand the canonical hash the payer typed in the manual dialog to the surface that builds the paid link.
+	 *
+	 * The handler is the egress the dialog's confirm calls; without one the control opens the dialog's refusal rather than a form whose confirm would do nothing.
+	 */
+	readonly onPaid?: PaidHandler;
 	/**
 	 * The probe the document's fitted values measure through; `PaymentSectionOptions.fit` in `./payment-section.ts` states what an absent or `null` probe means.
 	 */
@@ -216,9 +228,11 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
  * The actions around the document are chrome; the `no-print` class hides them from the print path in `print.css`, and the exported PDF, drawn from the view model, never reads this DOM.
  *
  * The share dialog describes this document, so its handle is reported through `ViewOptions.onDialog` as it opens and told `null` as it closes: the dialog that offers this invoice's link must not be left standing over the document a route change puts in its place.
+ * The same slot receives the manual mark-paid dialog, for the same reason.
  *
  * Pay is the injected-wallet flow, which only the EVM family pays through: on an EVM invoice it is present so the layout is complete and stays disabled — with the reason shown beside it — until a handler is wired, so no click can reach an EVM provider before one exists, while a privacy-chain invoice is offered a hint naming the hand-off it does carry instead of a control that would lead nowhere.
- * A paid invoice offers neither the control nor its hint, whatever its family: the record the document carries is the payment it reports, and there is nothing left to start.
+ * A paid invoice offers neither the Pay control nor its hint, whatever its family: the record the document carries is the payment it reports, and there is nothing left to start.
+ * The Mark as paid control is offered on every unpaid invoice, whatever its family and whatever the window reports: it opens the manual dialog, which reads no wallet and no storage, so it is the one way a payer who has already sent a privacy-chain payment can attach its hash without reopening the wallet flow the pay panel would refuse in a framed window.
  */
 function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 	const shareButton = h("button", { type: "button", class: "btn btn-secondary" }, "Share");
@@ -234,6 +248,22 @@ function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 	saveButton.addEventListener("click", () => runAction(() => exportPdf(invoice, options), options, "PDF export"));
 
 	const paid = invoice.paid !== undefined;
+	const markPaidButton = paid
+		? null
+		: h("button", { type: "button", class: "btn btn-secondary" }, "Mark as paid");
+	if (markPaidButton !== null) {
+		markPaidButton.addEventListener("click", () => {
+			if (options.onPaid === undefined) {
+				options.notice.showNotice("Recording a payment is not available in this build.", "info");
+				return;
+			}
+			const dialog = openMarkPaidDialog(invoice, options.today, {
+				onPaid: options.onPaid,
+			});
+			options.onDialog?.(dialog);
+		});
+	}
+
 	// The Pay control is offered only for the invoices the wallet planner can pay: `isWalletPayable` is the same predicate `buildPaymentPlan` enforces, so the control this view offers and the flow behind it cannot disagree. A paid invoice is offered none at all.
 	const walletPayable = !paid && isWalletPayable(requireAsset(invoice.asset));
 	const pay = walletPayable ? options.pay : undefined;
@@ -262,6 +292,7 @@ function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 		h("div", { class: "document-actions-spacer" }),
 		shareButton,
 		saveButton,
+		markPaidButton,
 		payButton,
 		payNote,
 	);

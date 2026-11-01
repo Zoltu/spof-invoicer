@@ -34,6 +34,11 @@ import { h } from "../app/js/util/dom.js";
 import { encodeQr } from "../app/js/util/qr.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
+import { markPaid, PaidInvoiceTooLargeError } from "../app/js/invoice/model.js";
+import { paidEncodingSize } from "../app/js/invoice/codec.js";
+import { decodeShare } from "../app/js/invoice/share.js";
+import { createMarkPaidDialog } from "../app/js/ui/mark-paid.js";
+import { installWindow, mockProvider, TX_HASH } from "./helpers/wallet-mock.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -2469,6 +2474,85 @@ test("the invoice view surfaces a release that throws as the app's own sentence,
 		assert.deepEqual(new Set(inner.unsubscribed), new Set(inner.targets), "and every fitting the section had taken was released, the ones behind the stop that threw included");
 	} finally {
 		document.createElement = createElement;
+		fake.restore();
+	}
+});
+
+
+test("a paid link round-trips through encode/decode with its record intact", () => {
+	const invoice = invoiceFor();
+	const record = { hash: "0x" + "ab".repeat(32), date: "2026-10-03" };
+	const paid = markPaid(invoice, record, paidEncodingSize(invoice, record));
+	const bundle = buildShareBundle(paid, "https://example.com/app/");
+	assert.equal(bundle.paid, true, "the bundle states the invoice is paid");
+	const decoded = decodeShare(bundle.url.slice(bundle.url.indexOf("#")));
+	assert.ok(decoded !== null, "the paid link decodes to an invoice");
+	assert.deepEqual(decoded.paid, record, "the payment record survives the round trip");
+});
+
+test("the payment panel's mark-paid shortcut closes the panel and hands the wallet's hash to onPaid", async () => {
+	const fake = installInteractiveDocument();
+	const installed = installWindow({ ethereum: mockProvider() });
+	try {
+		const paid = [];
+		const panel = openPayPanel(invoiceFor({ id: "INV-MARK-PAID" }), {
+			notice: noticeRecorder(),
+			clipboard: null,
+			onPaid: (hash) => paid.push(hash),
+		});
+		assert.ok(panel !== null);
+		const connect = byText(panel.element, "button", "Connect wallet & pay")[0];
+		assert.ok(connect, "the panel offers the connect control");
+		connect.dispatch("click", { type: "click" });
+		await drain();
+		await drain();
+		await drain();
+		const markPaid = byText(panel.element, "button", "Mark this invoice paid with this hash")[0];
+		assert.ok(markPaid, "the sent frame offers the mark-paid shortcut");
+		markPaid.dispatch("click", { type: "click" });
+		assert.deepEqual(paid, [TX_HASH], "the wallet's hash travels to the onPaid egress");
+		assert.equal(findAll(document.body, (node) => hasClass(node, "pay-dialog")).length, 0, "the panel closes");
+	} finally {
+		installed.restore();
+		fake.restore();
+	}
+});
+
+test("the manual mark-paid dialog rejects a malformed hash and does not call onPaid", () => {
+	const fake = installInteractiveDocument();
+	try {
+		let paid = null;
+		const dialog = createMarkPaidDialog(invoiceFor(), "2026-10-03", { onPaid: (hash) => { paid = hash; } });
+		const input = findAll(dialog.element, (node) => node.tagName === "input")[0];
+		input.value = "not-a-hash";
+		const form = findAll(dialog.element, (node) => node.tagName === "form")[0];
+		form.dispatch("submit", { type: "submit" });
+		assert.equal(paid, null, "the malformed hash does not reach the egress");
+		const error = findAll(dialog.element, (node) => hasClass(node, "field-error"))[0];
+		assert.ok(error, "the dialog states the refusal beside the field");
+		assert.match(textOf(error), /0x-prefixed 64-hex-digit transaction hash/, "the refusal names the family's own shape");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the manual mark-paid dialog surfaces the size refusal's actionable sentence", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const message = "The invoice is too large to share: its encoded form needs 70000 bytes of JSON, past the 65536 bytes a paid invoice may use. Trim free text or split the invoice.";
+		let paid = null;
+		const dialog = createMarkPaidDialog(invoiceFor(), "2026-10-03", {
+			onPaid: () => { throw new PaidInvoiceTooLargeError(message); },
+		});
+		const input = findAll(dialog.element, (node) => node.tagName === "input")[0];
+		input.value = "0x" + "ab".repeat(32);
+		const form = findAll(dialog.element, (node) => node.tagName === "form")[0];
+		form.dispatch("submit", { type: "submit" });
+		assert.equal(paid, null, "the egress refused the mark");
+		const error = findAll(dialog.element, (node) => hasClass(node, "field-error"))[0];
+		assert.ok(error, "the dialog states the refusal beside the field");
+		assert.match(textOf(error), /Trim free text or split the invoice/, "the payer reads the sentence they can act on");
+	} finally {
 		fake.restore();
 	}
 });

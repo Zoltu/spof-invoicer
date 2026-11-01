@@ -11,15 +11,16 @@
  * The shell is also the one place that holds a modal: a document opens the payment panel or the share dialog, and a route change drops the document, so the shell keeps the handle of whichever dialog was opened and dismisses it on the same path that replaces the document — otherwise a dialog would outlive the document it describes and stand over one it does not.
  * The slot reads two facts of that handle and no more: whether a dialog arrived at all, and whether the one it holds has closed itself, so the payer dismissing a panel is what the next Pay click finds rather than a dialog the slot still believes is standing.
  *
- * The invoice view's two outward seams — {@link ExportPdfHandler} (the pdf-lib renderer) and {@link PayHandler} (the wallet payment flow) — are carried through {@link BootOptions} and {@link RenderOptions}.
- * {@link viewOptions} supplies both defaults: the pdf-lib renderer bound to the boot's `today`, loaded lazily on the first export so its ~1.4 MB bundle stays out of first load, and the payment panel in ui/pay.ts, which reads nothing but the invoice until the payer clicks to pay, so wiring the default adds no wallet access on load or on render.
- * A boot that supplies either seam's own handler (a test, an embedding) still wins.
- * The header brand reads its spelling from {@link INVOICE_LABELS}, so the wordmark cannot drift from the document the PDF draws.
- * The header's paste box is the one payer-facing entry that decodes text the payer or an attacker handed over: a refusal there states a fixed sentence and reports the codec's own failure where a developer can read it, because that failure carries a bounded preview of the paste.
+ * The invoice view's outward seams — {@link ExportPdfHandler} (the pdf-lib renderer), {@link PayHandler} (the wallet payment flow), and the manual payment egress — are supplied by {@link viewOptions}.
+ * The first two defaults are the pdf-lib renderer bound to the boot's `today`, loaded lazily on the first export so its ~1.4 MB bundle stays out of first load, and the payment panel in ui/pay.ts, which reads nothing but the invoice until the payer clicks to pay, so wiring the default adds no wallet access on load or on render.
+ * The third is a handler bound to the invoice on screen, which computes the payment's encoded size with `invoice/codec.ts`'s `paidEncodingSize`, refuses the mark with `invoice/model.ts`'s `markPaid` when that size will not fit, and navigates to the paid link the resulting invoice encodes. The paid link is built in the payer's browser and reached by navigation, so the payee's link is never rewritten.
+ * A boot that supplies either of the first two seams' own handler (a test, an embedding) still wins; the manual egress is the shell's own, because it needs the invoice the document shows and no boot can name that invoice ahead of time.
  */
 
-import type { Invoice } from "../invoice/model.js";
+import { paidEncodingSize } from "../invoice/codec.js";
+import { markPaid, type Invoice } from "../invoice/model.js";
 import { decodeShare, encodeShare } from "../invoice/share.js";
+import { requireAsset } from "../assets/registry.js";
 import { renderCreateView, type CreateViewOptions } from "../ui/create.js";
 import type { LayoutProbe } from "../ui/fit-value.js";
 import type { NoticeApi, NoticeTone } from "../ui/notice.js";
@@ -295,7 +296,7 @@ function shellEffects(shell: AppShell, options: RenderOptions): RouteEffects {
 		showNotice: (message, tone) => shell.showNotice(message, tone),
 		setActiveNav: (name) => shell.setActiveNav(name),
 		showCreateView: () => renderGuarded(shell, CREATE_VIEW_FAILED_MESSAGE, "create view render", () => renderCreateView(createViewOptions(shell, options))),
-		showView: (invoice) => renderGuarded(shell, INVOICE_VIEW_FAILED_MESSAGE, "invoice view render", () => renderInvoiceView(invoice, viewOptions(shell, options))),
+		showView: (invoice) => renderGuarded(shell, INVOICE_VIEW_FAILED_MESSAGE, "invoice view render", () => renderInvoiceView(invoice, viewOptions(shell, invoice, options))),
 	};
 }
 
@@ -312,19 +313,27 @@ function createViewOptions(shell: AppShell, options: RenderOptions): CreateViewO
 }
 
 /**
- * Forward the invoice view's seams — the pdf-lib export and the wallet payment flow.
+ * Forward the invoice view's seams — the pdf-lib export, the wallet payment flow, and the manual payment egress.
+ *
+ * The manual egress is bound to the invoice the document shows, so the view and the payment panel hand over only the hash: the handler computes the payment's encoded size with `paidEncodingSize`, refuses it with `markPaid` when the size will not fit, and navigates to the paid link the resulting invoice encodes. A refusal the size verdict carries reaches the dialog or the panel that called this handler, so the payer reads the sentence that tells them to ask for a smaller invoice.
  */
-function viewOptions(shell: AppShell, options: RenderOptions): ViewOptions {
+function viewOptions(shell: AppShell, invoice: Invoice, options: RenderOptions): ViewOptions {
+	const onPaid = (hash: string): void => {
+		const record = { hash, date: options.today };
+		const verdict = paidEncodingSize(invoice, record);
+		navigate(encodeShare(markPaid(invoice, record, verdict)));
+	};
 	return {
 		notice: shell,
 		baseUrl: options.baseUrl,
 		today: options.today,
 		clipboard: options.clipboard,
 		fit: options.fit,
-		exportPdf: options.exportPdf ?? ((invoice) => exportInvoice(invoice, options.today)),
-		pay: options.pay ?? ((invoice) => {
+		onPaid,
+		exportPdf: options.exportPdf ?? ((exportInvoice) => exportInvoicePdf(exportInvoice, options.today)),
+		pay: options.pay ?? ((payInvoice) => {
 			// The handle is handed to the shell rather than dropped here, so the panel a route change displaces is dismissed with the document that opened it.
-			shell.setOpenDialog(openPayPanel(invoice, { notice: shell, clipboard: options.clipboard ?? null, fit: options.fit }));
+			shell.setOpenDialog(openPayPanel(payInvoice, { notice: shell, clipboard: options.clipboard ?? null, fit: options.fit, onPaid }));
 		}),
 		// The share dialog the document's Share control opens is handed to the same slot, for the panel's reason: it describes this document, so it must not outlive it.
 		onDialog: (dialog) => shell.setOpenDialog(dialog),
@@ -336,7 +345,7 @@ function viewOptions(shell: AppShell, options: RenderOptions): ViewOptions {
  * The pdf-lib bundle is ~1.4 MB, so it is imported on the first export rather than at page load; the specifier is the compiled tree's own relative, `.js`-suffixed path (`app/js/app/shell.js` → `app/js/pdf/renderer.js`), which resolves when the static site is served as-is with no bundler.
  * The returned promise is what the view's action runner awaits.
  */
-async function exportInvoice(invoice: Invoice, today: string): Promise<void> {
+async function exportInvoicePdf(invoice: Invoice, today: string): Promise<void> {
 	const { renderPdf } = await import("../pdf/renderer.js");
 	await renderPdf(invoice, today);
 }

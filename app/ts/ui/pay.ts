@@ -22,7 +22,7 @@
 
 import { requireAsset } from "../assets/registry.js";
 import { serializeInvoice } from "../invoice/codec.js";
-import type { Invoice } from "../invoice/model.js";
+import { PaidInvoiceTooLargeError, type Invoice } from "../invoice/model.js";
 import { fromBaseUnits } from "../util/decimal.js";
 import { append, h, type DomChild } from "../util/dom.js";
 import { reportInternalFailure } from "../util/errors.js";
@@ -126,6 +126,11 @@ export interface PayPanelOptions {
 	 * The probe the panel's fitted values measure the boxes they are drawn in through; `PaymentSectionOptions.fit` in `./payment-section.ts` states what an absent or `null` probe means.
 	 */
 	readonly fit?: LayoutProbe | null;
+	/**
+	 * Hand the wallet's own transaction hash to the surface that builds the paid link.
+	 * The shortcut in the sent frame calls this after closing the panel, so the hash the wallet returned travels into the paid link without being retyped.
+	 */
+	readonly onPaid?: (hash: string) => void;
 }
 
 /**
@@ -338,7 +343,7 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 			case "send-failed":
 				return [actionRow(primaryButton("Try sending again", () => flow.retrySend()), acknowledgeSentButton())];
 			case "sent":
-				return [hashBlock(view.receipt), actionRow(doneButton())];
+				return [hashBlock(view.receipt), actionRow(...(options.onPaid === undefined ? [] : [markPaidButton(view.receipt)]), doneButton())];
 		}
 	}
 
@@ -460,6 +465,32 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 	function doneButton(): HTMLElement {
 		const button = h("button", { type: "button", class: "btn btn-secondary" }, "Done");
 		button.addEventListener("click", close);
+		return button;
+	}
+
+	/**
+	 * The shortcut from the receipt to the paid link: it closes the panel first, then hands the wallet's own hash to the injected egress.
+	 *
+	 * The hash is the receipt's, never a retyped or truncated copy, so the payment the payer made cannot produce a link missing its hash.
+	 * A size refusal carries the sentence the payer can act on, and the notice region states it after the panel closes; the failure itself goes to the console rather than to the payer.
+	 */
+	function markPaidButton(receipt: PaymentReceipt): HTMLElement {
+		const button = h("button", { type: "button", class: "btn btn-primary pay-mark-paid" }, "Mark this invoice paid with this hash");
+		button.addEventListener("click", () => {
+			close();
+			if (options.onPaid === undefined) return;
+			try {
+				options.onPaid(receipt.hash);
+			} catch (error) {
+				// The over-budget refusal carries the sentence the payer can act on, so it is stated as the verdict worded it rather than replaced by a generic sentence.
+				if (error instanceof PaidInvoiceTooLargeError) {
+					notice.showNotice(error.message, "error");
+					return;
+				}
+				reportInternalFailure("payment panel mark-paid", error);
+				notice.showNotice("The payment could not be recorded. Reload the page and try again.", "error");
+			}
+		});
 		return button;
 	}
 
