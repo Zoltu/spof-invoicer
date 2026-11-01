@@ -191,7 +191,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 function assertKnownFields(record: Record<string, unknown>, fields: readonly string[]): void {
 	const unknown = unknownFieldOf(record, fields);
 	if (unknown !== null) {
-		throw new InvalidPaidRecordError(unknown.field, unknownFieldReason(PAID_FIELDS));
+		throw new InvalidPaidRecordError(unknown.field, unknownFieldReason(fields));
 	}
 }
 

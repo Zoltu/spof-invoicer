@@ -25,22 +25,23 @@
  * Not bumping the schema version has a consequence a maintainer needs: a paid payload is refused by every earlier build, because that build's closed-object check meets an unknown `paid` field and rejects the whole document, while the container still reads `pinv1b-` and the JSON still reads `v: 1`.
  * A paid link therefore does not open in a copy of this app built before the field existed, and nothing in the payload says why — a payer who reports that is holding a link one build reads and another cannot, which is the cost of adding the field without a version bump.
  *
- * Money is transported as a decimal string of the asset's own units — `"150.00"`, never a JSON number and never base units — so every value survives the round trip exactly and a reader can convert it with `toBaseUnits` alone.
+ * Money is transported as a decimal string of the asset's own units — `"150.00"`, never a JSON number and never base units — so every value round-trips exactly and a reader can convert it with `toBaseUnits` alone.
  * {@link decodeInvoice} derives the totals; they are never transported.
  *
  * Compressed share strings are deliberately not offered: this codec never runs a compressor, and the only vendored codecs are the two crypto/encoding packages.
  * The vendored pdf-lib bundle does embed pako's deflate/inflate, but only for the PDF streams it writes itself, and pulling a compressor into the share container for a few kilobytes of invoice text is not worth the supply chain.
  *
- * Very large invoices are refused outright rather than truncated, at one cap on both sides of the codec: {@link MAX_JSON_BYTES} bounds every decode and every encode, so any payload this build decodes it can also encode again and pass on.
- * That symmetry is what keeps the size a build an older copy wrote still openable, which is why the smaller figure a payee's new invoice must fit is not a second encode cap: {@link MAX_AUTHORING_JSON_BYTES} is the cap less the room the widest paid record needs, and only the paths that author an invoice apply it, through the verdict {@link authoringSize} returns.
- * Encode and decode share one cap; the reduced budget applies only where an invoice is authored.
- * The record is appended to a payload the payee's link already carries, so the bytes it needs have to be free before the payee sends the invoice; {@link paidEncodingSize} is the verdict the mark-as-paid path asks before it writes one.
+ * Very large invoices are refused outright rather than truncated, and the bound an encode applies depends on what the invoice records: a decode is always held to {@link MAX_JSON_BYTES}, and so is an encode of a paid invoice, while an invoice with no paid record must also leave free the room the widest one needs, {@link MAX_AUTHORING_JSON_BYTES}.
+ * The asymmetry is the invariant: every unpaid payload this module writes can take the widest payment record and still be written again, so a payee's link always has room for the payment the payer reports.
+ * It lives in {@link encodePayload}, the one function that writes a payload, so every path that hands an invoice out is guarded rather than only the create form's own.
+ * What it costs is stated where it bites: an unpaid payload an older copy wrote between the two figures still decodes, renders, and is displayed, but cannot be encoded again — so it cannot be passed on, which is the point, since handing it on would give the payer a link no payment can be recorded against.
+ * {@link paidEncodingSize} is the verdict the mark-as-paid path asks before it appends a record, and {@link requirePaidEncodingSize} turns it into the typed refusal {@link encodePayload} would raise.
  */
 
 import { base32nopad, utf8 } from "../util/encoding.js";
 import { boundMessage, describe, messageOf, preview } from "../util/errors.js";
 import { canonicalContactText } from "./contact-canonical-text.js";
-import { InvalidInvoiceError, PaidInvoiceTooLargeError, validateInvoice, type Invoice } from "./model.js";
+import { validateInvoice, type Invoice } from "./model.js";
 import { WIDEST_PAID_RECORD, type PaidRecord } from "./paid.js";
 
 /** The container version written into every blob prefix. */
@@ -49,9 +50,7 @@ export const SHARE_VERSION = 1;
 /**
  * The most JSON a share container may carry, on both sides of the codec: every decode is held to it, and so is every encode, whatever the invoice records.
  *
- * Encode and decode share one cap; the reduced budget applies only where an invoice is authored.
- * One cap rather than two is what makes the codec symmetric — a payload this build decoded is one it can encode again — so a link an older copy wrote at any size that copy could write still opens, renders, and is passed on.
- * The smaller figure a payee's own new invoice must fit is not a second encode cap: it is {@link MAX_AUTHORING_JSON_BYTES}, and only the paths that author an invoice apply it.
+ * One cap on both sides is what keeps a legacy link openable — a payload an older copy wrote at any size that copy could write still decodes and renders here — while the smaller figure a payee's new invoice must fit is not a second decode cap: it is {@link MAX_AUTHORING_JSON_BYTES}, applied by {@link encodePayload} to an invoice with no paid record so the payload it writes always has room for one.
  */
 export const MAX_JSON_BYTES = 65536;
 
@@ -85,6 +84,39 @@ export class UnsupportedShareVersionError extends Error {
 	constructor(version: number) {
 		super(`share: unsupported blob version ${version} — this build reads version ${SHARE_VERSION}`);
 		this.name = "UnsupportedShareVersionError";
+	}
+}
+
+/**
+ * Raised by {@link encodePayload} for an unpaid invoice whose canonical JSON outgrows the budget a new invoice may use, {@link MAX_AUTHORING_JSON_BYTES}.
+ *
+ * It is a size refusal and not a field refusal: the invoice is valid, and what to change is content the payee controls, which is what the sentence names.
+ * The class matters because the payee's form classifies the refusal by it — a form that had to measure the invoice itself to know this was a budget refusal would leave the rule to each surface, and a surface added later would be free to skip it.
+ */
+export class AuthoringSizeError extends Error {
+	/** The bytes the invoice's canonical JSON needs. */
+	readonly bytes: number;
+	/** The authoring budget it missed. */
+	readonly limit: number;
+
+	constructor(bytes: number) {
+		super(authoringTooLargeMessage(bytes));
+		this.name = "AuthoringSizeError";
+		this.bytes = bytes;
+		this.limit = MAX_AUTHORING_JSON_BYTES;
+	}
+}
+
+/**
+ * Raised by {@link encodePayload} and {@link requirePaidEncodingSize} for a paid invoice whose canonical JSON outgrows the one wire cap, {@link MAX_JSON_BYTES}.
+ *
+ * It lives here rather than beside `markPaid` because it is a fact about the encoding and not about the invoice: `markPaid` records a payment without knowing what a payload may weigh, and this is the refusal the layer that owns the cap raises for a document it cannot write.
+ * The sentence it carries is {@link paidTooLargeMessage}'s, the same one the {@link paidEncodingSize} verdict reports, so the payer reads one sentence whichever path asked.
+ */
+export class PaidInvoiceTooLargeError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PaidInvoiceTooLargeError";
 	}
 }
 
@@ -180,7 +212,8 @@ function paidRecordReserveBytes(): number {
  * holds by construction rather than by recollection, and every invoice a payee creates can still be marked paid and still encode.
  * Both terms are derived above: the cap is the format's one figure, and the reserve is measured from this module's own serializer for the widest record `invoice/paid.ts` states.
  *
- * This bounds an invoice being authored and never one that already exists: a payload an older copy wrote between this figure and {@link MAX_JSON_BYTES} decodes, renders, re-encodes, and is passed on, because the encoder applies the one cap above. Judging an existing invoice by this figure is the regression the separate verdict keeps out of the encode path.
+ * {@link encodePayload} applies it to every invoice that records no payment, so the invariant holds for whatever surface authored the invoice.
+ * It is not a decode bound and not a bound on a paid invoice: a payload an older copy wrote between this figure and {@link MAX_JSON_BYTES} still decodes and renders, while encoding it again — which is what passing it on would mean — is refused, because the invoice it states could never carry a payment.
  */
 export const MAX_AUTHORING_JSON_BYTES = MAX_JSON_BYTES - PAID_RECORD_RESERVE_BYTES;
 
@@ -196,15 +229,29 @@ export type SizeVerdict =
 /**
  * The one statement of the remedy a payee reads when an invoice exceeds the authoring budget: remove content the payee controls, then try again.
  *
- * The create form's live hint and the submit refusal both read this sentence, so changing the advice means changing one statement rather than two.
+ * The create form's live hint and the sentence {@link AuthoringSizeError} carries both read this clause, so changing the advice means changing one statement rather than two.
  */
 export const AUTHORING_SIZE_REMEDY = "Remove part of the content — the optional icon is the largest field, and line descriptions and notes come next — then try again.";
+
+/** The sentence a payee reads when an unpaid invoice outgrows {@link MAX_AUTHORING_JSON_BYTES}: one statement for the verdict, the refusal class, and the encoder. */
+function authoringTooLargeMessage(bytes: number): string {
+	return `The invoice is too large to share: its encoded form needs ${bytes} bytes of JSON, past the ${MAX_AUTHORING_JSON_BYTES} bytes a new invoice may use — the difference is the room the payer's payment record needs. ${AUTHORING_SIZE_REMEDY}`;
+}
+
+/**
+ * The sentence a payer reads when a payment cannot be appended inside the one wire cap: one statement for the {@link paidEncodingSize} verdict, {@link requirePaidEncodingSize}, and {@link encodePayload}.
+ *
+ * It names who can act — the payee, by sending a smaller invoice — because nothing the payer changes makes the record fit.
+ */
+function paidTooLargeMessage(bytes: number): string {
+	return `This invoice is too large to record a payment against: with the payment added, its encoded form needs ${bytes} bytes of JSON, past the ${MAX_JSON_BYTES}-byte share limit. Ask the payee for a smaller invoice — one with a shorter icon, fewer line items, or shorter descriptions — and pay that one.`;
+}
 
 /**
  * The verdict on an invoice a payee is authoring: {@link MAX_AUTHORING_JSON_BYTES}, the encode cap less the room the widest paid record needs.
  *
  * The figure is smaller than the encode cap on purpose: the payee's link is the payload the payer appends a paid record to, so the room that record needs must be free before the payee sends the invoice.
- * It bounds only an invoice being authored; {@link encodePayload} and {@link decodePayload} both keep the one wire cap, so an invoice that already exists — a payload an older copy wrote between this figure and the cap — still opens, renders, and re-encodes byte for byte.
+ * {@link encodePayload} applies it to an unpaid invoice, and this function is what a surface asks to measure one before it tries — the create form's live hint reads it while the payee edits, so the warning arrives before the submit that would refuse.
  */
 export function authoringSize(invoice: Invoice): SizeVerdict {
 	const bytes = jsonToBytes(serializeInvoice(invoice)).length;
@@ -215,21 +262,19 @@ export function authoringSize(invoice: Invoice): SizeVerdict {
 		fits: false,
 		bytes,
 		limit: MAX_AUTHORING_JSON_BYTES,
-		message: `The invoice is too large to share: its encoded form needs ${bytes} bytes of JSON, past the ${MAX_AUTHORING_JSON_BYTES} bytes a new invoice may use — the difference is the room the payer's payment record needs. ${AUTHORING_SIZE_REMEDY}`,
+		message: authoringTooLargeMessage(bytes),
 	};
 }
 
 /**
- * The verdict on adding `record` to `invoice`: whether the invoice with the payment appended fits the one wire cap every encode and decode is held to.
+ * The verdict on adding `record` to `invoice`: whether the invoice with the payment appended fits the one wire cap every decode and encode is held to.
  *
  * The figure is the encode cap's own, not the authoring budget's: an invoice that already exists is never judged by the smaller figure a payee's new invoice must fit, because judging it there would refuse to mark paid a link an older copy wrote that still opens.
  * The verdict measures the invoice the caller holds plus the record, through the same serializer {@link encodePayload} writes with, so the verdict and the encode cannot disagree about the bytes.
- * {@link PaidInvoiceTooLargeError} is raised by the caller when the verdict does not fit, carrying this message, so the payer reads one sentence whatever path asked.
- * `markPaid` requires the verdict this returns as an argument, so the path cannot skip the seam.
+ * {@link requirePaidEncodingSize} is the one place that turns it into {@link PaidInvoiceTooLargeError}, and {@link encodePayload} raises the same class with the same sentence for a paid invoice over the cap, so every path states one refusal rather than two.
  *
  * The record's own validity is `invoice/paid.ts`'s and `markPaid`'s to refuse, so this seam answers the size question alone and never throws: a caller may ask it before it has validated anything, and gets a verdict rather than an exception.
  * A record whose hash is not the string this module writes would make the serializer's own JSON differ from the record's fields, so the size is measured on the value the serializer writes; a record the model refused never reaches here.
- * {@link paidEncodingSize} and {@link encodePayload} both state it, so a caller that asks the verdict and a caller that encodes directly get the same actionable sentence.
  */
 export function paidEncodingSize(invoice: Invoice, record: PaidRecord): SizeVerdict {
 	const bytes = jsonToBytes(serializeInvoice({ ...invoice, paid: record })).length;
@@ -240,20 +285,39 @@ export function paidEncodingSize(invoice: Invoice, record: PaidRecord): SizeVerd
 		fits: false,
 		bytes,
 		limit: MAX_JSON_BYTES,
-		message: `This invoice is too large to record a payment against: with the payment added, its encoded form needs ${bytes} bytes of JSON, past the ${MAX_JSON_BYTES}-byte share limit. Ask the payee for a smaller invoice — one with a shorter icon, fewer line items, or shorter descriptions — and pay that one.`,
+		message: paidTooLargeMessage(bytes),
 	};
+}
+
+/**
+ * Refuse a payment the one wire cap cannot hold, with the sentence the payer can act on.
+ *
+ * The egress that builds a paid link calls this before it records the payment, so the refusal arrives as the typed error the dialog and the panel report rather than as a half-built link or an unrelated failure; {@link encodePayload} raises the same class and the same sentence for any path that skips this check.
+ */
+export function requirePaidEncodingSize(invoice: Invoice, record: PaidRecord): void {
+	const verdict = paidEncodingSize(invoice, record);
+	if (!verdict.fits) {
+		throw new PaidInvoiceTooLargeError(verdict.message);
+	}
 }
 
 /**
  * Encode a validated invoice as the bare base32 payload a fragment carries.
  *
- * The bytes are measured against the one wire cap, {@link MAX_JSON_BYTES}, which applies here whatever the invoice records: a paid invoice may use the full cap, because the record it carries is already part of the payload and there is no later append to leave room for. The smaller figure a payee's new invoice must fit is {@link MAX_AUTHORING_JSON_BYTES}, applied where the invoice is authored, not here.
+ * The bound depends on what the invoice records. An invoice with no paid record is held to {@link MAX_AUTHORING_JSON_BYTES}, the encode cap less the room the widest paid record needs, so the payload this writes always has room for the payment the payer will report; that is the invariant, applied here rather than by each surface that hands an invoice out, so no authoring path can produce a link no payment can be recorded against.
+ * An invoice that already carries a record is held to the one wire cap, {@link MAX_JSON_BYTES}, because the record is already part of the payload and there is no later append to leave room for.
+ * The asymmetry follows from the two questions being different: a decode answers whether a link can be read, and stays generous so an older copy's link opens; an encode of an unpaid invoice answers whether the link can be paid, and refuses when it cannot.
+ * The cost is deliberate and is stated in the module doc — a legacy unpaid payload between the two figures decodes but cannot be encoded again.
  * Refused outright rather than truncated, so no share string ever states a smaller invoice than the one the payee wrote.
  */
 export function encodePayload(invoice: Invoice): string {
 	const bytes = jsonToBytes(serializeInvoice(invoice));
-	if (bytes.length > MAX_JSON_BYTES) {
-		throw new ShareFormatError(`the invoice needs ${bytes.length} bytes of JSON — the share limit is ${MAX_JSON_BYTES}; trim free text or split the invoice`);
+	if (invoice.paid === undefined) {
+		if (bytes.length > MAX_AUTHORING_JSON_BYTES) {
+			throw new AuthoringSizeError(bytes.length);
+		}
+	} else if (bytes.length > MAX_JSON_BYTES) {
+		throw new PaidInvoiceTooLargeError(paidTooLargeMessage(bytes.length));
 	}
 	return base32nopad.encode(bytes);
 }
@@ -279,6 +343,17 @@ export function encodeInvoiceBlob(invoice: Invoice): string {
 /** True when `text` begins with a blob prefix (`pinv<version>-` or `pinv<version>b-`). */
 export function isShareBlob(text: string): boolean {
 	return BLOB_PREFIX_PATTERN.test(text);
+}
+
+/**
+ * The base32 payload a blob carries, past its version-and-encoding prefix, or `null` when `blob` carries no prefix this module recognises.
+ *
+ * This is the container's own answer to "what payload does this string state", so a surface that re-spells a blob as the fragment route carries the payload it arrived as rather than encoding the invoice again.
+ * A payload an older copy wrote between the authoring budget and the encode cap is read here and refused by {@link encodePayload}, so re-encoding it to hand it on would fail; reusing its own payload is what still lets the invoice be opened and read.
+ */
+export function blobPayload(blob: string): string | null {
+	const match = BLOB_PREFIX_PATTERN.exec(blob);
+	return match === null ? null : blob.slice(match[0].length);
 }
 
 /**
@@ -323,7 +398,7 @@ function decodePayload(payload: string): Invoice {
 	} catch (error) {
 		throw new ShareFormatError(`the base32 payload is malformed: ${boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX)}`);
 	}
-	// The decode bound is the one wire cap, the same one the encoder applies, so every payload this build reads is one it can write again.
+	// The decode bound is the one wire cap, and it is deliberately not the encoder's authoring budget: a link an older copy wrote between the two figures still opens and renders here, and only writing it again is refused.
 	if (bytes.length > MAX_JSON_BYTES) {
 		throw new ShareFormatError(`the payload is ${bytes.length} bytes of JSON — the share limit is ${MAX_JSON_BYTES}; trim free text or split the invoice`);
 	}

@@ -23,6 +23,13 @@ export const UNSUPPORTED_WALLET_MESSAGE = "This invoice is paid by the payment l
 export const UNVERIFIED_PAYMENT_NOTE = "This page records a payment the payer reported. It is unverified: anyone who holds this link can edit it.";
 
 /**
+ * Reported when an invoice could not be turned into the strings a share dialog offers: a fault this app cannot explain to whoever is sharing, so the failure itself goes to the console and the person reads what they can do about it.
+ *
+ * The create form's submit and the payer's Share control both report it, so the two surfaces state one sentence rather than two spellings of the same advice.
+ */
+export const SHARE_FAILED_MESSAGE = "The invoice could not be shared. Reload the page and try again.";
+
+/**
  * Reported when a view that was being built could not be released, which is the state both renderers that build through a release can leave: `ui/view.ts` and `ui/payment-section.ts` release what they had already subscribed to before they rethrow, and a release that throws there is the failure this sentence names.
  *
  * The sentence is the message of the error those renderers throw and the failed build is kept on its `cause`, so the console report a developer reads names the stop that failed rather than the render behind it; no catcher here shows a caught message to the payer, so this sentence never reaches the notice region, which states the shell's own fixed sentence for the route that failed (`app/shell.ts`'s `renderGuarded`) and sends the error to `reportInternalFailure`.

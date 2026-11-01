@@ -18,7 +18,7 @@ import { nextTask } from "./helpers/wait.mjs";
 import { installWindow, mockProvider } from "./helpers/wallet-mock.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
 import { MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
-import { MAX_JSON_BYTES, encodeInvoice } from "../app/js/invoice/codec.js";
+import { AuthoringSizeError, MAX_JSON_BYTES, encodeInvoice, serializeInvoice } from "../app/js/invoice/codec.js";
 import { MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { decodeShare, encodeShare } from "../app/js/invoice/share.js";
 import { parseHash } from "../app/js/app/router.js";
@@ -877,7 +877,7 @@ test("a refused paste reaches the notice as the app's own sentence, with the cod
 });
 
 test("a pasted share blob between the authoring budget and the encode cap opens instead of being refused", () => {
-	// `app/shell.ts` re-encodes what it decoded, so under a reduced encode cap a valid legacy paste surfaced as the app's generic paste failure and an internal report.
+	// The paste is carried as the payload it arrived as rather than encoded again, so a link an older copy wrote at a size this build will not write still opens: encoding it again would refuse a document the payer can read, and surface as the app's generic paste failure.
 	const fake = installInteractiveDocument();
 	const reported = [];
 	const consoleError = console.error;
@@ -889,7 +889,7 @@ test("a pasted share blob between the authoring budget and the encode cap opens 
 		const form = findAll(shell.root, (node) => node.tagName === "form" && hasClass(node, "open-form"))[0];
 		const input = findAll(shell.root, (node) => node.tagName === "input" && hasClass(node, "open-input"))[0];
 		assert.ok(form !== undefined && input !== undefined, "the header offers the paste box");
-		input.value = `pinv1b-${encodeInvoice(band)}`;
+		input.value = `pinv1b-${b32(serializeInvoice(band))}`;
 		form.dispatch("submit", { type: "submit" });
 		assert.equal(shell.notice.children.length, 0, "the payer reads no refusal at all");
 		assert.equal(reported.length, 0, "and nothing was reported as an internal failure");
@@ -929,7 +929,9 @@ test("the create form hints and refuses honestly at one byte past the authoring 
 	assert.match(plan.message, /Remove part of the content/, "with an action the payee can take");
 	assert.doesNotMatch(plan.message, /[Rr]eload/, "and not the generic reload advice");
 	const invoice = createInvoice(invoiceInputFromState(stateAtBytes(budget + 1)));
-	assert.deepEqual(decodeShare(encodeShare(invoice)), invoice, "while the same invoice, which an older copy could have written, decodes and re-encodes");
+	// The budget is the encoder's own bound, so the form's refusal and the codec's are one rule: a payload an older copy wrote at this size still decodes, and this build refuses to write it again.
+	assert.deepEqual(decodeShare(b32(serializeInvoice(invoice))), invoice, "the same invoice, which an older copy could have written, still decodes");
+	assert.throws(() => encodeShare(invoice), AuthoringSizeError, "while encoding it again is refused, because it could never carry a payment");
 });
 
 test("a normal invoice opens the share dialog with the URL and the blob", () => {
@@ -1654,7 +1656,7 @@ test("no payer- or payee-facing surface cautions that a valid address may be unp
 	assert.ok(read.includes(ZEC_TEX_PAYEE), "and the payee's own spelling, as the document draws it");
 	assert.ok(read.includes(UNSUPPORTED_WALLET_MESSAGE), "and the hand-off sentence, which names where a wallet-less invoice is paid and cautions nothing");
 	assert.match(read, /Payment link/, "and the terms a payer copies from");
-	assert.ok(read.includes("Payment received"), "the sweep reads the paid section's title");
+	assert.ok(read.includes("Payment reported"), "the sweep reads the paid section's title, which never claims a verified settlement");
 	assert.ok(read.includes(UNVERIFIED_PAYMENT_NOTE), "and the page-only unverified note");
 	assert.ok(read.includes("Mark this invoice paid"), "and the mark-paid dialog's title");
 	assert.match(read, /send this paid invoice back/, "and the paid share dialog's copy");
@@ -1688,7 +1690,7 @@ test("the wallet-support guard catches the cautions it exists to catch", () => {
 		payoutAddressGuidance(ASSET_REGISTRY.xmr),
 		"Invoice #INV-2026-0042 is due on 28 Oct 2026.",
 		UNVERIFIED_PAYMENT_NOTE,
-		"Payment received",
+		"Payment reported",
 		"Transaction",
 		"Recorded",
 		"There are two ways to send this paid invoice back. Pick the one that fits how you're sending it.",

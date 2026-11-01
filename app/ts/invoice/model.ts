@@ -46,7 +46,6 @@ import { InvalidCalendarDateError, requireCalendarDate } from "./calendar-date.j
 import { unknownFieldOf, unknownFieldReason } from "./closed-object.js";
 import { canonicalContactText } from "./contact-canonical-text.js";
 import { validateIcon } from "./icon.js";
-import type { SizeVerdict } from "./codec.js";
 import { InvalidPaidRecordError, validatePaidRecord, type PaidRecord } from "./paid.js";
 
 /** The only invoice schema version this build writes and reads. */
@@ -210,19 +209,6 @@ export class InvoiceAlreadyPaidError extends Error {
 		super(`invoice: paid: already records the payment ${preview(paid.hash)} — an invoice records one payment, so attach a record to an unpaid invoice`);
 		this.name = "InvoiceAlreadyPaidError";
 		this.paid = paid;
-	}
-}
-
-/**
- * Raised by {@link markPaid} for a payment whose encoded form would exceed the share cap.
- *
- * It is a size refusal rather than a field refusal: the invoice and the record are both well-formed, but together they cannot be shared, and the sentence the verdict carries tells the payer who can fix it — the payee, by sending a smaller invoice.
- * The encode path raises the same class for a paid invoice it cannot encode, so a caller that skips the verdict still gets the actionable sentence rather than a bare container error.
- */
-export class PaidInvoiceTooLargeError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "PaidInvoiceTooLargeError";
 	}
 }
 
@@ -720,15 +706,14 @@ export function createInvoice(input: InvoiceInput): Invoice {
  *
  * It refuses an invoice that already records a payment with an {@link InvoiceAlreadyPaidError} rather than replacing the record, because an invoice records the one payment made against it and a second call would silently overwrite what the first reported.
  * The record is validated against the invoice's own asset family, so a hash of the wrong shape is refused here as it is on the wire, and it is stored in its canonical case.
- * The size verdict `paidEncodingSize` returns for the same invoice and record is a required argument, and a payment whose encoded form would exceed the share cap is refused with a {@link PaidInvoiceTooLargeError} carrying the sentence the payer can act on — so the mark-as-paid path cannot skip the size seam.
  * Nothing else about the invoice moves: the parties, the line items, and the totals are the ones it already carried.
+ *
+ * Whether the paid document can then be shared is not this function's question: an invoice records a payment, and what a payload may weigh belongs to `invoice/codec.ts`, which measures the invoice plus its record and refuses one it cannot write.
+ * Keeping the two apart is what lets the model state the wire object and nothing more — it depends on no encoder, and a payment can be recorded whether or not a share string of the result would fit.
  */
-export function markPaid(invoice: Invoice, record: PaidRecord, verdict: SizeVerdict): Invoice {
+export function markPaid(invoice: Invoice, record: PaidRecord): Invoice {
 	if (invoice.paid !== undefined) {
 		throw new InvoiceAlreadyPaidError(invoice.paid);
-	}
-	if (!verdict.fits) {
-		throw new PaidInvoiceTooLargeError(verdict.message);
 	}
 	return validateInvoice({ ...invoice, paid: record });
 }

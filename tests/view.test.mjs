@@ -34,8 +34,8 @@ import { h } from "../app/js/util/dom.js";
 import { encodeQr } from "../app/js/util/qr.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
-import { markPaid, PaidInvoiceTooLargeError } from "../app/js/invoice/model.js";
-import { paidEncodingSize } from "../app/js/invoice/codec.js";
+import { PaidInvoiceTooLargeError } from "../app/js/invoice/codec.js";
+import { markPaid } from "../app/js/invoice/model.js";
 import { decodeShare } from "../app/js/invoice/share.js";
 import { createMarkPaidDialog } from "../app/js/ui/mark-paid.js";
 import { installWindow, mockProvider, TX_HASH } from "./helpers/wallet-mock.mjs";
@@ -177,11 +177,14 @@ test("a paid invoice draws the record's own section in place of the payment deta
 		assert.equal(byText(view, "button", "Copy Transaction").length, 1, "the record hash carries its own copy control");
 		const hashText = findAll(view, (node) => textOf(node) === hash);
 		assert.equal(hashText.length, 1, "the hash is drawn once");
+		// A paid document states an amount rather than an amount owed: nothing on the page may invite a payer to send the payment the record reports.
+		assert.equal(byText(view, "th", "Total due").length, 0, "the totals block does not call the figure due");
+		assert.equal(byText(view, "th", "Total").length, 1, "and names the amount instead");
 		const note = findAll(view, (node) => hasClass(node, "paid-unverified"))[0];
 		assert.ok(note, "the unverified note is present");
 		assert.match(textOf(note), /This page records a payment the payer reported/, "the note states the record unverified nature");
 		const badge = findAll(view, (node) => hasClass(node, "status-badge"))[0];
-		assert.equal(textOf(badge), "Paid", "the badge names the recorded payment");
+		assert.equal(textOf(badge), "Reported", "the badge names what the document holds, never a settlement");
 		assert.ok(hasClass(badge, "status-paid"));
 		assert.ok(hasClass(note, "no-print"), "the unverified note is page-only");
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
@@ -195,7 +198,7 @@ test("a paid invoice draws the record's own section in place of the payment deta
 			[
 				["h1", "Invoice"],
 				["h2", "Notes and terms"],
-				["h2", "Payment received"],
+				["h2", "Payment reported"],
 			],
 			"the outline names the paid record section",
 		);
@@ -2487,7 +2490,7 @@ test("the invoice view surfaces a release that throws as the app's own sentence,
 test("a paid link round-trips through encode/decode with its record intact", () => {
 	const invoice = invoiceFor();
 	const record = { hash: "0x" + "ab".repeat(32), date: "2026-10-03" };
-	const paid = markPaid(invoice, record, paidEncodingSize(invoice, record));
+	const paid = markPaid(invoice, record);
 	const bundle = buildShareBundle(paid, "https://example.com/app/");
 	assert.equal(bundle.paid, true, "the bundle states the invoice is paid");
 	const decoded = decodeShare(bundle.url.slice(bundle.url.indexOf("#")));

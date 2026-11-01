@@ -21,8 +21,8 @@
  */
 
 import { requireAsset } from "../assets/registry.js";
-import { serializeInvoice } from "../invoice/codec.js";
-import { PaidInvoiceTooLargeError, type Invoice } from "../invoice/model.js";
+import { PaidInvoiceTooLargeError, serializeInvoice } from "../invoice/codec.js";
+import type { Invoice } from "../invoice/model.js";
 import { fromBaseUnits } from "../util/decimal.js";
 import { append, h, type DomChild } from "../util/dom.js";
 import { reportInternalFailure } from "../util/errors.js";

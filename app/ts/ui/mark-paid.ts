@@ -3,7 +3,7 @@
  *
  * The dialog is the manual path's whole surface: one labelled input for the hash, a hint naming the asset family's own hash shape from `invoice/paid.ts`, the recorded day read-only from the caller's `today`, and one confirm that hands the canonical hash to the injected `onPaid` egress and closes.
  * It reads no clock, navigates nowhere, and encodes nothing: the egress builds the paid link and the shell owns the navigation.
- * Validation is `invoice/paid.ts`'s, so a malformed hash is refused with the family's own shape and the clause is bounded and stripped beside the field; the over-budget refusal `invoice/model.ts` raises when the paid encoding will not fit is shown as the actionable sentence it carries, never as a silent failure.
+ * Validation is `invoice/paid.ts`'s, so a malformed hash is refused with the family's own shape and the clause is bounded and stripped beside the field; the over-budget refusal `invoice/codec.ts` raises when the paid encoding will not fit is shown as the actionable sentence it carries, never as a silent failure.
  * A refusal is stated beside the field rather than in the notice region, because the hash is what the payer changes.
  * The wording follows `docs/design/payment-safety-memo.md`'s constraint: nothing in this app can confirm a payment, so the dialog states the record as the payer's report and repeats the unverified note `ui/messages.ts` owns.
  *
@@ -12,8 +12,8 @@
  */
 
 import { requireAsset, requireAssetFamily } from "../assets/registry.js";
+import { PaidInvoiceTooLargeError } from "../invoice/codec.js";
 import type { Invoice } from "../invoice/model.js";
-import { PaidInvoiceTooLargeError } from "../invoice/model.js";
 import { InvalidPaidRecordError, paidHashForm, validatePaidRecord } from "../invoice/paid.js";
 import { h } from "../util/dom.js";
 import { boundMessage, reportInternalFailure } from "../util/errors.js";

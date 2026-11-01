@@ -13,13 +13,13 @@
  *
  * The invoice view's outward seams — {@link ExportPdfHandler} (the pdf-lib renderer), {@link PayHandler} (the wallet payment flow), and the manual payment egress — are supplied by {@link viewOptions}.
  * The first two defaults are the pdf-lib renderer bound to the boot's `today`, loaded lazily on the first export so its ~1.4 MB bundle stays out of first load, and the payment panel in ui/pay.ts, which reads nothing but the invoice until the payer clicks to pay, so wiring the default adds no wallet access on load or on render.
- * The third is a handler bound to the invoice on screen, which computes the payment's encoded size with `invoice/codec.ts`'s `paidEncodingSize`, refuses the mark with `invoice/model.ts`'s `markPaid` when that size will not fit, and navigates to the paid link the resulting invoice encodes. The paid link is built in the payer's browser and reached by navigation, so the payee's link is never rewritten.
+ * The third is a handler bound to the invoice on screen, which refuses a payment the share cap cannot hold with `invoice/codec.ts`'s `requirePaidEncodingSize`, records it with `invoice/model.ts`'s `markPaid`, and navigates to the paid link the resulting invoice encodes. The paid link is built in the payer's browser and reached by navigation, so the payee's link is never rewritten.
  * A boot that supplies either of the first two seams' own handler (a test, an embedding) still wins; the manual egress is the shell's own, because it needs the invoice the document shows and no boot can name that invoice ahead of time.
  */
 
-import { paidEncodingSize } from "../invoice/codec.js";
+import { blobPayload, requirePaidEncodingSize } from "../invoice/codec.js";
 import { markPaid, type Invoice } from "../invoice/model.js";
-import { decodeShare, encodeShare } from "../invoice/share.js";
+import { SHARE_FRAGMENT_PREFIX, decodeShare, encodeShare } from "../invoice/share.js";
 import { requireAsset } from "../assets/registry.js";
 import { renderCreateView, type CreateViewOptions } from "../ui/create.js";
 import type { LayoutProbe } from "../ui/fit-value.js";
@@ -315,13 +315,13 @@ function createViewOptions(shell: AppShell, options: RenderOptions): CreateViewO
 /**
  * Forward the invoice view's seams — the pdf-lib export, the wallet payment flow, and the manual payment egress.
  *
- * The manual egress is bound to the invoice the document shows, so the view and the payment panel hand over only the hash: the handler computes the payment's encoded size with `paidEncodingSize`, refuses it with `markPaid` when the size will not fit, and navigates to the paid link the resulting invoice encodes. A refusal the size verdict carries reaches the dialog or the panel that called this handler, so the payer reads the sentence that tells them to ask for a smaller invoice.
+ * The manual egress is bound to the invoice the document shows, so the view and the payment panel hand over only the hash: the handler refuses a payment the share cap cannot hold with `requirePaidEncodingSize`, records it with `markPaid`, and navigates to the paid link the resulting invoice encodes. The size refusal is the codec's own typed error, so it reaches the dialog or the panel that called this handler and the payer reads the sentence that tells them to ask for a smaller invoice.
  */
 function viewOptions(shell: AppShell, invoice: Invoice, options: RenderOptions): ViewOptions {
 	const onPaid = (hash: string): void => {
 		const record = { hash, date: options.today };
-		const verdict = paidEncodingSize(invoice, record);
-		navigate(encodeShare(markPaid(invoice, record, verdict)));
+		requirePaidEncodingSize(invoice, record);
+		navigate(encodeShare(markPaid(invoice, record)));
 	};
 	return {
 		notice: shell,
@@ -368,7 +368,8 @@ function renderOpenForm(shell: AppShell): HTMLFormElement {
 
 /**
  * Turn pasted text into a route.
- * A link (or bare fragment) is navigated to directly; a standalone blob is re-encoded to its `#/i/<payload>` fragment and navigated to as well, so every path goes through `location.hash` and the resulting `hashchange` — the blob path is not a special case that renders without updating the URL.
+ * A link (or bare fragment) is navigated to directly; a standalone blob or bare payload is navigated to as its `#/i/<payload>` fragment, carrying the payload it arrived as, so every path goes through `location.hash` and the resulting `hashchange` — the blob path is not a special case that renders without updating the URL.
+ * Reusing the pasted payload rather than encoding the decoded invoice again is what keeps an invoice an older copy wrote readable: the decoder reads a legacy payload between the authoring budget and the encode cap, while the encoder refuses to write it again, so re-encoding here would refuse to show a document the payer can perfectly well read.
  * A legacy `pinv1-…` base64url blob is recognised as a blob and refused rather than decoded, and {@link PASTE_FAILED_MESSAGE} names the container this build shares, so a payer holding a retired link is told to ask the sender for a fresh one rather than left to read an internal refusal.
  *
  * The text is the payer's paste and, when a link was shared with them, an attacker's: the codec's refusals embed a bounded preview of it, so a throw reaches the notice as {@link PASTE_FAILED_MESSAGE} and the codec's own detail goes to the console, exactly as every other payer-facing failure path in this app states a fixed sentence and reports the exception behind it.
@@ -386,9 +387,9 @@ function openPasted(text: string, shell: AppShell): void {
 		return;
 	}
 	try {
-		const invoice = decodeShare(value);
-		if (invoice !== null) {
-			navigate(encodeShare(invoice));
+		// Read here so a payload this build cannot read is refused before a route is built; the fragment then carries that same payload, and the router reads it again as the route it navigates to.
+		if (decodeShare(value) !== null) {
+			navigate(SHARE_FRAGMENT_PREFIX + (blobPayload(value) ?? value));
 			return;
 		}
 	} catch (error) {

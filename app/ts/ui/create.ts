@@ -10,7 +10,7 @@
  */
 
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset, type Asset, type AssetFamily, type AssetId } from "../assets/registry.js";
-import { AUTHORING_SIZE_REMEDY, MAX_AUTHORING_JSON_BYTES, MAX_JSON_BYTES, authoringSize } from "../invoice/codec.js";
+import { AUTHORING_SIZE_REMEDY, AuthoringSizeError, MAX_AUTHORING_JSON_BYTES, MAX_JSON_BYTES, authoringSize } from "../invoice/codec.js";
 import { validateIcon } from "../invoice/icon.js";
 import {
 	InvalidInvoiceError,
@@ -42,6 +42,7 @@ import type { NoticeApi } from "./notice.js";
 import { renderPaymentSection } from "./payment-section.js";
 import { buildInvoiceViewModel } from "./presentation.js";
 import { releasable, type ReleasableElement } from "./release.js";
+import { SHARE_FAILED_MESSAGE } from "./messages.js";
 import { buildShareBundle, openShareDialog, type ClipboardLike, type ShareBundle, type ShareDialogHandle } from "./share.js";
 
 /**
@@ -430,10 +431,10 @@ export function liveLineAmount(state: CreateFormState, index: number): string | 
 /**
  * What the create form does with a submitted form, decided as data rather than thrown.
  *
- * Turning a valid form into a share link can still fail in ways the fields cannot show: the invoice is accepted by the model yet its canonical JSON outgrows the budget a new invoice may use, so the link could be published and then could not be marked paid — `invoice/codec.ts`'s `authoringSize` is the verdict that decides it, and its refusal carries the sentence the payee can act on; the asset's own registry entry builds a link past the byte budget of the largest QR symbol the payer's document draws, which `payment/links.ts`'s `requireLinkBudget` refuses; or building the container throws for some other reason.
+ * Turning a valid form into a share link can still fail in ways the fields cannot show: the invoice is accepted by the model yet its canonical JSON outgrows the budget a new invoice may use, so the link could be published and then could not be marked paid — `invoice/codec.ts`'s `encodePayload` is what refuses it, so the invariant is the encoder's rather than this form's, and the refusal carries the sentence the payee can act on; the asset's own registry entry builds a link past the byte budget of the largest QR symbol the payer's document draws, which `payment/links.ts`'s `requireLinkBudget` refuses; or building the container throws for some other reason.
  * Returning that decision as a value keeps the submit handler thin and makes the refusals this form can actually reach — the oversized invoice, since it advertises up to {@link MAX_ITEMS} lines of 500 characters each, and the link budget gate — testable without a browser.
  * The budget gate is applied here, where the share is handed out, rather than only where the registry is admitted, so an entry whose widest link outgrows the symbol is refused at the payee's own form instead of reaching the payer as a document that cannot render.
- * That refusal is classified by class rather than by message: `payment/links.ts`'s `PaymentLinkBudgetError` is the one a payee's own input can provoke, so it gets its own {@link ShareRefusal} kind and the one action that clears it, while every other throw keeps the generic failure.
+ * Each refusal is classified by class rather than by message: `invoice/codec.ts`'s `AuthoringSizeError` and `payment/links.ts`'s `PaymentLinkBudgetError` are the two a payee's own input can provoke, so each gets its own {@link ShareRefusal} kind and the sentence or action that clears it, while every other throw keeps the generic failure.
  * No branch throws.
  */
 export type ShareRefusal =
@@ -463,12 +464,16 @@ function linkBudgetMessage(asset: Asset): string {
  * Exported so the classification is testable without a registry entry that outgrows the symbol, which no shipped entry does.
  */
 export function shareFailure(error: unknown, asset: Asset): ShareRefusal {
+	// The codec's own sentence names the budget the invoice missed and the content the payee can remove, so it is the refusal the payee reads rather than a measuring this form does first.
+	if (error instanceof AuthoringSizeError) {
+		return { kind: "too-large", message: error.message };
+	}
 	if (error instanceof PaymentLinkBudgetError) {
 		return { kind: "link-too-large", message: linkBudgetMessage(asset) };
 	}
 	return {
 		kind: "failed",
-		message: "The invoice could not be shared. Reload the page and try again.",
+		message: SHARE_FAILED_MESSAGE,
 		cause: error,
 	};
 }
@@ -483,11 +488,9 @@ export function planShare(state: CreateFormState, baseUrl: string): SharePlan {
 	if (!outcome.ok) return { kind: "invalid", errors: outcome.errors };
 	const asset = requireAsset(outcome.invoice.asset);
 	try {
-		// The invoice this form would hand out is judged by the budget a new invoice must fit, not by the encode cap: the difference is the room the payer's payment record needs, and the codec owns that verdict.
-		const size = authoringSize(outcome.invoice);
-		if (!size.fits) return { kind: "too-large", message: size.message };
 		// The entry's widest link is measured before the share is handed out: the refusal belongs to the payee's form, not to the payer's page.
 		requireLinkBudget(asset);
+		// Building the share encodes the invoice, and the codec refuses an unpaid invoice with no room for the payer's payment record, so this form never has to measure the budget itself.
 		return { kind: "ready", invoice: outcome.invoice, bundle: buildShareBundle(outcome.invoice, baseUrl) };
 	} catch (error) {
 		return shareFailure(error, asset);
@@ -504,7 +507,7 @@ export interface ShareSizeHint {
 /**
  * The size hint the form shows while editing: the encoded byte count and whether it fits the budget a new invoice must leave for the payer's payment record.
  *
- * The figures come from `invoice/codec.ts`'s `authoringSize`, the same verdict `planShare` refuses on, so the hint the payee reads while editing and the refusal a submit earns cannot disagree about the budget or its figure.
+ * The figures come from `invoice/codec.ts`'s `authoringSize`, the same budget `encodePayload` applies when the share is built, so the hint the payee reads while editing and the refusal a submit earns cannot disagree about the budget or its figure.
  * `null` while the form does not yet parse to a valid invoice, so nothing is measured or shown before there is a shareable invoice to measure.
  */
 export function shareSizeHint(state: CreateFormState): ShareSizeHint | null {

@@ -5,6 +5,7 @@
  * A paid invoice's two strings carry the record the invoice already holds, so the dialog branches on that: the paid body tells the payer to send the link back to whoever invoiced them, and the unverified note the paid document carries is repeated beside both options so the payer cannot copy the link without seeing that the record is only their report.
  * That wording follows `docs/design/payment-safety-memo.md`'s constraint: nothing in this app can confirm a payment, so the dialog states the record as the payer's report and never as a verified settlement.
  * It carries no dependency on the app shell or on any view, so the create flow and the payer view open the same dialog instead of duplicating it, and the `#/i/<base32>` wire format stays sourced from `invoice/share.ts` alone.
+ * Both strings are written through `invoice/codec.ts`'s guarded encoder, which is where the room a payment record needs is enforced, so an unpaid invoice with none left — a link an older copy wrote before that budget existed — is refused here rather than handed on in a form no payment can be recorded against; `AuthoringSizeError` is that refusal and carries the sentence the reader can act on.
  *
  * The modal behaviour itself — the backdrop, Escape, the Tab trap, hiding the page behind the dialog, and focus restoration — belongs to `ui/overlay.ts`, which the payment panel shares.
  * This module supplies only the dialog's content and its close controls.
@@ -35,7 +36,11 @@ export interface ShareBundle {
 	readonly paid: boolean;
 }
 
-/** Build the two share strings for an invoice. */
+/**
+ * Build the two share strings for an invoice.
+ *
+ * This is the one place a decoded invoice is written again — the payer's document shares what it opened — so the codec's authoring guard is what decides whether it can be: an unpaid invoice with no room for the payer's payment record raises `AuthoringSizeError` here instead of producing a link that could never be marked paid, and the surface that asked reports the sentence the error carries.
+ */
 export function buildShareBundle(invoice: Invoice, baseUrl: string): ShareBundle {
 	return Object.freeze({
 		url: buildShareUrl(invoice, baseUrl),

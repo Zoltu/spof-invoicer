@@ -14,6 +14,7 @@
  */
 
 import { requireAsset } from "../assets/registry.js";
+import { AuthoringSizeError } from "../invoice/codec.js";
 import type { Invoice } from "../invoice/model.js";
 import { h } from "../util/dom.js";
 import { reportInternalFailure } from "../util/errors.js";
@@ -21,13 +22,13 @@ import { isWalletPayable } from "../wallet/payment.js";
 import type { ClipboardLike } from "./clipboard.js";
 import type { LayoutProbe } from "./fit-value.js";
 import { openMarkPaidDialog } from "./mark-paid.js";
-import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
+import { SHARE_FAILED_MESSAGE, UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import { VIEW_BUILD_RELEASE_FAILED_MESSAGE } from "./messages.js";
 import type { NoticeApi } from "./notice.js";
 import { renderPaymentSection } from "./payment-section.js";
-import { buildInvoiceViewModel, type InvoicePartyView } from "./presentation.js";
+import { buildInvoiceViewModel, type InvoicePartyView, type InvoiceViewModel } from "./presentation.js";
 import { releasable, type ReleasableElement } from "./release.js";
-import { buildShareBundle, openShareDialog, type ShareDialogHandle } from "./share.js";
+import { buildShareBundle, openShareDialog, type ShareBundle, type ShareDialogHandle } from "./share.js";
 
 /** Hand a validated invoice to the pdf-lib renderer when one is supplied; may complete asynchronously. */
 export type ExportPdfHandler = (invoice: Invoice) => void | Promise<void>;
@@ -174,7 +175,8 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
 				h(
 					"tr",
 					{ class: "totals-due" },
-					h("th", { scope: "row" }, view.labels.totalDue),
+					// A paid document states an amount rather than an amount owed: the record the invoice carries is the payment it reports, so nothing on the page may invite a payer to send it again.
+					h("th", { scope: "row" }, view.paid === null ? view.labels.totalDue : view.labels.totalPaid),
 					h("td", { class: "num" }, view.total),
 				),
 			),
@@ -210,7 +212,7 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
 			payment,
 		);
 
-		const rendered = h("section", { class: "view view-invoice" }, documentActions(invoice, options), document);
+		const rendered = h("section", { class: "view view-invoice" }, documentActions(invoice, view, options), document);
 		return releasable(rendered, payment.release);
 	} catch (error) {
 		try {
@@ -234,20 +236,14 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
  * A paid invoice offers neither the Pay control nor its hint, whatever its family: the record the document carries is the payment it reports, and there is nothing left to start.
  * The Mark as paid control is offered on every unpaid invoice, whatever its family and whatever the window reports: it opens the manual dialog, which reads no wallet and no storage, so it is the one way a payer who has already sent a privacy-chain payment can attach its hash without reopening the wallet flow the pay panel would refuse in a framed window.
  */
-function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
+function documentActions(invoice: Invoice, view: InvoiceViewModel, options: ViewOptions): HTMLElement {
 	const shareButton = h("button", { type: "button", class: "btn btn-secondary" }, "Share");
-	shareButton.addEventListener("click", () => {
-		const dialog = openShareDialog(buildShareBundle(invoice, options.baseUrl), {
-			clipboard: options.clipboard ?? null,
-			onClose: () => options.onDialog?.(null),
-		});
-		options.onDialog?.(dialog);
-	});
+	shareButton.addEventListener("click", () => openShare(invoice, options));
 
 	const saveButton = h("button", { type: "button", class: "btn btn-secondary" }, "Save as PDF");
 	saveButton.addEventListener("click", () => runAction(() => exportPdf(invoice, options), options, "PDF export"));
 
-	const paid = invoice.paid !== undefined;
+	const paid = view.paid !== null;
 	const markPaidButton = paid
 		? null
 		: h("button", { type: "button", class: "btn btn-secondary" }, "Mark as paid");
@@ -296,6 +292,29 @@ function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 		payButton,
 		payNote,
 	);
+}
+
+/**
+ * Open the share dialog for this document, or report why it cannot be shared.
+ *
+ * The bundle is built through `invoice/codec.ts`'s guarded encoder, so an unpaid invoice with no room left for the payer's payment record — a link an older copy wrote before that budget existed — is refused here with the sentence the reader can act on, rather than producing a link that could never be marked paid.
+ * That refusal is shown as the codec worded it because the reader can act on it; every other failure is a fault this surface cannot explain, so the reader gets the app's own sentence and the error goes where a developer reads it, exactly as the document's other actions report theirs.
+ */
+function openShare(invoice: Invoice, options: ViewOptions): void {
+	let bundle: ShareBundle;
+	try {
+		bundle = buildShareBundle(invoice, options.baseUrl);
+	} catch (error) {
+		if (error instanceof AuthoringSizeError) {
+			options.notice.showNotice(error.message, "error");
+			return;
+		}
+		reportInternalFailure("share dialog", error);
+		options.notice.showNotice(SHARE_FAILED_MESSAGE, "error");
+		return;
+	}
+	// The dialog describes the document its reader is looking at, so it is reported through the one slot the shell dismisses on a route change.
+	options.onDialog?.(openShareDialog(bundle, { clipboard: options.clipboard ?? null, onClose: () => options.onDialog?.(null) }));
 }
 
 /**

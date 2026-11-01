@@ -37,10 +37,12 @@ import {
 } from "../../js/vendor/pdf-lib/pdf-lib.esm.js";
 import type { Invoice } from "../invoice/model.js";
 import {
+	STATUS_TONE_PALETTE,
 	buildInvoiceViewModel,
 	type InvoiceLabels,
 	type InvoiceLineView,
 	type InvoicePaymentTermView,
+	type InvoiceStatusTone,
 	type InvoiceViewModel,
 } from "../ui/presentation.js";
 import type { SvgDataUrl } from "../util/data-url.js";
@@ -289,12 +291,22 @@ const PALETTE = Object.freeze({
 	paper: hex("#ffffff"),
 });
 
-/** The status badge's ink/line/surface per tone, mirroring `invoice.css`'s status classes. */
-const STATUS = Object.freeze({
-	open: { ink: hex("#41506b"), line: hex("#c7cedb"), surface: hex("#eef1f6") },
-	due: { ink: hex("#8a5300"), line: hex("#eccb8f"), surface: hex("#fdf3e2") },
-	overdue: { ink: hex("#a3261e"), line: hex("#f0bab4"), surface: hex("#fdeceb") },
-	paid: { ink: hex("#1f5f3a"), line: hex("#a3d9b4"), surface: hex("#eaf6ee") },
+/** One tone's badge colors as the export draws them: the hex literals `ui/presentation.ts` states, converted once. */
+function toneColors(tone: InvoiceStatusTone): { readonly ink: PdfColor; readonly line: PdfColor; readonly surface: PdfColor } {
+	const palette = STATUS_TONE_PALETTE[tone];
+	return Object.freeze({ ink: hex(palette.ink), line: hex(palette.line), surface: hex(palette.surface) });
+}
+
+/**
+ * The status badge's ink/line/surface per tone, read from `ui/presentation.ts`'s {@link STATUS_TONE_PALETTE}.
+ *
+ * That table is where the tones' colors are stated, and `app/stylesheets/invoice.css` declares the same three per tone as custom properties so the page can paint its badge without a script; the two statements are pinned together by a test, so a theme change touches the table and the stylesheet and cannot move one without the other.
+ */
+const STATUS: Readonly<Record<InvoiceStatusTone, { readonly ink: PdfColor; readonly line: PdfColor; readonly surface: PdfColor }>> = Object.freeze({
+	open: toneColors("open"),
+	due: toneColors("due"),
+	overdue: toneColors("overdue"),
+	paid: toneColors("paid"),
 });
 
 /**
@@ -997,7 +1009,8 @@ function drawTotals(flow: Flow, view: InvoiceViewModel): void {
 	flow.text(
 		left + 12,
 		centerTop(dueTop, dueBoxHeight, SIZE.totalLabel),
-		view.labels.totalDue,
+		// A paid document states an amount rather than an amount owed, so the block never invites a second payment for a record the invoice already reports.
+		view.paid === null ? view.labels.totalDue : view.labels.totalPaid,
 		SIZE.totalLabel,
 		"sansBold",
 		PALETTE.ink,
@@ -1101,7 +1114,7 @@ function layoutPaymentTerms(
  * So each copy value is drawn as exactly one run — never wrapped, never elided — set at the largest size from {@link SIZE.paymentMono} down to {@link PAYMENT_VALUE_MIN_SIZE} that holds it as it stands and held to the line by {@link fitCopyValue}'s horizontal scale when even that floor is too narrow.
  * It is fitted first to the width the terms' own column leaves beside its label, because that column's rows sit inside the symbol's block and cost the section no height of their own; only a value that column cannot hold as it stands takes a line of its own across the whole content width below the block, which is what the longest address this app accepts and the link carrying it need, the terms' column being the section's width less the symbol beside it — and that line is the wider of the two, so it is where the widest legal values are compressed least.
  * The terms' block and the symbol are checked onto one page together before either is drawn, so a break can never separate the symbol from the link it encodes.
- * A paid invoice draws the same section without a symbol: its title names the payment received, its terms state the record's hash and the day it was recorded, and the page's unverified note is not part of the export, so the PDF states the record without a caution the page alone carries.
+ * A paid invoice draws the same section without a symbol: its title names the payment the payer reported — never a payment received, because the export carries no unverified note and a title alone would read as a settlement — its terms state the record's hash and the day it was recorded, and the page's unverified note is not part of the export, so the PDF states the record without a caution the page alone carries.
  */
 function drawPayment(flow: Flow, view: InvoiceViewModel): void {
 	const paid = view.paid !== null;

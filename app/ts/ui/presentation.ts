@@ -52,6 +52,26 @@ export interface InvoiceStatus {
 	readonly tone: InvoiceStatusTone;
 }
 
+/** One tone's badge colors, as the `#rrggbb` literals a stylesheet and a renderer both state. */
+export interface StatusTonePalette {
+	readonly ink: string;
+	readonly line: string;
+	readonly surface: string;
+}
+
+/**
+ * The status badge's palette, stated once here and mirrored by `app/stylesheets/invoice.css`'s `--inv-status-<tone>-{ink,line,surface}` custom properties.
+ *
+ * The two surfaces cannot share one literal — the stylesheet has to paint the badge before any script runs, and `pdf/renderer.ts` cannot read CSS — so this table is the one statement in code, the stylesheet's tokens under `.view-invoice` are the page's own copy of it, and `tests/pdf.test.mjs` pins the two together: a theme change edits both, and the pin fails until they agree rather than letting the page and the export drift a color apart.
+ * The export converts these values with the same `hex()` it applies to every other color it draws.
+ */
+export const STATUS_TONE_PALETTE: Readonly<Record<InvoiceStatusTone, StatusTonePalette>> = Object.freeze({
+	open: Object.freeze({ ink: "#41506b", line: "#c7cedb", surface: "#eef1f6" }),
+	due: Object.freeze({ ink: "#8a5300", line: "#eccb8f", surface: "#fdf3e2" }),
+	overdue: Object.freeze({ ink: "#a3261e", line: "#f0bab4", surface: "#fdeceb" }),
+	paid: Object.freeze({ ink: "#1f5f3a", line: "#a3d9b4", surface: "#eaf6ee" }),
+});
+
 /**
  * Render a `YYYY-MM-DD` date as a deterministic human date, e.g. `3 Oct 2026`.
  *
@@ -70,11 +90,11 @@ export function formatInvoiceDate(iso: string): string {
  * The invoice's status against `today` (a `YYYY-MM-DD` date).
  * No due date is `Open`; a due date in the past is `Overdue`; otherwise `Payment due`.
  * Dates compare correctly as `YYYY-MM-DD` strings.
- * An invoice that carries a paid record is `Paid`, whatever its due date: the record is the payer's own statement that the payment was made, so the document's badge names the recorded payment rather than a due date the record has overtaken.
+ * An invoice that carries a paid record is `Reported`, whatever its due date: the record is the payer's own statement that the payment was made, so the document's badge names what the document holds rather than a due date the record has overtaken, and it stops short of `Paid` because nothing in this app can confirm a payment.
  * The badge states the record's presence and nothing more — it does not confirm the payment, which nothing in this app can do — so its label names what the document holds rather than what a chain might say.
  */
 export function invoiceStatus(invoice: Invoice, today: string): InvoiceStatus {
-	if (invoice.paid !== undefined) return Object.freeze({ label: "Paid", tone: "paid" });
+	if (invoice.paid !== undefined) return Object.freeze({ label: "Reported", tone: "paid" });
 	if (invoice.due === undefined) return Object.freeze({ label: "Open", tone: "open" });
 	if (/^\d{4}-\d{2}-\d{2}$/.test(today) && today > invoice.due) {
 		return Object.freeze({ label: "Overdue", tone: "overdue" });
@@ -173,6 +193,25 @@ function paymentAddressText(address: PayoutAddress): string {
 }
 
 /**
+ * The copy control's wording beside the paid record's hash: it says what it copies, because `Copy` alone beside a page carrying an address, an amount, a link, and a hash tells a screen-reader user nothing about which value the control takes.
+ */
+const PAID_HASH_COPY_TEXT = "Copy Transaction";
+
+/**
+ * The paid record's hash as the document shows it: the record's own stored spelling, or the {@link PaymentLinkError} that says the display boundary could not carry it unchanged under {@link MAX_PAID_HASH_CHARS}.
+ *
+ * This is the fail-closed shape {@link paymentAddressText} and {@link paymentLinkText} apply, applied to the record's hash for the same reason: the term is marked `verbatim` because a payer copies it into a wallet or a block explorer, so a clip's `… (N characters)` remainder would be handed to a search that finds nothing and reads as the transaction itself.
+ * {@link MAX_PAID_HASH_CHARS} is the widest hash any family stores, so no hash a validated record can carry reaches the bound or the strip and the refusal is unreachable from a validated invoice; it is the guard for the day a family grammar admits a code point the display strip removes.
+ */
+function paidHashText(hash: string): string {
+	const shown = stripDisplayCharacters(hash);
+	if (shown !== hash || hash.length > MAX_PAID_HASH_CHARS) {
+		throw new PaymentLinkError(`the paid transaction hash does not survive the display boundary as the ${MAX_PAID_HASH_CHARS}-character hash the record stores, so the document cannot show the payment the invoice reports`);
+	}
+	return shown;
+}
+
+/**
  * One party line: the role label, the name, and the contact lines that party carries.
  *
  * The property keeps the model's own field name, the wire key both parties still spell `email`, and holds that field's lines rather than one string, so the party block draws one detail row per line.
@@ -213,6 +252,8 @@ export interface InvoicePaymentTermView {
 	readonly label: string;
 	readonly value: string;
 	readonly verbatim?: boolean;
+	/** The text of the copy control beside the value, for a term whose control says what it copies; absent for the terms whose control reads `Copy`. */
+	readonly copyText?: string;
 }
 
 /** A paid invoice's record as the document draws it: the terms a payer reported and no other statement about the payment. */
@@ -225,7 +266,8 @@ export interface InvoicePaidView {
  * Both renderers read these, so a label the on-screen view and the PDF both draw has a single spelling — the party roles beside them stay the domain's own words on the view model — and one of them cannot be reworded without the other.
  * The payment details' terms are labelled from here too, and the section's own amount term reads the same {@link InvoiceLabels.amount} the item table's column header does: the figure a payer copies and the column it was computed from are worded once, so the section cannot be reworded apart from the table it summarizes.
  * The on-screen view uppercases the tagline, the kind, the status badge, the role labels, the date labels, the column headers, the section titles, and the payment-term labels in CSS; the PDF uppercases the same eight groups at draw time, so neither renderer hardcodes a second spelling.
- * The paid title and its two terms are the section's statement about the record the invoice carries: the title names the section as the payment the payer reported, and the terms name the transaction hash the payer wrote and the day they wrote it — a recorded date, not a settlement date.
+ * The paid title and its two terms are the section's statement about the record the invoice carries: the title names the section as the payment the payer reported rather than a payment confirmed, and the terms name the transaction hash the payer wrote and the day they wrote it — a recorded date, not a settlement date.
+ * {@link InvoiceLabels.totalDue} and {@link InvoiceLabels.totalPaid} are the two spellings of the totals block's figure, so a paid document states an amount rather than an amount owed and no surface has to compose that distinction itself.
  */
 export interface InvoiceLabels {
 	readonly brand: string;
@@ -237,6 +279,7 @@ export interface InvoiceLabels {
 	readonly amount: string;
 	readonly subtotal: string;
 	readonly totalDue: string;
+	readonly totalPaid: string;
 	readonly notesTitle: string;
 	readonly paymentTitle: string;
 	readonly asset: string;
@@ -288,6 +331,7 @@ export const INVOICE_LABELS: InvoiceLabels = Object.freeze({
 	amount: "Amount",
 	subtotal: "Subtotal",
 	totalDue: "Total due",
+	totalPaid: "Total",
 	notesTitle: "Notes and terms",
 	paymentTitle: "Payment details",
 	asset: "Asset",
@@ -295,7 +339,7 @@ export const INVOICE_LABELS: InvoiceLabels = Object.freeze({
 	paysTo: "Pays to",
 	paymentLink: "Payment link",
 	dates: "Dates",
-	paidTitle: "Payment received",
+	paidTitle: "Payment reported",
 	paidHash: "Transaction",
 	paidDate: "Recorded",
 });
@@ -310,7 +354,7 @@ export const INVOICE_LABELS: InvoiceLabels = Object.freeze({
  * The amount, the address, and the link terms carry `verbatim`, the one thing that marks a value a wallet takes verbatim: the on-screen view draws each of those as plain text with a copy control, so the value a payer copies is the same string the URI and the symbol carry rather than whatever their text selection spanned, and the print path and the PDF draw the same string whole rather than the on-screen run's clipped overflow.
  * The payment link is built once, checked to survive that boundary unchanged, exposed by name, and its symbol is encoded from that one value, so the view model's own {@link InvoiceViewModel.paymentLink}, the term that displays it, and the encoded payload are one string rather than three spellings that happen to agree: a legal invoice's link always fits the encoder's widest symbol, so the two throws those boundaries can raise (`PaymentLinkError`, `RangeError`) are unreachable from a validated invoice and surface only for one a caller assembled by hand.
  * The optional icon is armed here, once, by the icon leaf's `svgDataUrl`: the value is the leaf's own data URL, which is the type every image sink accepts, so the on-screen document and the PDF read one prepared value rather than each building a URL of its own; that call runs the icon gate itself, so it throws the gate's own `TypeError` or `InvalidIconError` for a value the gate refuses, none of which is reachable from a validated invoice — whose `icon` the model already gated to an accepted canonical document — so, like the link boundary's throws above, they surface only for an invoice a caller assembled by hand.
- * The paid record's own terms are read from the invoice's validated record: the hash in the one stored spelling, clipped and stripped like every other displayed text field, and the day as the document's own deterministic date, labelled as the day the payment was recorded rather than a settlement date. The hash is the one term marked `verbatim`, because a payer may copy it into a block explorer or a wallet, and the recorded day is not: a date is read, not copied into anything that acts on it.
+ * The paid record's own terms are read from the invoice's validated record: the hash in the one stored spelling, held fail closed by {@link paidHashText} like every other value a payer copies out, and the day as the document's own deterministic date, labelled as the day the payment was recorded rather than a settlement date. The hash is marked `verbatim` and carries its own copy-control wording, because a payer copies it into a block explorer or a wallet, and the recorded day is neither: a date is read, not copied into anything that acts on it.
  * The result is frozen; a renderer reads it and draws, it does not re-derive.
  */
 export function buildInvoiceViewModel(invoice: Invoice, today: string): InvoiceViewModel {
@@ -372,7 +416,7 @@ export function buildInvoiceViewModel(invoice: Invoice, today: string): InvoiceV
 			? null
 			: Object.freeze({
 				terms: Object.freeze([
-					Object.freeze({ label: INVOICE_LABELS.paidHash, value: clip(invoice.paid.hash, MAX_PAID_HASH_CHARS), verbatim: true }),
+					Object.freeze({ label: INVOICE_LABELS.paidHash, value: paidHashText(invoice.paid.hash), verbatim: true, copyText: PAID_HASH_COPY_TEXT }),
 					Object.freeze({ label: INVOICE_LABELS.paidDate, value: formatInvoiceDate(invoice.paid.date) }),
 				]),
 			}),

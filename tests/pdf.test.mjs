@@ -33,7 +33,8 @@ import {
 	wrapContactText,
 	wrapText,
 } from "../app/js/pdf/renderer.js";
-import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
+import { STATUS_TONE_PALETTE, buildInvoiceViewModel } from "../app/js/ui/presentation.js";
+import { cssRules, declaration } from "./helpers/css.mjs";
 import { installDocument, installInteractiveDocument } from "./helpers/dom.mjs";
 import { blockNetwork } from "./helpers/network-block.mjs";
 import { imageXObjects } from "./helpers/pdf-images.mjs";
@@ -269,17 +270,37 @@ test("the layout carries every figure the on-screen document shows", () => {
 	}
 });
 
+test("the export's badge palette is the page's badge palette, token for token", () => {
+	// The two surfaces cannot share one literal: the stylesheet must paint before any script runs, and the renderer cannot read CSS. The colors are therefore stated once in `ui/presentation.ts`'s table and mirrored as custom properties here; this pin is what keeps a theme change from moving one without the other.
+	const css = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	// Read the document's own block, where invoice.css states the badge's tokens, so a token stated on another selector cannot stand in for the document's.
+	const documentBodies = cssRules(css)
+		.filter((rule) => rule.selectors.includes(".view-invoice"))
+		.map((rule) => rule.body);
+	assert.ok(documentBodies.length > 0, "invoice.css declares the badge's custom properties on .view-invoice");
+	for (const [tone, palette] of Object.entries(STATUS_TONE_PALETTE)) {
+		for (const [role, value] of Object.entries(palette)) {
+			const token = `--inv-status-${tone}-${role}`;
+			const stated = documentBodies.map((body) => declaration(body, token)).find((declared) => declared !== undefined);
+			assert.equal(stated, value, `invoice.css states ${token} as the export's own ${value}`);
+		}
+	}
+});
+
 test("a paid invoice draws the record's figures in place of the payment details", () => {
 	const hash = "0x" + "a".repeat(64);
 	const invoice = invoiceFor({ paid: { hash, date: "2026-10-03" } });
 	const view = buildInvoiceViewModel(invoice, "2026-10-03");
-	assert.equal(view.status.label, "Paid", "the badge names the recorded payment");
+	assert.equal(view.status.label, "Reported", "the badge names what the document holds, never a settlement");
 	const pages = buildInvoicePages(view, METRICS);
 	assert.equal(pages.length, 1);
 	const text = textOps(pages[0]).join("\n");
-	for (const fragment of ["PAID", "PAYMENT RECEIVED", "TRANSACTION", hash, "RECORDED", "3 Oct 2026"]) {
+	for (const fragment of ["REPORTED", "PAYMENT REPORTED", "TRANSACTION", hash, "RECORDED", "3 Oct 2026"]) {
 		assert.ok(text.includes(fragment), "the paid layout is missing " + JSON.stringify(fragment));
 	}
+	assert.ok(!text.includes("PAID\n"), "no title or badge in the export reads as a verified settlement");
+	assert.ok(!text.includes("Total due"), "and a paid document states an amount rather than an amount owed");
+	assert.ok(textOps(pages[0]).includes("Total"), "the totals block still names its figure");
 	assert.ok(!text.includes("unverified"), "the export states the record without the page's unverified note");
 	assert.equal(moduleFills(pages[0]).length, 0, "no QR symbol is drawn on a paid invoice");
 	const runs = textDraws(pages[0]).filter((op) => op.font === "mono" && op.text === hash);
@@ -292,7 +313,7 @@ test("a paid invoice's record moves whole onto its own page when the invoice fil
 	const view = buildInvoiceViewModel(invoice, "2026-10-03");
 	const pages = buildInvoicePages(view, METRICS);
 	assert.ok(pages.length > 1, "the long invoice paginates");
-	const holders = pages.filter((page) => textOps(page).join("\n").includes("PAYMENT RECEIVED"));
+	const holders = pages.filter((page) => textOps(page).join("\n").includes("PAYMENT REPORTED"));
 	assert.equal(holders.length, 1, "the paid section is drawn on exactly one page");
 	const text = textOps(holders[0]).join("\n");
 	assert.ok(text.includes(hash), "the record's hash travels with the section");

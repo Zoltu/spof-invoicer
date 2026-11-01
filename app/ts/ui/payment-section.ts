@@ -12,7 +12,7 @@
  * The fitting is a subscription of its own, so the section returns the `<footer>` it built carrying that release (`ui/release.ts`), and the surface that mounted the section is what runs it: a surface that replaces the section — the create screen rebuilding it for the next invoice — releases the one it is about to discard, and a surface that drops the whole document, as the router replaces the payer's document, carries the section's release on the document it returns.
  * The control's confirmation is a status line with a lifecycle: it is cleared after a pause so the section returns to its uniform resting height, and a repeated copy of the same value blanks the line first and re-sets it, so the change is one an assistive technology announces rather than an identical rewrite it may pass over.
  *
- * When the invoice carries a paid record, this same section is the one place that draws it: the section title names the payment received, the record's own terms replace the payment terms, and the payment link's symbol is not drawn. The record's terms carry the transaction hash as one verbatim run with its copy control and the day the payer recorded it, and the section states the record's unverified nature in a page-only note. The change is a branch on the view model's own `paid` field, so the same renderer draws one section for either state and neither surface has a second layout to keep in step.
+ * When the invoice carries a paid record, this same section is the one place that draws it: the section title names the payment the payer reported rather than a payment received, the record's own terms replace the payment terms, and the payment link's symbol is not drawn. The record's terms carry the transaction hash as one verbatim run with its copy control and the day the payer recorded it, and the section states the record's unverified nature in a page-only note. The change is a branch on the view model's own `paid` field, so the same renderer draws one section for either state and neither surface has a second layout to keep in step.
  *
  * The print path is given a second presentation of the same string.
  * A print engine cannot be trusted with the on-screen run — it is not allowed to wrap, and the copy control beside it is chrome the print path hides — so each copyable term also carries a print-only twin of its value: the same string as text, which `print.css` swaps in for the value, drawn at the print rung `ui/fit-value.ts` computes from the value's own length and broken only past the print floor, so a printed invoice carries the complete amount, payee address, and payment link of every legal invoice.
@@ -34,7 +34,6 @@ import {
 	type TermFitting,
 } from "./fit-value.js";
 import { UNVERIFIED_PAYMENT_NOTE, VIEW_BUILD_RELEASE_FAILED_MESSAGE } from "./messages.js";
-import { INVOICE_LABELS } from "./presentation.js";
 import type { InvoicePaymentTermView, InvoiceViewModel } from "./presentation.js";
 import { releasable, runReleases, type ReleasableElement, type Release } from "./release.js";
 
@@ -251,8 +250,8 @@ function paymentValue(term: InvoicePaymentTermView, clipboard: ClipboardLike | n
 			);
 	// The status is built with no children at all rather than an empty string: `h()` turns a string child into a text node, and the stylesheet's `:empty` rule — what takes the status's reserved full-width row out of flow while it is silent — need not match an element holding one.
 	const status = h("span", { class: "payment-status no-print", role: "status" });
-	const copyText = term.label === INVOICE_LABELS.paidHash ? "Copy Transaction" : "Copy";
-	const copy = h("button", { type: "button", class: "btn btn-secondary payment-copy no-print", "aria-label": `Copy ${term.label}` }, copyText);
+	// The wording comes from the term itself rather than from comparing its label: the view model states what its control says, so a term added later cannot pick up the record's wording by happening to share its label.
+	const copy = h("button", { type: "button", class: "btn btn-secondary payment-copy no-print", "aria-label": `Copy ${term.label}` }, term.copyText ?? "Copy");
 	copy.addEventListener("click", copyControlClick(term.value, clipboard, value, status, wallClockTimer));
 	return { children: [value, printed, copy, status], value, scale };
 }
