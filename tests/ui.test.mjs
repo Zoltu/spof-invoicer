@@ -44,11 +44,12 @@ import {
 	shareSizeHint,
 } from "../app/js/ui/create.js";
 import { FIT_CUE_CLASS, FIT_RUNGS } from "../app/js/ui/fit-value.js";
-import { UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/messages.js";
+import { UNSUPPORTED_WALLET_MESSAGE, UNVERIFIED_PAYMENT_NOTE } from "../app/js/ui/messages.js";
 import { openPayPanel } from "../app/js/ui/pay.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { releasable } from "../app/js/ui/release.js";
-import { buildShareBundle, copyText } from "../app/js/ui/share.js";
+import { buildShareBundle, copyText, createShareDialog } from "../app/js/ui/share.js";
+import { createMarkPaidDialog } from "../app/js/ui/mark-paid.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
 import { base32nopad, base58xmr, keccak256, utf8 } from "../app/js/util/encoding.js";
 import { MAX_ICON_FILE_BYTES, MAX_ICON_RAW_CODE_UNITS } from "../app/js/util/icon-capacity.js";
@@ -1611,6 +1612,20 @@ test("no payer- or payee-facing surface cautions that a valid address may be unp
 		assert.ok(dialog, "the share dialog opens over the page");
 		record("the share dialog", surfaceStrings(dialog));
 		record("the payer's document", surfaceStrings(renderInvoiceView(texInvoice(), { ...TOTAL_OPTIONS, notice: noticeRecorder() })));
+		const paidInvoice = createInvoice({
+			id: "INV-TEX-PAID",
+			issued: "2026-10-03",
+			payee: { name: "Studio Example", address: ZEC_TEX_PAYEE },
+			chainId: "zcash",
+			asset: "zec",
+			items: [line()],
+			paid: { hash: "a".repeat(64), date: "2026-10-03" },
+		});
+		record("the rendered paid document", surfaceStrings(renderInvoiceView(paidInvoice, { ...TOTAL_OPTIONS, notice: noticeRecorder() })));
+		const markPaidDialog = createMarkPaidDialog(texInvoice(), TOTAL_OPTIONS.today, { onPaid: () => {} });
+		record("the mark-paid dialog", surfaceStrings(markPaidDialog.element));
+		const paidShareDialog = createShareDialog(buildShareBundle(paidInvoice, TOTAL_OPTIONS.baseUrl), { clipboard: null });
+		record("the paid share dialog", surfaceStrings(paidShareDialog.element));
 	} finally {
 		fake.restore();
 	}
@@ -1639,6 +1654,10 @@ test("no payer- or payee-facing surface cautions that a valid address may be unp
 	assert.ok(read.includes(ZEC_TEX_PAYEE), "and the payee's own spelling, as the document draws it");
 	assert.ok(read.includes(UNSUPPORTED_WALLET_MESSAGE), "and the hand-off sentence, which names where a wallet-less invoice is paid and cautions nothing");
 	assert.match(read, /Payment link/, "and the terms a payer copies from");
+	assert.ok(read.includes("Payment received"), "the sweep reads the paid section's title");
+	assert.ok(read.includes(UNVERIFIED_PAYMENT_NOTE), "and the page-only unverified note");
+	assert.ok(read.includes("Mark this invoice paid"), "and the mark-paid dialog's title");
+	assert.match(read, /send this paid invoice back/, "and the paid share dialog's copy");
 	assert.equal(documents.some((path) => path.endsWith("README.md")), true, "and the top-level README is one of the documents it reads");
 	assert.match(documentProse.join("\n"), /Zcash/, "as is the README's own prose, which names the asset a payee is paid in");
 });
@@ -1657,6 +1676,7 @@ test("the wallet-support guard catches the cautions it exists to catch", () => {
 		"Payments without a memo may not be credited.",
 		"Paying a TEX address is harder than paying a t1 address.",
 		"Check that your wallet supports this address before paying.",
+		"Some wallets cannot show an unverified payment.",
 	];
 	for (const sentence of planted) {
 		assert.notEqual(walletSupportCaution(sentence), null, `the guard let this through: ${JSON.stringify(sentence)}`);
@@ -1667,6 +1687,12 @@ test("the wallet-support guard catches the cautions it exists to catch", () => {
 		payoutAddressPlaceholder(ASSET_REGISTRY.zec),
 		payoutAddressGuidance(ASSET_REGISTRY.xmr),
 		"Invoice #INV-2026-0042 is due on 28 Oct 2026.",
+		UNVERIFIED_PAYMENT_NOTE,
+		"Payment received",
+		"Transaction",
+		"Recorded",
+		"There are two ways to send this paid invoice back. Pick the one that fits how you're sending it.",
+		"Mark this invoice paid",
 	];
 	for (const sentence of innocuous) {
 		assert.equal(walletSupportCaution(sentence), null, `the guard flagged the app's own copy: ${JSON.stringify(sentence)}`);

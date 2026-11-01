@@ -183,6 +183,11 @@ test("a paid invoice draws the record's own section in place of the payment deta
 		const badge = findAll(view, (node) => hasClass(node, "status-badge"))[0];
 		assert.equal(textOf(badge), "Paid", "the badge names the recorded payment");
 		assert.ok(hasClass(badge, "status-paid"));
+		assert.ok(hasClass(note, "no-print"), "the unverified note is page-only");
+		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
+		assert.ok(payment, "the paid section is drawn");
+		assert.ok(!hasClass(payment, "no-print"), "the paid section prints");
+		assert.ok(!hasClass(badge, "no-print"), "the paid badge prints");
 		const document = findAll(view, (node) => hasClass(node, "invoice-document"))[0];
 		const headings = findAll(document, (node) => /^h[1-6]$/.test(node.tagName));
 		assert.deepEqual(

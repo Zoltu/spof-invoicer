@@ -194,7 +194,10 @@ const PAYMENT_LABEL_W = 120;
 const MIN_FIT_SIZE = 7;
 /** The gap the running footer keeps between the document number and its right-aligned page label. */
 const FOOTER_GAP = 12;
+/** The longest stem a file name carries, so a download name stays inside the widest file-name length most systems accept; a paid name reserves its suffix inside this cap. */
 const FILE_STEM_MAX = 64;
+/** The longest whole file name the download attribute may receive: the stem cap plus `invoice-` and `.pdf`. */
+const FILE_NAME_MAX = FILE_STEM_MAX + 12;
 /** How long the object URL outlives the click: a synchronous revoke can cancel the download before the browser has read the blob. */
 const REVOKE_DELAY_MS = 1000;
 
@@ -297,13 +300,17 @@ const STATUS = Object.freeze({
 /**
  * A share string's id cannot be trusted to be a file name: the model allows `/`, `\`, dots and spaces inside an id, so this folds everything but `[A-Za-z0-9._-]` into single dashes, collapses runs of dashes and dots (so no `..` survives), trims the leading and trailing separators, and caps the length.
  * An id that reduces to nothing yields a bare `invoice.pdf`.
+ * A paid invoice's name states the record with a `-paid` suffix, so its stem is shortened by the suffix's length and an id that reduces to nothing yields `invoice-paid.pdf`.
  */
 export function invoiceFileName(invoice: Invoice): string {
-	const stem = sanitizeFileName(invoice.id);
-	return stem === "" ? "invoice.pdf" : `invoice-${stem}.pdf`;
+	const paid = invoice.paid !== undefined;
+	const suffix = paid ? "-paid" : "";
+	const stem = sanitizeFileName(invoice.id, FILE_STEM_MAX - suffix.length);
+	if (stem === "") return paid ? "invoice-paid.pdf" : "invoice.pdf";
+	return `invoice-${stem}${suffix}.pdf`;
 }
 
-function sanitizeFileName(value: string): string {
+function sanitizeFileName(value: string, maxLength: number = FILE_NAME_MAX): string {
 	return value
 		.normalize("NFKD")
 		.replace(/[^A-Za-z0-9._-]+/g, "-")
@@ -311,7 +318,7 @@ function sanitizeFileName(value: string): string {
 		.replace(/\.{2,}/g, ".")
 		.replace(/^[-._]+/, "")
 		.replace(/[-._]+$/, "")
-		.slice(0, FILE_STEM_MAX)
+		.slice(0, maxLength)
 		.replace(/[-._]+$/, "");
 }
 
@@ -1060,40 +1067,58 @@ interface CopyBand {
 }
 
 /**
+ * The rows and copy bands a list of payment terms lays out in a column of `besideWidth`.
+ * A term a wallet takes verbatim is fitted to the column as one run, and a value no run holds is placed in a band across the whole content width; a term no wallet takes verbatim wraps inside the column.
+ */
+function layoutPaymentTerms(
+	terms: readonly InvoicePaymentTermView[],
+	besideWidth: number,
+	metrics: FontMetrics,
+): { readonly rows: readonly PaymentRow[]; readonly bands: readonly CopyBand[] } {
+	const rows: PaymentRow[] = [];
+	const bands: CopyBand[] = [];
+	for (const term of terms) {
+		if (term.verbatim !== true) {
+			const lines = wrapText(term.value, besideWidth, SIZE.paymentValue, "sans", metrics);
+			rows.push({ label: term.label, font: "sans", size: SIZE.paymentValue, lines, xScale: 1, height: Math.max(leading(SIZE.paymentLabel), lines.length * leading(SIZE.paymentValue)) });
+			continue;
+		}
+		const beside = fitCopyValue(term.value, besideWidth, metrics);
+		if (beside.xScale === 1) {
+			rows.push({ label: term.label, font: "mono", size: beside.size, lines: [beside.text], xScale: 1, height: Math.max(leading(SIZE.paymentLabel), leading(beside.size)) });
+			continue;
+		}
+		const wide = fitCopyValue(term.value, CONTENT_W, metrics);
+		bands.push({ label: term.label, run: wide, height: leading(SIZE.paymentLabel) + leading(wide.size) });
+	}
+	return { rows, bands };
+}
+
+/**
  * Draw the payment details: the terms that state what is owed beside the symbol of the URI those terms spell, and the values a payer copies out — the amount, the payee address, and the payment link — each drawn as a single unbroken monospace run.
  *
  * A copied value has to survive the copy whole: a value broken at the margin is handed back with a line break inside it, which is not the address or the URI a wallet's field reads.
  * So each copy value is drawn as exactly one run — never wrapped, never elided — set at the largest size from {@link SIZE.paymentMono} down to {@link PAYMENT_VALUE_MIN_SIZE} that holds it as it stands and held to the line by {@link fitCopyValue}'s horizontal scale when even that floor is too narrow.
  * It is fitted first to the width the terms' own column leaves beside its label, because that column's rows sit inside the symbol's block and cost the section no height of their own; only a value that column cannot hold as it stands takes a line of its own across the whole content width below the block, which is what the longest address this app accepts and the link carrying it need, the terms' column being the section's width less the symbol beside it — and that line is the wider of the two, so it is where the widest legal values are compressed least.
  * The terms' block and the symbol are checked onto one page together before either is drawn, so a break can never separate the symbol from the link it encodes.
+ * A paid invoice draws the same section without a symbol: its title names the payment received, its terms state the record's hash and the day it was recorded, and the page's unverified note is not part of the export, so the PDF states the record without a caution the page alone carries.
  */
 function drawPayment(flow: Flow, view: InvoiceViewModel): void {
-	const symbolSide = qrBlockSize(view.paymentQr);
-	const columnWidth = CONTENT_W - symbolSide - GAP.termsToSymbol;
+	const paid = view.paid !== null;
+	const terms = paid ? view.paid.terms : view.payment;
+	const symbolSide = paid ? 0 : qrBlockSize(view.paymentQr);
+	const columnWidth = paid ? CONTENT_W : CONTENT_W - symbolSide - GAP.termsToSymbol;
 	const besideWidth = columnWidth - PAYMENT_LABEL_W;
-	const rows: PaymentRow[] = [];
-	const bands: CopyBand[] = [];
-	for (const term of view.payment) {
-		if (term.verbatim !== true) {
-			const lines = wrapText(term.value, besideWidth, SIZE.paymentValue, "sans", flow.metrics);
-			rows.push({ label: term.label, font: "sans", size: SIZE.paymentValue, lines, xScale: 1, height: Math.max(leading(SIZE.paymentLabel), lines.length * leading(SIZE.paymentValue)) });
-			continue;
-		}
-		const beside = fitCopyValue(term.value, besideWidth, flow.metrics);
-		if (beside.xScale === 1) {
-			rows.push({ label: term.label, font: "mono", size: beside.size, lines: [beside.text], xScale: 1, height: Math.max(leading(SIZE.paymentLabel), leading(beside.size)) });
-			continue;
-		}
-		const wide = fitCopyValue(term.value, CONTENT_W, flow.metrics);
-		bands.push({ label: term.label, run: wide, height: leading(SIZE.paymentLabel) + leading(wide.size) });
-	}
-	const blockHeight = Math.max(symbolSide, rows.reduce((total, entry) => total + entry.height + 6, 0));
+	const { rows, bands } = layoutPaymentTerms(terms, besideWidth, flow.metrics);
+	const blockHeight = paid
+		? rows.reduce((total, entry) => total + entry.height + 6, 0)
+		: Math.max(symbolSide, rows.reduce((total, entry) => total + entry.height + 6, 0));
 	const bandHeight = bands.reduce((total, entry, index) => total + entry.height + (index === 0 ? 0 : COPY_BAND_GAP), 0);
 
 	flow.advance(GAP.notesToPayment);
 	flow.ensure(PAYMENT_HEADER_H + blockHeight + bandHeight);
 	flow.rule(flow.top, CONTENT_LEFT, CONTENT_RIGHT, 2, PALETTE.ink);
-	flow.text(CONTENT_LEFT, flow.top + PAYMENT_RULE_TO_TITLE, view.labels.paymentTitle.toUpperCase(), SIZE.section, "sansBold", PALETTE.muted);
+	flow.text(CONTENT_LEFT, flow.top + PAYMENT_RULE_TO_TITLE, (paid ? view.labels.paidTitle : view.labels.paymentTitle).toUpperCase(), SIZE.section, "sansBold", PALETTE.muted);
 	flow.advance(PAYMENT_HEADER_H);
 
 	const blockTop = flow.top;
@@ -1107,7 +1132,9 @@ function drawPayment(flow: Flow, view: InvoiceViewModel): void {
 		}
 		y += entry.height + 6;
 	}
-	drawQrSymbol(flow, view.paymentQr, CONTENT_RIGHT - symbolSide, blockTop);
+	if (!paid) {
+		drawQrSymbol(flow, view.paymentQr, CONTENT_RIGHT - symbolSide, blockTop);
+	}
 	flow.advance(blockHeight);
 
 	for (const [index, band] of bands.entries()) {

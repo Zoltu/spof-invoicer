@@ -269,6 +269,36 @@ test("the layout carries every figure the on-screen document shows", () => {
 	}
 });
 
+test("a paid invoice draws the record's figures in place of the payment details", () => {
+	const hash = "0x" + "a".repeat(64);
+	const invoice = invoiceFor({ paid: { hash, date: "2026-10-03" } });
+	const view = buildInvoiceViewModel(invoice, "2026-10-03");
+	assert.equal(view.status.label, "Paid", "the badge names the recorded payment");
+	const pages = buildInvoicePages(view, METRICS);
+	assert.equal(pages.length, 1);
+	const text = textOps(pages[0]).join("\n");
+	for (const fragment of ["PAID", "PAYMENT RECEIVED", "TRANSACTION", hash, "RECORDED", "3 Oct 2026"]) {
+		assert.ok(text.includes(fragment), "the paid layout is missing " + JSON.stringify(fragment));
+	}
+	assert.ok(!text.includes("unverified"), "the export states the record without the page's unverified note");
+	assert.equal(moduleFills(pages[0]).length, 0, "no QR symbol is drawn on a paid invoice");
+	const runs = textDraws(pages[0]).filter((op) => op.font === "mono" && op.text === hash);
+	assert.equal(runs.length, 1, "the hash is drawn as one unbroken monospace run");
+});
+
+test("a paid invoice's record moves whole onto its own page when the invoice fills one", () => {
+	const hash = "0x" + "a".repeat(64);
+	const invoice = invoiceFor({ items: manyItems(60), paid: { hash, date: "2026-10-03" } });
+	const view = buildInvoiceViewModel(invoice, "2026-10-03");
+	const pages = buildInvoicePages(view, METRICS);
+	assert.ok(pages.length > 1, "the long invoice paginates");
+	const holders = pages.filter((page) => textOps(page).join("\n").includes("PAYMENT RECEIVED"));
+	assert.equal(holders.length, 1, "the paid section is drawn on exactly one page");
+	const text = textOps(holders[0]).join("\n");
+	assert.ok(text.includes(hash), "the record's hash travels with the section");
+	assert.ok(!text.includes("unverified"), "and the page-only note does not");
+});
+
 test("a uint256-scale money figure wraps rather than losing digits or the asset suffix", () => {
 	const invoice = invoiceFor({
 		payee: { name: "Studio Example", address: "0x1111111111111111111111111111111111111111" },
@@ -750,11 +780,20 @@ test("invoiceFileName sanitizes an untrusted id into a safe download name", () =
 	assert.equal(invoiceFileName(invoiceFor({ id: "a/b\\c:d*e?f" })), "invoice-a-b-c-d-e-f.pdf");
 	assert.equal(invoiceFileName(invoiceFor({ id: "spaced  name" })), "invoice-spaced-name.pdf");
 	assert.equal(invoiceFileName(invoiceFor({ id: "..." })), "invoice.pdf");
+	const paidRecord = { hash: "0x" + "a".repeat(64), date: "2026-10-03" };
+	assert.equal(invoiceFileName(invoiceFor({ id: "INV-7", paid: paidRecord })), "invoice-INV-7-paid.pdf");
+	assert.equal(invoiceFileName(invoiceFor({ id: "...", paid: paidRecord })), "invoice-paid.pdf");
+	const longPaid = invoiceFileName(invoiceFor({ id: "a".repeat(64), paid: paidRecord }));
+	assert.equal(longPaid.length, "invoice-".length + 59 + "-paid.pdf".length, "the paid suffix is reserved inside the stem cap");
+	assert.match(longPaid, /^invoice-a+-paid\.pdf$/);
 
 	const hostile = invoiceFileName(invoiceFor({ id: "../../../etc/passwd%00.png" }));
 	assert.ok(!hostile.includes("/") && !hostile.includes("\\"), `path separator survived: ${hostile}`);
 	assert.ok(!hostile.includes(".."), `parent-directory segment survived: ${hostile}`);
 	assert.match(hostile, /^invoice-[A-Za-z0-9._-]+\.pdf$/);
+	const hostilePaid = invoiceFileName(invoiceFor({ id: "../../../etc/passwd%00.png", paid: { hash: "0x" + "a".repeat(64), date: "2026-10-03" } }));
+	assert.ok(!hostilePaid.includes("/") && !hostilePaid.includes("\\"), "a paid name survives a hostile id without a path separator");
+	assert.match(hostilePaid, /^invoice-[A-Za-z0-9._-]+-paid\.pdf$/);
 });
 
 test("hostile invoice text never breaks generation", async () => {
