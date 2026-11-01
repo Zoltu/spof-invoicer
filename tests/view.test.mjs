@@ -160,6 +160,39 @@ test("the invoice document has one top-level heading with section headings neste
 	}
 });
 
+test("a paid invoice draws the record's own section in place of the payment details", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const hash = "0x" + "a".repeat(64);
+		const invoice = invoiceFor({ notes: "Thanks.", paid: { hash, date: "2026-10-03" } });
+		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		assert.equal(byText(view, "button", "Pay").length, 0, "no Pay control is offered on a paid invoice");
+		assert.equal(findAll(view, (node) => hasClass(node, "payment-qr")).length, 0, "no QR block is drawn");
+		assert.equal(byText(view, "button", "Copy Payment link").length, 0, "the payment link copy control is absent");
+		assert.equal(byText(view, "button", "Copy Transaction").length, 1, "the record hash carries its own copy control");
+		const hashText = findAll(view, (node) => textOf(node) === hash);
+		assert.equal(hashText.length, 1, "the hash is drawn once");
+		const note = findAll(view, (node) => hasClass(node, "paid-unverified"))[0];
+		assert.ok(note, "the unverified note is present");
+		assert.match(textOf(note), /This page records a payment the payer reported/, "the note states the record unverified nature");
+		const badge = findAll(view, (node) => hasClass(node, "status-badge"))[0];
+		assert.equal(textOf(badge), "Paid", "the badge names the recorded payment");
+		assert.ok(hasClass(badge, "status-paid"));
+		const document = findAll(view, (node) => hasClass(node, "invoice-document"))[0];
+		const headings = findAll(document, (node) => /^h[1-6]$/.test(node.tagName));
+		assert.deepEqual(
+			headings.map((node) => [node.tagName, textOf(node)]),
+			[
+				["h1", "Invoice"],
+				["h2", "Notes and terms"],
+				["h2", "Payment received"],
+			],
+			"the outline names the paid record section",
+		);
+	} finally {
+		fake.restore();
+	}
+});
 test("the disabled Pay control exposes its reason as visible, described text", () => {
 	const fake = installInteractiveDocument();
 	try {

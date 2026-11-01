@@ -30,6 +30,7 @@ import {
 	type Amount,
 	type Invoice,
 } from "../invoice/model.js";
+import { MAX_PAID_HASH_CHARS } from "../invoice/paid.js";
 import { MAX_PAYMENT_LINK_BYTES, PaymentLinkError, buildPaymentLink, type PaymentLink } from "../payment/links.js";
 import type { SvgDataUrl } from "../util/data-url.js";
 import { utf8ToBytes } from "../util/encoding.js";
@@ -43,7 +44,7 @@ import { networkLabel } from "./network-labels.js";
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
 
 /** How prominently the status reads, so a stylesheet or PDF can color it without parsing the label. */
-export type InvoiceStatusTone = "open" | "due" | "overdue";
+export type InvoiceStatusTone = "open" | "due" | "overdue" | "paid";
 
 /** The invoice's payment status as shown in the letterhead. */
 export interface InvoiceStatus {
@@ -69,8 +70,11 @@ export function formatInvoiceDate(iso: string): string {
  * The invoice's status against `today` (a `YYYY-MM-DD` date).
  * No due date is `Open`; a due date in the past is `Overdue`; otherwise `Payment due`.
  * Dates compare correctly as `YYYY-MM-DD` strings.
+ * An invoice that carries a paid record is `Paid`, whatever its due date: the record is the payer's own statement that the payment was made, so the document's badge names the recorded payment rather than a due date the record has overtaken.
+ * The badge states the record's presence and nothing more — it does not confirm the payment, which nothing in this app can do — so its label names what the document holds rather than what a chain might say.
  */
 export function invoiceStatus(invoice: Invoice, today: string): InvoiceStatus {
+	if (invoice.paid !== undefined) return Object.freeze({ label: "Paid", tone: "paid" });
 	if (invoice.due === undefined) return Object.freeze({ label: "Open", tone: "open" });
 	if (/^\d{4}-\d{2}-\d{2}$/.test(today) && today > invoice.due) {
 		return Object.freeze({ label: "Overdue", tone: "overdue" });
@@ -211,11 +215,17 @@ export interface InvoicePaymentTermView {
 	readonly verbatim?: boolean;
 }
 
+/** A paid invoice's record as the document draws it: the terms a payer reported and no other statement about the payment. */
+export interface InvoicePaidView {
+	readonly terms: readonly InvoicePaymentTermView[];
+}
+
 /**
  * The document's fixed chrome text: the letterhead's wordmark, tagline and kind, the item table's column headers, the totals labels, the section titles, the dates block's role, and the payment details' terms.
  * Both renderers read these, so a label the on-screen view and the PDF both draw has a single spelling — the party roles beside them stay the domain's own words on the view model — and one of them cannot be reworded without the other.
  * The payment details' terms are labelled from here too, and the section's own amount term reads the same {@link InvoiceLabels.amount} the item table's column header does: the figure a payer copies and the column it was computed from are worded once, so the section cannot be reworded apart from the table it summarizes.
  * The on-screen view uppercases the tagline, the kind, the status badge, the role labels, the date labels, the column headers, the section titles, and the payment-term labels in CSS; the PDF uppercases the same eight groups at draw time, so neither renderer hardcodes a second spelling.
+ * The paid title and its two terms are the section's statement about the record the invoice carries: the title names the section as the payment the payer reported, and the terms name the transaction hash the payer wrote and the day they wrote it — a recorded date, not a settlement date.
  */
 export interface InvoiceLabels {
 	readonly brand: string;
@@ -234,6 +244,9 @@ export interface InvoiceLabels {
 	readonly paysTo: string;
 	readonly paymentLink: string;
 	readonly dates: string;
+	readonly paidTitle: string;
+	readonly paidHash: string;
+	readonly paidDate: string;
 }
 
 /**
@@ -241,6 +254,7 @@ export interface InvoiceLabels {
  *
  * {@link InvoiceViewModel.paymentLink} is the one statement of the URI as the document displays it — the ecosystem link itself, since a link the display boundary would alter is refused rather than shown — so a link consumer reads it by name rather than out of the term list: the `Payment link` term {@link InvoiceViewModel.payment} ends with displays that same named value, {@link InvoiceViewModel.paymentQr} is that same value's modules, and inserting or reordering a payment term cannot change what such a consumer reads.
  * {@link InvoiceViewModel.total} and the `Amount` term in {@link InvoiceViewModel.payment} are both the amount the built link carries, so the document's own figure and the value a payer copies are one reading of the link rather than two spellings of a recomputed total.
+ * {@link InvoiceViewModel.paid} is the record's own terms when the invoice carries a paid record, and `null` otherwise: the document branches on it to draw the record in place of the payment details, so a paid document states what the payer reported rather than asking to be paid again.
  */
 export interface InvoiceViewModel {
 	readonly assetName: string;
@@ -259,6 +273,7 @@ export interface InvoiceViewModel {
 	readonly paymentLink: string;
 	readonly payment: readonly InvoicePaymentTermView[];
 	readonly paymentQr: QrMatrix;
+	readonly paid: InvoicePaidView | null;
 	readonly labels: InvoiceLabels;
 }
 
@@ -280,6 +295,9 @@ export const INVOICE_LABELS: InvoiceLabels = Object.freeze({
 	paysTo: "Pays to",
 	paymentLink: "Payment link",
 	dates: "Dates",
+	paidTitle: "Payment received",
+	paidHash: "Transaction",
+	paidDate: "Recorded",
 });
 
 /**
@@ -292,6 +310,7 @@ export const INVOICE_LABELS: InvoiceLabels = Object.freeze({
  * The amount, the address, and the link terms carry `verbatim`, the one thing that marks a value a wallet takes verbatim: the on-screen view draws each of those as plain text with a copy control, so the value a payer copies is the same string the URI and the symbol carry rather than whatever their text selection spanned, and the print path and the PDF draw the same string whole rather than the on-screen run's clipped overflow.
  * The payment link is built once, checked to survive that boundary unchanged, exposed by name, and its symbol is encoded from that one value, so the view model's own {@link InvoiceViewModel.paymentLink}, the term that displays it, and the encoded payload are one string rather than three spellings that happen to agree: a legal invoice's link always fits the encoder's widest symbol, so the two throws those boundaries can raise (`PaymentLinkError`, `RangeError`) are unreachable from a validated invoice and surface only for one a caller assembled by hand.
  * The optional icon is armed here, once, by the icon leaf's `svgDataUrl`: the value is the leaf's own data URL, which is the type every image sink accepts, so the on-screen document and the PDF read one prepared value rather than each building a URL of its own; that call runs the icon gate itself, so it throws the gate's own `TypeError` or `InvalidIconError` for a value the gate refuses, none of which is reachable from a validated invoice — whose `icon` the model already gated to an accepted canonical document — so, like the link boundary's throws above, they surface only for an invoice a caller assembled by hand.
+ * The paid record's own terms are read from the invoice's validated record: the hash in the one stored spelling, clipped and stripped like every other displayed text field, and the day as the document's own deterministic date, labelled as the day the payment was recorded rather than a settlement date. The hash is the one term marked `verbatim`, because a payer may copy it into a block explorer or a wallet, and the recorded day is not: a date is read, not copied into anything that acts on it.
  * The result is frozen; a renderer reads it and draws, it does not re-derive.
  */
 export function buildInvoiceViewModel(invoice: Invoice, today: string): InvoiceViewModel {
@@ -349,6 +368,14 @@ export function buildInvoiceViewModel(invoice: Invoice, today: string): InvoiceV
 			Object.freeze({ label: INVOICE_LABELS.paymentLink, value: paymentLink, verbatim: true }),
 		]),
 		paymentQr: encodeQr(paymentLink),
+		paid: invoice.paid === undefined
+			? null
+			: Object.freeze({
+				terms: Object.freeze([
+					Object.freeze({ label: INVOICE_LABELS.paidHash, value: clip(invoice.paid.hash, MAX_PAID_HASH_CHARS), verbatim: true }),
+					Object.freeze({ label: INVOICE_LABELS.paidDate, value: formatInvoiceDate(invoice.paid.date) }),
+				]),
+			}),
 		labels: INVOICE_LABELS,
 	});
 }

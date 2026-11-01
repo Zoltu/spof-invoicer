@@ -291,6 +291,7 @@ const STATUS = Object.freeze({
 	open: { ink: hex("#41506b"), line: hex("#c7cedb"), surface: hex("#eef1f6") },
 	due: { ink: hex("#8a5300"), line: hex("#eccb8f"), surface: hex("#fdf3e2") },
 	overdue: { ink: hex("#a3261e"), line: hex("#f0bab4"), surface: hex("#fdeceb") },
+	paid: { ink: hex("#1f5f3a"), line: hex("#a3d9b4"), surface: hex("#eaf6ee") },
 });
 
 /**

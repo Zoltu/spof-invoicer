@@ -13,6 +13,16 @@
 export const UNSUPPORTED_WALLET_MESSAGE = "This invoice is paid by the payment link and QR code under Payment details, so there is no wallet to connect.";
 
 /**
+ * Shown beside the record of a payment on a paid invoice, and deliberately kept out of the printed page.
+ *
+ * The record is whatever its author wrote: a transaction hash and a date are a claim about a payment, not a confirmation of one, because nothing in this app can read a chain and nothing here is trusted to.
+ * The sentence states that plainly so a payee cannot mistake the record for a verified settlement, and it names the link itself as the reason the claim is only as trustworthy as whoever sent it.
+ * It is page-only on purpose: a printed invoice carrying the sentence would be a third artefact disagreeing with both the screen and the exported PDF, and a printed invoice carrying the record without it would present the claim as a confirmation.
+ * The constraint this sentence follows is `docs/design/payment-safety-memo.md`'s: nothing in this app can confirm a payment, so the record is stated as the payer's claim and the link is named as the reason its trust is only the sender's.
+ */
+export const UNVERIFIED_PAYMENT_NOTE = "This page records a payment the payer reported. It is unverified: anyone who holds this link can edit it.";
+
+/**
  * Reported when a view that was being built could not be released, which is the state both renderers that build through a release can leave: `ui/view.ts` and `ui/payment-section.ts` release what they had already subscribed to before they rethrow, and a release that throws there is the failure this sentence names.
  *
  * The sentence is the message of the error those renderers throw and the failed build is kept on its `cause`, so the console report a developer reads names the stop that failed rather than the render behind it; no catcher here shows a caught message to the payer, so this sentence never reaches the notice region, which states the shell's own fixed sentence for the route that failed (`app/shell.ts`'s `renderGuarded`) and sends the error to `reportInternalFailure`.

@@ -7,7 +7,7 @@
  */
 
 import { describe, preview } from "../util/errors.js";
-import { ShareFormatError, decodeInvoice, decodeInvoiceBlob, encodeInvoice, isShareBlob } from "./codec.js";
+import { ShareFormatError, decodeInvoice, decodeInvoiceBlob, encodePayload, isShareBlob } from "./codec.js";
 import type { Invoice } from "./model.js";
 
 /** The route a shared link carries its payload on: `#/i/<payload>`. */
@@ -21,7 +21,7 @@ const FRAGMENT_ROOT = FRAGMENT_ROUTE.slice(0, -1);
 
 /** The `#/i/<payload>` fragment that a link to `invoice` carries. */
 export function encodeShare(invoice: Invoice): string {
-	return SHARE_FRAGMENT_PREFIX + encodeInvoice(invoice);
+	return SHARE_FRAGMENT_PREFIX + encodePayload(invoice);
 }
 
 /**

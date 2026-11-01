@@ -1519,7 +1519,11 @@ function surfaceStrings(node) {
 /** The payment-link presentation of `invoice` as a reader meets it: the URI the document displays, and each term's label and value beside it. */
 function presentationStrings(invoice) {
 	const model = buildInvoiceViewModel(invoice, TOTAL_OPTIONS.today);
-	return [model.paymentLink, ...model.payment.flatMap((term) => [term.label, term.value])];
+	const strings = [model.paymentLink, ...model.payment.flatMap((term) => [term.label, term.value])];
+	if (model.paid !== null) {
+		strings.push(...model.paid.terms.flatMap((term) => [term.label, term.value]));
+	}
+	return strings;
 }
 
 /**
@@ -1573,6 +1577,15 @@ test("no payer- or payee-facing surface cautions that a valid address may be unp
 	}
 	assert.equal(payoutAddressWarning(ZEC_TEX_PAYEE, ASSET_REGISTRY.zec), null, "a TEX payee earns no caution in the field's warning slot");
 	record("the payment-link presentation", presentationStrings(texInvoice()));
+	record("the paid document presentation", presentationStrings(createInvoice({
+		id: "INV-TEX-PAID",
+		issued: "2026-10-03",
+		payee: { name: "Studio Example", address: ZEC_TEX_PAYEE },
+		chainId: "zcash",
+		asset: "zec",
+		items: [line()],
+		paid: { hash: "a".repeat(64), date: "2026-10-03" },
+	})));
 
 	const notices = noticeRecorder();
 	openPayPanel(texInvoice(), { notice: notices, clipboard: null });

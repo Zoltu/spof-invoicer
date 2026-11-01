@@ -10,7 +10,7 @@
  */
 
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset, type Asset, type AssetFamily, type AssetId } from "../assets/registry.js";
-import { AUTHORING_SIZE_REMEDY, MAX_JSON_BYTES, authoringSize } from "../invoice/codec.js";
+import { AUTHORING_SIZE_REMEDY, MAX_AUTHORING_JSON_BYTES, MAX_JSON_BYTES, authoringSize } from "../invoice/codec.js";
 import { validateIcon } from "../invoice/icon.js";
 import {
 	InvalidInvoiceError,
@@ -1027,7 +1027,7 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 				tbody,
 			),
 			addButton,
-			h("p", { class: "field-hint" }, `Up to ${MAX_ITEMS} lines; a new invoice has to leave room for the payer to record the payment, so its encoded form is held just under the ${MAX_JSON_BYTES / 1024} KiB share limit.`),
+			h("p", { class: "field-hint" }, `Up to ${MAX_ITEMS} lines; a new invoice has to leave room for the payer to record the payment, so its encoded form is held just under the ${MAX_AUTHORING_JSON_BYTES / 1024} KiB share limit.`),
 		),
 		h(
 			"fieldset",

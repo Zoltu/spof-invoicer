@@ -60,7 +60,7 @@ const EVM_HASH_PREFIX = "0x";
  *
  * The reserve `invoice/codec.ts` measures is derived from the widest record rather than from each family's own spelling, so one figure covers every family's hash.
  */
-const MAX_PAID_HASH_CHARS = EVM_HASH_PREFIX.length + HASH_HEX_DIGITS;
+export const MAX_PAID_HASH_CHARS = EVM_HASH_PREFIX.length + HASH_HEX_DIGITS;
 
 /** The fields a paid record holds, in the order the canonical JSON writes them; the record is closed to every other field. */
 const PAID_FIELDS = ["hash", "date"] as const;

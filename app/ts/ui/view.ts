@@ -7,8 +7,8 @@
  *
  * The document is a letterhead, the parties and dates, an itemized table, a prominent total-due block, notes/terms, and payment details.
  * The letterhead's mark is the payee's own icon when the invoice carries one, in the place of the default brand mark rather than beside it, while the wordmark and tagline are drawn either way; a party's contact info is drawn as the lines it was stored with, one detail line per line.
- * Payment details is {@link renderPaymentSection}, the section `ui/payment-section.ts` owns and the payee's create screen draws from the same function: the payee address, the amount, and the payment link, each a plain-text value with its own copy control, beside the symbol of that same URI.
- * The actions around it (back to Create, Share, Save as PDF, Pay) are chrome, and the Pay control is the injected-wallet flow's alone: a Zcash or Monero invoice is paid by the payment link and QR code the document carries, so it is offered no control that would lead nowhere.
+ * Payment details is {@link renderPaymentSection}, the section `ui/payment-section.ts` owns and the payee's create screen draws from the same function: the payee address, the amount, and the payment link, each a plain-text value with its own copy control, beside the symbol of that same URI. A paid invoice draws the same section with the paid record's own title and terms in place of the payment terms, and no symbol, because the record states a transaction and a day rather than a link a wallet scans.
+ * The actions around it (back to Create, Share, Save as PDF, Pay) are chrome, and the Pay control is the injected-wallet flow's alone: a Zcash or Monero invoice is paid by the payment link and QR code the document carries, so it is offered no control that would lead nowhere. A paid invoice offers no Pay control at all, whatever its family, because the payment the record states is the one the document reports and there is nothing left to start.
  */
 
 import { requireAsset } from "../assets/registry.js";
@@ -218,6 +218,7 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
  * The share dialog describes this document, so its handle is reported through `ViewOptions.onDialog` as it opens and told `null` as it closes: the dialog that offers this invoice's link must not be left standing over the document a route change puts in its place.
  *
  * Pay is the injected-wallet flow, which only the EVM family pays through: on an EVM invoice it is present so the layout is complete and stays disabled — with the reason shown beside it — until a handler is wired, so no click can reach an EVM provider before one exists, while a privacy-chain invoice is offered a hint naming the hand-off it does carry instead of a control that would lead nowhere.
+ * A paid invoice offers neither the control nor its hint, whatever its family: the record the document carries is the payment it reports, and there is nothing left to start.
  */
 function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 	const shareButton = h("button", { type: "button", class: "btn btn-secondary" }, "Share");
@@ -232,8 +233,9 @@ function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 	const saveButton = h("button", { type: "button", class: "btn btn-secondary" }, "Save as PDF");
 	saveButton.addEventListener("click", () => runAction(() => exportPdf(invoice, options), options, "PDF export"));
 
-	// The Pay control is offered only for the invoices the wallet planner can pay: `isWalletPayable` is the same predicate `buildPaymentPlan` enforces, so the control this view offers and the flow behind it cannot disagree.
-	const walletPayable = isWalletPayable(requireAsset(invoice.asset));
+	const paid = invoice.paid !== undefined;
+	// The Pay control is offered only for the invoices the wallet planner can pay: `isWalletPayable` is the same predicate `buildPaymentPlan` enforces, so the control this view offers and the flow behind it cannot disagree. A paid invoice is offered none at all.
+	const walletPayable = !paid && isWalletPayable(requireAsset(invoice.asset));
 	const pay = walletPayable ? options.pay : undefined;
 	const payNoteId = "pay-unavailable";
 	const payButton = walletPayable
@@ -251,7 +253,7 @@ function documentActions(invoice: Invoice, options: ViewOptions): HTMLElement {
 	if (payButton !== null && pay !== undefined) {
 		payButton.addEventListener("click", () => runAction(() => pay(invoice), options, "Payment"));
 	}
-	const payNote = walletPayNote(walletPayable, pay, payNoteId);
+	const payNote = paid ? null : walletPayNote(walletPayable, pay, payNoteId);
 
 	return h(
 		"div",
