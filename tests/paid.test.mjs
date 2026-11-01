@@ -1,0 +1,218 @@
+/** The suite for the paid record: the per-family transaction-hash grammar, the two-field record, and the bytes the record adds to an invoice. */
+
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { ASSET_FAMILIES } from "../app/js/assets/registry.js";
+import { InvalidCalendarDateError, requireCalendarDate } from "../app/js/invoice/calendar-date.js";
+import {
+	InvalidPaidRecordError,
+	MAX_PAID_HASH_CHARS,
+	MAX_PAID_RECORD_JSON_BYTES,
+	paidHashForm,
+	validatePaidRecord,
+} from "../app/js/invoice/paid.js";
+
+/** An EVM transaction hash: `0x` in front of 32 hex-encoded bytes. */
+const EVM_HASH = `0x${"9f".repeat(32)}`;
+
+/** The same hash spelled in upper case, which is the same transaction and not a second record. */
+const EVM_HASH_UPPER = `0x${"9F".repeat(32)}`;
+
+/** A privacy-chain transaction id: the same 32 bytes with no prefix. */
+const BARE_HASH = "ab".repeat(32);
+
+/** The same id spelled in upper case. */
+const BARE_HASH_UPPER = "AB".repeat(32);
+
+/** A recorded date, as the caller's own `today`. */
+const DATE = "2026-10-05";
+
+/** The families whose transactions are named by a bare id rather than a `0x` hash. */
+const BARE_FAMILIES = ["zcash", "monero"];
+
+/** Refuse `run` with an `InvalidPaidRecordError` about `field` and match `pattern` against its message; returns the refusal so a case can read the clause. */
+function paidRefusal(label, run, field, pattern) {
+	let refusal = null;
+	try {
+		run();
+	} catch (error) {
+		refusal = error;
+	}
+	assert.ok(
+		refusal instanceof InvalidPaidRecordError,
+		`${label}: expected an InvalidPaidRecordError, got ${refusal?.name}: ${refusal?.message}`,
+	);
+	assert.equal(refusal.field, field, `${label}: the refusal names the ${field === "" ? "record" : field} field`);
+	const pathPrefix = `invoice: paid${field === "" ? "" : `.${field}`}: `;
+	assert.ok(refusal.message.startsWith(pathPrefix), `${label}: the refusal states the field path once`);
+	assert.match(refusal.message, pattern, label);
+	return refusal;
+}
+
+test("each family's hash spelling is accepted and stored in the one lower-case form", () => {
+	const evm = validatePaidRecord({ hash: EVM_HASH, date: DATE }, "evm");
+	assert.deepEqual(evm, { hash: EVM_HASH, date: DATE }, "an EVM hash is stored as it arrived");
+	assert.deepEqual(Object.keys(evm), ["hash", "date"], "the record holds the hash and the date and nothing else");
+	assert.ok(Object.isFrozen(evm), "the record is frozen value data");
+	assert.deepEqual(validatePaidRecord(evm, "evm"), evm, "validating a record again returns the same record");
+	assert.equal(
+		validatePaidRecord({ hash: EVM_HASH_UPPER, date: DATE }, "evm").hash,
+		EVM_HASH,
+		"an upper-case EVM hash is stored lower-cased, so one transaction has one spelling",
+	);
+	for (const family of BARE_FAMILIES) {
+		assert.equal(validatePaidRecord({ hash: BARE_HASH, date: DATE }, family).hash, BARE_HASH, `${family}: a bare id is stored as it arrived`);
+		assert.equal(
+			validatePaidRecord({ hash: BARE_HASH_UPPER, date: DATE }, family).hash,
+			BARE_HASH,
+			`${family}: an upper-case bare id is stored lower-cased`,
+		);
+	}
+});
+
+test("a hash of the other family's spelling is refused, naming the shape the family takes", () => {
+	paidRefusal(
+		"a bare id in an EVM invoice",
+		() => validatePaidRecord({ hash: BARE_HASH, date: DATE }, "evm"),
+		"hash",
+		/must be a 0x-prefixed 64-hex-digit transaction hash, got "/,
+	);
+	for (const family of BARE_FAMILIES) {
+		paidRefusal(
+			`a 0x hash in a ${family} invoice`,
+			() => validatePaidRecord({ hash: EVM_HASH, date: DATE }, family),
+			"hash",
+			/must be a bare 64-hex-digit transaction id with no prefix, got "/,
+		);
+	}
+	// The prefix is part of the grammar rather than a case of it, so a capital `0X` is not an EVM hash either.
+	paidRefusal(
+		"a capital-X prefix",
+		() => validatePaidRecord({ hash: `0X${"9f".repeat(32)}`, date: DATE }, "evm"),
+		"hash",
+		/must be a 0x-prefixed 64-hex-digit transaction hash/,
+	);
+});
+
+test("a hash of the wrong length or with a non-hex character is refused, naming the family's shape", () => {
+	const evmShape = /must be a 0x-prefixed 64-hex-digit transaction hash/;
+	const bareShape = /must be a bare 64-hex-digit transaction id with no prefix/;
+	for (const [label, hash] of [
+		["63 hex digits", `0x${"9f".repeat(31)}9`],
+		["65 hex digits", `0x${"9f".repeat(32)}9`],
+		["67 hex digits", `0x${"9f".repeat(33)}9`],
+		["a non-hex body", `0x${"zz".repeat(32)}`],
+		["a hex body one character short of its prefix", `0x${"9f".repeat(32)}`.slice(0, -1)],
+		["an empty string", ""],
+	]) {
+		paidRefusal(`${label} in an EVM invoice`, () => validatePaidRecord({ hash, date: DATE }, "evm"), "hash", evmShape);
+	}
+	for (const [label, hash] of [
+		["63 hex digits", "ab".repeat(31) + "a"],
+		["65 hex digits", BARE_HASH + "a"],
+		["67 hex digits", BARE_HASH + "abc"],
+		["a non-hex body", "zz".repeat(32)],
+		["a 0x prefix", `0x${BARE_HASH}`],
+	]) {
+		paidRefusal(`${label} in a Zcash invoice`, () => validatePaidRecord({ hash, date: DATE }, "zcash"), "hash", bareShape);
+	}
+	// A value that is not text at all takes the same one channel, so a caller classifies every refusal by class.
+	for (const value of [undefined, null, 42, {}, [EVM_HASH]]) {
+		paidRefusal(
+			`a hash of ${JSON.stringify(value) ?? "undefined"}`,
+			() => validatePaidRecord({ hash: value, date: DATE }, "evm"),
+			"hash",
+			/must be a 0x-prefixed 64-hex-digit transaction hash/,
+		);
+	}
+});
+
+test("the record holds exactly the hash and the recorded date, so no provenance, amount, chain, asset, or payer travels", () => {
+	paidRefusal(
+		"a provenance flag",
+		() => validatePaidRecord({ hash: EVM_HASH, date: DATE, via: "wallet" }, "evm"),
+		"via",
+		/is not a known field — expected one of hash, date/,
+	);
+	for (const field of ["amount", "chainId", "asset", "payer", "captured", "confirmed"]) {
+		paidRefusal(
+			`a ${field} field`,
+			() => validatePaidRecord({ hash: EVM_HASH, date: DATE, [field]: "x" }, "evm"),
+			field,
+			/is not a known field — expected one of hash, date/,
+		);
+	}
+	paidRefusal("a record with no date", () => validatePaidRecord({ hash: EVM_HASH }, "evm"), "date", /must be a YYYY-MM-DD date string, got undefined/);
+	paidRefusal("a record with no hash", () => validatePaidRecord({ date: DATE }, "evm"), "hash", /must be a 0x-prefixed 64-hex-digit transaction hash, got undefined/);
+	for (const value of [null, [], DATE, 42, true]) {
+		paidRefusal(
+			`a record of ${JSON.stringify(value)}`,
+			() => validatePaidRecord(value, "evm"),
+			"",
+			/must be a JSON object holding a transaction hash and the date it was recorded/,
+		);
+	}
+	// The unknown field's name comes from the payload, so the refusal carries a bounded echo of it rather than the whole key.
+	const longKey = "k".repeat(500);
+	const refusal = paidRefusal(
+		"an over-long unknown field",
+		() => validatePaidRecord({ hash: EVM_HASH, date: DATE, [longKey]: 1 }, "evm"),
+		"k".repeat(60) + "… (500 characters)",
+		/is not a known field/,
+	);
+	assert.ok(refusal.message.length < 300, `the refusal stays readable, got ${refusal.message.length} characters`);
+});
+
+test("the recorded date is read by the one calendar rule the model's dates use", () => {
+	for (const [label, date, pattern] of [
+		["the 30th of February", "2026-02-30", /is not a real calendar date/],
+		["month thirteen", "2026-13-01", /is not a real calendar date/],
+		["month zero", "2026-00-10", /is not a real calendar date/],
+		["a day that does not exist", "2026-04-31", /is not a real calendar date/],
+		["an unpadded month", "2026-1-05", /must be a YYYY-MM-DD date string/],
+		["a timestamp", "2026-10-05T00:00:00Z", /must be a YYYY-MM-DD date string/],
+	]) {
+		paidRefusal(`${label} as the recorded date`, () => validatePaidRecord({ hash: EVM_HASH, date }, "evm"), "date", pattern);
+	}
+	paidRefusal("a numeric date", () => validatePaidRecord({ hash: EVM_HASH, date: 20261005 }, "evm"), "date", /must be a YYYY-MM-DD date string, got 20261005/);
+
+	// The clause is the calendar rule's own, so the model's `issued` and `due` fields and this record cannot word the same fault two ways.
+	let calendarRefusal = null;
+	try {
+		requireCalendarDate("2026-02-30");
+	} catch (error) {
+		calendarRefusal = error;
+	}
+	assert.ok(calendarRefusal instanceof InvalidCalendarDateError, "the calendar rule refuses a day its month does not have");
+	const recordRefusal = paidRefusal("the same day in a record", () => validatePaidRecord({ hash: EVM_HASH, date: "2026-02-30" }, "evm"), "date", /is not a real calendar date/);
+	assert.equal(recordRefusal.reason, calendarRefusal.reason, "the record publishes the calendar rule's clause unchanged");
+	assert.equal(requireCalendarDate("2024-02-29"), "2024-02-29", "and a leap day is still a real date");
+});
+
+test("the hash form is the data a hint draws and the grammar checks, for every family", () => {
+	for (const family of Object.keys(ASSET_FAMILIES)) {
+		const form = paidHashForm(family);
+		assert.ok(form.name.length > 0, `${family}: the form names the value`);
+		assert.ok(form.characters <= MAX_PAID_HASH_CHARS, `${family}: no form is wider than the widest hash the record reserves room for`);
+		const prefix = form.prefixes[0] ?? "";
+		const hash = prefix + "0".repeat(form.characters - prefix.length);
+		assert.equal(hash.length, form.characters, `${family}: the form's character count is the length its hashes have`);
+		assert.equal(validatePaidRecord({ hash, date: DATE }, family).hash, hash, `${family}: a hash at the form's own character count is one the grammar accepts`);
+	}
+	assert.deepEqual(paidHashForm("evm").prefixes, ["0x"], "the EVM family spells its hash with a 0x prefix");
+	assert.equal(paidHashForm("evm").characters, MAX_PAID_HASH_CHARS, "and its spelling is the widest one recorded");
+	for (const family of BARE_FAMILIES) {
+		assert.deepEqual(paidHashForm(family).prefixes, [], `${family}: a bare id carries no prefix`);
+	}
+});
+
+test("the widest record's canonical JSON is the number of bytes the record's room is stated in", () => {
+	// The widest record is derived from the form the grammar publishes rather than from a hash written out here, so the figure the codec subtracts from its cap is the figure the widest legal record occupies.
+	const form = paidHashForm("evm");
+	const prefix = form.prefixes[0];
+	const hash = `${prefix}${"f".repeat(form.characters - prefix.length)}`;
+	const record = validatePaidRecord({ hash, date: "2026-12-31" }, "evm");
+	const canonical = `,"paid":${JSON.stringify({ hash: record.hash, date: record.date })}`;
+	assert.equal(Buffer.byteLength(canonical, "utf8"), MAX_PAID_RECORD_JSON_BYTES, "the reserve is the widest record's field, syntax included");
+	assert.ok(Buffer.byteLength(canonical, "utf8") > MAX_PAID_HASH_CHARS, "and it counts the field's own syntax as well as the values");
+});

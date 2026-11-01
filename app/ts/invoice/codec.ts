@@ -19,28 +19,47 @@
  *
  * Either party's `email` key carries free-text contact info — an email address, a phone number, or a postal address — and it keeps that name however wide its value grows: widening a field adds no second spelling of it, so a payload a build wrote when the key held an email address alone still decodes and re-encodes byte for byte, and no schema version changes.
  *
+ * The optional paid record is appended last, after the icon, and written only when the invoice carries one, so an unpaid invoice re-encodes byte for byte as it did before the field existed and the schema version stays 1.
+ * The record is the transaction a payer reported and the day they recorded it, and nothing else: the format carries no provenance, so it can never say whether a hash came from a wallet or was typed by hand.
+ * Its hash is written in the one case `invoice/paid.ts` stores, and the byte-for-byte comparison in {@link decodeInvoice} is what refuses a payload that spells it in another case, exactly as that comparison refuses another case of the payee address.
+ *
  * Money is transported as a decimal string of the asset's own units — `"150.00"`, never a JSON number and never base units — so every value survives the round trip exactly and a reader can convert it with `toBaseUnits` alone.
  * {@link decodeInvoice} derives the totals; they are never transported.
  *
  * Compressed share strings are deliberately not offered: this codec never runs a compressor, and the only vendored codecs are the two crypto/encoding packages.
  * The vendored pdf-lib bundle does embed pako's deflate/inflate, but only for the PDF streams it writes itself, and pulling a compressor into the share container for a few kilobytes of invoice text is not worth the supply chain.
- * Very large invoices are refused outright on both the encode and the decode side (see {@link MAX_JSON_BYTES}) rather than truncated, so any link this build decodes is one it can re-encode.
+ * Very large invoices are refused outright rather than truncated: the decode side refuses past {@link MAX_JSON_BYTES}, the wire format's own limit, and the encode side holds a new invoice that records no payment to {@link MAX_UNPAID_JSON_BYTES} — that limit less the room the widest paid record needs — so every invoice a payee creates still has room to be marked paid.
+ * That asymmetry is deliberate: a link an older build wrote may use the whole of {@link MAX_JSON_BYTES}, and it still opens.
  */
 
 import { base32nopad, utf8 } from "../util/encoding.js";
 import { boundMessage, describe, messageOf, preview } from "../util/errors.js";
 import { canonicalContactText } from "./contact-canonical-text.js";
 import { validateInvoice, type Invoice } from "./model.js";
+import { MAX_PAID_RECORD_JSON_BYTES } from "./paid.js";
 
 /** The container version written into every blob prefix. */
 export const SHARE_VERSION = 1;
 
-/** The most JSON an invoice may encode to; past this the share string stops being shareable. */
+/**
+ * The most JSON a share container may carry: the decode side's limit for every payload, and the encode side's for an invoice that records a payment; past this the share string stops being shareable.
+ *
+ * A new invoice that records no payment is held to {@link MAX_UNPAID_JSON_BYTES} instead, which is derived from this figure, and every payload is decoded against this one whatever it records, so a link an older build wrote still opens.
+ */
 export const MAX_JSON_BYTES = 65536;
 
 /**
+ * The most JSON a new invoice that records no payment may encode to: {@link MAX_JSON_BYTES} less the most bytes a paid record adds, {@link MAX_PAID_RECORD_JSON_BYTES} — the field's own syntax plus the widest hash and a stored date, derived in `invoice/paid.ts` from the record it validates.
+ *
+ * The reserve is what makes "every invoice a payee creates can still be marked paid" arithmetic rather than hope: the record is appended to a payload the payee's link already carries, so the bytes it needs have to be free before the payee sends the invoice.
+ * It is enforced only where a new payload is built, and only for an invoice that records no payment.
+ * The consequence is the asymmetry stated above: a legacy unpaid link larger than this figure decodes, and re-encoding it as an unpaid invoice is what the reserve refuses.
+ */
+export const MAX_UNPAID_JSON_BYTES = MAX_JSON_BYTES - MAX_PAID_RECORD_JSON_BYTES;
+
+/**
  * The most characters a share payload may hold.
- * A payload is refused before it is decoded, so this is a coarse pre-decode guard rather than the format's size limit: no base32 encoding of {@link MAX_JSON_BYTES} bytes reaches it (base32 needs only a little over 1.6 characters per encoded byte), so {@link MAX_JSON_BYTES} is what actually bounds an invoice — enforced on the decoded bytes by {@link decodeInvoice} exactly as {@link encodeInvoice} enforces it — and this twice-the-byte-cap bound only rejects absurd input early.
+ * A payload is refused before it is decoded, so this is a coarse pre-decode guard rather than the format's size limit: no base32 encoding of {@link MAX_JSON_BYTES} bytes reaches it (base32 needs only a little over 1.6 characters per encoded byte), so the byte caps above are what actually bound an invoice — {@link MAX_JSON_BYTES} on every decode and on the encode of an invoice that records a payment, {@link MAX_UNPAID_JSON_BYTES} on the encode of one that does not — and this twice-the-cap bound only rejects absurd input early.
  */
 export const MAX_PAYLOAD_CHARS = 2 * MAX_JSON_BYTES;
 
@@ -100,7 +119,8 @@ function bytesToJson(bytes: Uint8Array): string {
  * This is the wire form; changing it changes the format, so it is pinned by a test.
  * Items and the tax carry the canonical numeric spellings {@link validateInvoice} stored, so this emits exactly the one encoding the decoder accepts.
  * A party's contact info is written under `email` on both parties — the name the field has always carried on the wire, whatever shape its value takes — so the field widening to free text moves no byte of a payload that existed before it.
- * The optional icon is written last, after `notes`, and carries the trimmed, NFC-composed text {@link validateInvoice} stored, so an icon is transported verbatim and an icon-less invoice keeps the payload it had before the field existed.
+ * The optional icon is written after `notes`, and carries the trimmed, NFC-composed text {@link validateInvoice} stored, so an icon is transported verbatim and an icon-less invoice keeps the payload it had before the field existed.
+ * The optional paid record is written last, after the icon, in the record's canonical case, so an invoice that records no payment keeps its payload byte for byte and a field added after it appends rather than moving a byte of what came before.
  */
 export function serializeInvoice(invoice: Invoice): string {
 	return JSON.stringify({
@@ -126,13 +146,14 @@ export function serializeInvoice(invoice: Invoice): string {
 		...(invoice.tax === undefined ? {} : { tax: { label: invoice.tax.label, rate: invoice.tax.rate } }),
 		...(invoice.notes === undefined ? {} : { notes: invoice.notes }),
 		...(invoice.icon === undefined ? {} : { icon: invoice.icon }),
+		...(invoice.paid === undefined ? {} : { paid: { hash: invoice.paid.hash, date: invoice.paid.date } }),
 	});
 }
 
 /**
  * The byte length of an invoice's canonical JSON, validated first.
  *
- * {@link encodePayload} enforces the share cap on exactly these bytes, so a caller that wants to warn before building a container — the create form does, while the payee is still editing — can measure the same figure without provoking the refusal {@link encodePayload} would throw.
+ * {@link encodePayload} enforces a byte cap on exactly these bytes, so a caller that wants to warn before building a container — the create form does, while the payee is still editing — can measure the same figure without provoking the refusal {@link encodePayload} would throw, and compare it with the cap that applies to the invoice it holds.
  */
 export function encodedJsonBytes(invoice: Invoice): number {
 	return jsonToBytes(serializeInvoice(validateInvoice(invoice))).length;
@@ -141,18 +162,25 @@ export function encodedJsonBytes(invoice: Invoice): number {
 /**
  * Encode an invoice as the bare base32 payload a link's fragment carries.
  *
- * The invoice is validated first, so only a well-formed invoice can reach a share string.
+ * The invoice is validated first, so only a well-formed invoice can reach a share string, and an invoice that records no payment is held to {@link MAX_UNPAID_JSON_BYTES} so that the room a payment record needs is still there once it is marked paid.
  */
 export function encodeInvoice(invoice: Invoice): string {
 	return encodePayload(invoice);
 }
 
-/** Validate, serialize, and base32-encode an invoice. */
+/**
+ * Validate, serialize, and base32-encode an invoice.
+ *
+ * The limit is the wire cap for an invoice that records a payment and {@link MAX_UNPAID_JSON_BYTES} for one that does not, so an invoice this function accepts can take the widest record a payer can add without outgrowing the cap, while the payload that results is still held to the cap itself.
+ */
 function encodePayload(invoice: Invoice): string {
-	const json = serializeInvoice(validateInvoice(invoice));
+	const validated = validateInvoice(invoice);
+	const json = serializeInvoice(validated);
 	const bytes = jsonToBytes(json);
-	if (bytes.length > MAX_JSON_BYTES) {
-		throw new ShareFormatError(`the invoice needs ${bytes.length} bytes of JSON — the share limit is ${MAX_JSON_BYTES}; trim free text or split the invoice`);
+	const limit = validated.paid === undefined ? MAX_UNPAID_JSON_BYTES : MAX_JSON_BYTES;
+	if (bytes.length > limit) {
+		const reserved = validated.paid === undefined ? `, and an invoice that records no payment may use ${MAX_UNPAID_JSON_BYTES} of it so that recording one still fits` : "";
+		throw new ShareFormatError(`the invoice needs ${bytes.length} bytes of JSON — the share limit is ${MAX_JSON_BYTES}${reserved}; trim free text or split the invoice`);
 	}
 	return base32nopad.encode(bytes);
 }
@@ -222,7 +250,7 @@ function decodePayload(payload: string): Invoice {
 	} catch (error) {
 		throw new ShareFormatError(`the base32 payload is malformed: ${boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX)}`);
 	}
-	// The same byte bound the encoder applies, so a payload that reaches the JSON parse is one `encodeInvoice` could have written and can write again — the two envelopes are identical.
+	// The decode bound is the wire cap itself rather than the reserve the encoder applies to an unpaid invoice, so a legacy unpaid payload between the two figures still reaches the JSON parse and opens: it is one an older build wrote, and re-encoding it as an unpaid invoice is what the reserve refuses.
 	if (bytes.length > MAX_JSON_BYTES) {
 		throw new ShareFormatError(`the payload is ${bytes.length} bytes of JSON — the share limit is ${MAX_JSON_BYTES}; trim free text or split the invoice`);
 	}
@@ -238,7 +266,7 @@ function decodePayload(payload: string): Invoice {
 	} catch (error) {
 		throw new ShareFormatError(`the payload is not JSON: ${boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX)}`);
 	}
-	// This byte-for-byte comparison, not `validateInvoice`, is what holds the wire format to one spelling per value: validation repairs the icon through the same canonicalization the encoder applies, and it runs a contact value through the same `canonicalContactText` the encoder wrote, so a payload whose icon or contact value is a second encoding of the same text parses into a valid invoice and the comparison is what refuses it.
+	// This byte-for-byte comparison, not `validateInvoice`, is what holds the wire format to one spelling per value: validation repairs the icon through the same canonicalization the encoder applies, lower-cases a paid record's hash, and runs a contact value through the same `canonicalContactText` the encoder wrote, so a payload whose icon, paid hash, or contact value is a second encoding of the same value parses into a valid invoice and the comparison is what refuses it.
 	const invoice = validateInvoice(parsed);
 	if (serializeInvoice(invoice) !== json) {
 		throw new ShareFormatError(nonCanonicalReason(parsed, invoice));
@@ -250,16 +278,21 @@ function decodePayload(payload: string): Invoice {
  * Why a payload that parsed into a valid invoice is still not the text this encoder writes.
  *
  * Validation re-encodes the payee address to the one canonical spelling its family stores it in — the EIP-55 checksummed form for an EVM payee, the lower-case Bech32 spelling for a Zcash one — so a payload that names a payable address in another case that spells the same address parses into a valid invoice yet is not the canonical text — naming that divergence is the point, because the generic message would otherwise blame a key order or a number the payload spelled correctly.
+ * Validation also lower-cases the paid record's hash — the one stored spelling `invoice/paid.ts` states — so a payload that spells the same transaction in another case parses into a valid invoice and this comparison is what refuses it, with a reason naming that spelling.
  * Validation likewise repairs the icon with `util/icon-canonical-text.ts`'s `canonicalIconText`, the one definition of canonical icon text, so a payload that spells the icon with any fault that canonicalization repairs is one the model admits and this byte-for-byte comparison is what refuses.
  * It also runs a party contact value through the canonicalization `invoice/contact-canonical-text.ts` states — composing it to NFC, normalizing its line endings to LF, and replacing its tabs with single spaces — so a value spelled with an uncomposed character, with CRLF or a lone CR, or with a tab is another repair this comparison, and no other check, refuses.
  * That makes this comparison, not {@link validateInvoice}, the guard on the icon's single wire spelling: a decode path that validated a transported icon without it would admit a second encoding of one icon.
  * The reason below paraphrases that same rule, so a change to `canonicalIconText` has to update this reason rather than leave it naming a fault the canonicalization no longer covers.
- * Each repair a payload could be carrying — the address's case, the icon's text, and a contact value's line endings, composition, or tabs — gets a reason of its own, so the user is told the actual fault rather than a generic key order or number; every other divergence is the JSON spelling itself.
+ * Each repair a payload could be carrying — the address's case, the paid hash's case, the icon's text, and a contact value's line endings, composition, or tabs — gets a reason of its own, so the user is told the actual fault rather than a generic key order or number; every other divergence is the JSON spelling itself.
  */
 function nonCanonicalReason(parsed: unknown, invoice: Invoice): string {
 	const spelled = payeeAddressOf(parsed);
 	if (spelled !== undefined && spelled !== invoice.payee.address && spelled.toLowerCase() === invoice.payee.address.toLowerCase()) {
 		return `the payload spells the payee address ${spelled}, but its canonical spelling is ${invoice.payee.address}, the same address in the one case its family stores it in — the payload is not in the canonical form this encoder writes`;
+	}
+	const paidHash = paidHashOf(parsed);
+	if (paidHash !== undefined && invoice.paid !== undefined && paidHash !== invoice.paid.hash && paidHash.toLowerCase() === invoice.paid.hash) {
+		return `the payload spells the paid transaction hash ${paidHash}, but its canonical spelling is ${invoice.paid.hash}, the same hash in the one case this format stores it in — the payload is not in the canonical form this encoder writes`;
 	}
 	const icon = iconTextOf(parsed);
 	if (icon !== undefined && icon !== invoice.icon) {
@@ -279,6 +312,15 @@ function payeeAddressOf(parsed: unknown): string | undefined {
 	if (typeof payee !== "object" || payee === null) return undefined;
 	const address = (payee as { address?: unknown }).address;
 	return typeof address === "string" ? address : undefined;
+}
+
+/** The paid record's hash as the parsed JSON spells it, or `undefined` when the shape does not carry one. */
+function paidHashOf(parsed: unknown): string | undefined {
+	if (typeof parsed !== "object" || parsed === null) return undefined;
+	const paid = (parsed as { paid?: unknown }).paid;
+	if (typeof paid !== "object" || paid === null) return undefined;
+	const hash = (paid as { hash?: unknown }).hash;
+	return typeof hash === "string" ? hash : undefined;
 }
 
 /** The icon as the parsed JSON spells it, or `undefined` when the shape does not carry one. */

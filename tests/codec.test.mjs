@@ -11,18 +11,22 @@ import {
 	MAX_CONTACT_CHARS,
 	MAX_CONTACT_LINE_CHARS,
 	MAX_CONTACT_LINES,
+	MAX_DESCRIPTION_CHARS,
 	MAX_EMAIL_CHARS,
+	MAX_INVOICE_NOTES_CHARS,
 	MAX_ITEMS,
 	InvalidInvoiceError,
 	UnsupportedInvoiceVersionError,
 	computeTotals,
 	computeTotalsFor,
 	createInvoice,
+	markPaid,
 	validateInvoice,
 } from "../app/js/invoice/model.js";
 import {
 	MAX_JSON_BYTES,
 	MAX_PAYLOAD_CHARS,
+	MAX_UNPAID_JSON_BYTES,
 	ShareFormatError,
 	UnsupportedShareVersionError,
 	blobPrefix,
@@ -34,6 +38,7 @@ import {
 	serializeInvoice,
 } from "../app/js/invoice/codec.js";
 import { MAX_ICON_SVG_BYTES } from "../app/js/invoice/icon.js";
+import { MAX_PAID_RECORD_JSON_BYTES, paidHashForm } from "../app/js/invoice/paid.js";
 import { SHARE_FRAGMENT_PREFIX, buildShareUrl, decodeShare, encodeShare } from "../app/js/invoice/share.js";
 import { currentRoute, parseHash } from "../app/js/app/router.js";
 
@@ -1418,4 +1423,203 @@ test("a contact value respelled with a tab earns the contact reason rather than 
 		ShareFormatError,
 		/spells the payee contact value with CRLF or a lone CR, or in an uncomposed spelling, or with a tab in place of a stored space/,
 	);
+});
+
+/** An EVM transaction hash, and the day a reported payment is recorded on. */
+const PAID_HASH = `0x${"9f".repeat(32)}`;
+
+/** The same hash in upper case: the same transaction, spelled in a way the wire format refuses. */
+const PAID_HASH_UPPER = `0x${"9F".repeat(32)}`;
+
+const PAID_DATE = "2026-10-05";
+
+/** A privacy-chain transaction id: the same 32 bytes bare. */
+const BARE_HASH = "ab".repeat(32);
+
+/** Refuse `run` and return the `InvalidInvoiceError` it raised under `path`, so a case can read the path and the cause. */
+function paidRefusal(label, run, path) {
+	let refusal = null;
+	try {
+		run();
+	} catch (error) {
+		refusal = error;
+	}
+	assert.ok(
+		refusal instanceof InvalidInvoiceError,
+		`${label}: expected an InvalidInvoiceError, got ${refusal?.name}: ${refusal?.message}`,
+	);
+	assert.equal(refusal.path, path, `${label}: the refusal names ${path}`);
+	return refusal;
+}
+
+/**
+ * An invoice whose canonical JSON is exactly `bytes` bytes long.
+ *
+ * Each step is measured rather than assumed: a line item closes the gap by roughly half a kilobyte, and a note closes the last of it, so a byte-boundary case is fitted to the byte rather than approximated.
+ * The estimate of an item's own JSON length only decides how many items to add in one step, so a wrong estimate costs a step rather than the exactness.
+ */
+function invoiceOfJsonBytes(bytes, overrides = {}) {
+	const fill = "x".repeat(MAX_DESCRIPTION_CHARS);
+	let items = 1;
+	let noteLength = 0;
+	for (let step = 0; step < 400; step += 1) {
+		const invoice = make({
+			...overrides,
+			items: Array.from({ length: items }, (_, index) => ({
+				description: index === 0 ? "Design work" : fill,
+				quantity: "2",
+				unitPrice: "150.00",
+			})),
+			...(noteLength === 0 ? {} : { notes: "n".repeat(noteLength) }),
+		});
+		const length = Buffer.byteLength(serializeInvoice(invoice), "utf8");
+		const gap = bytes - length;
+		if (gap === 0) {
+			assert.ok(items <= MAX_ITEMS, `the fixture stays inside the item cap, got ${items} items`);
+			return invoice;
+		}
+		const noteRoom = MAX_INVOICE_NOTES_CHARS - noteLength;
+		if (gap > noteRoom) {
+			items += Math.max(1, Math.floor((gap - noteRoom) / 540));
+		} else if (gap > 0) {
+			noteLength += gap;
+		} else if (noteLength >= -gap) {
+			noteLength += gap;
+		} else {
+			items -= 1;
+			noteLength = 0;
+		}
+		assert.ok(items >= 1 && items <= MAX_ITEMS, `the fixture needs a legal item count, got ${items}`);
+	}
+	assert.fail(`could not fit an invoice to ${bytes} bytes`);
+}
+
+test("an optional paid record is a field the model validates and the encoder writes last", () => {
+	assert.equal(serializeInvoice(MINIMAL).includes('"paid"'), false, "an unpaid invoice writes no paid field");
+	assert.equal(serializeInvoice(RICH).includes('"paid"'), false, "and neither does a richer one");
+	const paid = make({ paid: { hash: PAID_HASH_UPPER, date: PAID_DATE } });
+	assert.deepEqual(paid.paid, { hash: PAID_HASH, date: PAID_DATE }, "the record is stored in its canonical case");
+	assert.equal(paid.v, INVOICE_VERSION, "the schema version stays 1");
+	assert.deepEqual(validateInvoice(paid), paid, "validation is idempotent on a paid invoice");
+	const withIcon = make({ icon: ICON, paid: { hash: PAID_HASH, date: PAID_DATE } });
+	assert.ok(
+		serializeInvoice(withIcon).includes(`"icon":${JSON.stringify(ICON)},"paid":{"hash":"${PAID_HASH}","date":"${PAID_DATE}"}`),
+		"the record is written last, after the icon",
+	);
+	for (const [label, container] of [
+		["the fragment payload", encodeInvoice(withIcon)],
+		["the base32 blob", encodeInvoiceBlob(withIcon)],
+		["the full fragment", `${SHARE_FRAGMENT_PREFIX}${encodeInvoice(withIcon)}`],
+	]) {
+		assert.deepEqual(decodeShare(container), withIcon, label);
+	}
+	assert.equal(encodeInvoice(decodeInvoice(encodeInvoice(withIcon))), encodeInvoice(withIcon), "and the payload re-encodes byte for byte");
+});
+
+test("a paid record is refused under the field that is wrong", () => {
+	rejects(
+		"a provenance flag",
+		() => make({ paid: { hash: PAID_HASH, date: PAID_DATE, via: "wallet" } }),
+		InvalidInvoiceError,
+		/paid\.via: is not a known field/,
+	);
+	rejects("a missing date", () => make({ paid: { hash: PAID_HASH } }), InvalidInvoiceError, /paid\.date: must be a YYYY-MM-DD date string, got undefined/);
+	rejects(
+		"a day its month does not have",
+		() => make({ paid: { hash: PAID_HASH, date: "2026-02-30" } }),
+		InvalidInvoiceError,
+		/paid\.date: "2026-02-30" is not a real calendar date/,
+	);
+	rejects(
+		"a hash that is not hex",
+		() => make({ paid: { hash: `0x${"z".repeat(64)}`, date: PAID_DATE } }),
+		InvalidInvoiceError,
+		/paid\.hash: must be a 0x-prefixed 64-hex-digit transaction hash/,
+	);
+	rejects("a record that is not an object", () => make({ paid: PAID_DATE }), InvalidInvoiceError, /paid: must be a JSON object/);
+	const refusal = paidRefusal("a bare id in an EVM invoice", () => make({ paid: { hash: BARE_HASH, date: PAID_DATE } }), "paid.hash");
+	assert.equal(refusal.cause?.name, "InvalidPaidRecordError", "the record validator's own error travels as the cause");
+	// The hash grammar follows the asset the invoice names rather than any label the record carries.
+	rejects(
+		"an EVM hash on a Zcash invoice",
+		() => make({ asset: "zec", chainId: "zcash", payee: { name: "Studio Example", address: UNIFIED }, paid: { hash: PAID_HASH, date: PAID_DATE } }),
+		InvalidInvoiceError,
+		/paid\.hash: must be a bare 64-hex-digit transaction id with no prefix/,
+	);
+	const zec = make({ asset: "zec", chainId: "zcash", payee: { name: "Studio Example", address: UNIFIED }, paid: { hash: BARE_HASH, date: PAID_DATE } });
+	assert.deepEqual(decodeInvoice(encodeInvoice(zec)), zec, "a bare id round-trips on a privacy-chain invoice");
+});
+
+test("markPaid attaches one record, validates it against the invoice's own asset, and refuses a second call", () => {
+	const paid = markPaid(MINIMAL, { hash: PAID_HASH_UPPER, date: PAID_DATE });
+	assert.deepEqual(paid.paid, { hash: PAID_HASH, date: PAID_DATE }, "the record is stored in its canonical case");
+	const { paid: record, ...rest } = paid;
+	assert.deepEqual(record, { hash: PAID_HASH, date: PAID_DATE });
+	assert.deepEqual(Object.keys(rest), Object.keys(MINIMAL), "the paid field is the only one added");
+	assert.equal(JSON.stringify(rest), JSON.stringify(MINIMAL), "and every other field is the invoice it already was");
+	assert.deepEqual(validateInvoice(paid), paid, "the result is a validated invoice");
+	assert.deepEqual(decodeInvoice(encodeInvoice(paid)), paid, "and it round-trips through the fragment payload");
+	assert.deepEqual(decodeInvoiceBlob(encodeInvoiceBlob(paid)), paid, "and through the blob");
+	rejects("marking it paid a second time", () => markPaid(paid, { hash: PAID_HASH, date: "2026-10-06" }), InvalidInvoiceError, /paid: already records the payment "0x9f/);
+	rejects("marking an EVM invoice with a bare id", () => markPaid(MINIMAL, { hash: BARE_HASH, date: PAID_DATE }), InvalidInvoiceError, /paid\.hash: must be a 0x-prefixed 64-hex-digit transaction hash/);
+	rejects("marking an invoice on a day its month does not have", () => markPaid(MINIMAL, { hash: PAID_HASH, date: "2026-04-31" }), InvalidInvoiceError, /paid\.date: "2026-04-31" is not a real calendar date/);
+});
+
+test("a payload that spells the paid hash in the other case names that cause", () => {
+	const paid = markPaid(MINIMAL, { hash: PAID_HASH, date: PAID_DATE });
+	const json = serializeInvoice(paid);
+	const respelled = json.replace(PAID_HASH, PAID_HASH_UPPER);
+	assert.notEqual(respelled, json, "the fixture really respells the hash");
+	assert.equal(validateInvoice(JSON.parse(respelled)).paid.hash, PAID_HASH, "validation repairs the case to the one stored spelling");
+	rejects(
+		"an upper-case paid hash",
+		() => decodeInvoice(b32(respelled)),
+		ShareFormatError,
+		new RegExp(`the payload spells the paid transaction hash ${PAID_HASH_UPPER}, but its canonical spelling is ${PAID_HASH}`),
+	);
+	const zec = make({ asset: "zec", chainId: "zcash", payee: { name: "Studio Example", address: UNIFIED }, paid: { hash: BARE_HASH, date: PAID_DATE } });
+	const zecRespelled = serializeInvoice(zec).replace(BARE_HASH, BARE_HASH.toUpperCase());
+	rejects("an upper-case bare id", () => decodeInvoice(b32(zecRespelled)), ShareFormatError, /the payload spells the paid transaction hash AB/);
+	assert.deepEqual(decodeInvoice(encodeInvoice(paid)), paid, "the canonical spelling still decodes");
+});
+
+test("the unpaid budget leaves exactly the room a payment record needs", () => {
+	assert.equal(MAX_UNPAID_JSON_BYTES + MAX_PAID_RECORD_JSON_BYTES, MAX_JSON_BYTES, "the reserve is the difference between the two caps");
+	const form = paidHashForm("evm");
+	const prefix = form.prefixes[0];
+	const widestRecord = { hash: `${prefix}${"f".repeat(form.characters - prefix.length)}`, date: "2026-12-31" };
+	const unpaid = invoiceOfJsonBytes(MAX_UNPAID_JSON_BYTES);
+	assert.equal(Buffer.byteLength(serializeInvoice(unpaid), "utf8"), MAX_UNPAID_JSON_BYTES, "the fixture sits exactly on the unpaid budget");
+	const paid = markPaid(unpaid, widestRecord);
+	const paidBytes = Buffer.byteLength(serializeInvoice(paid), "utf8");
+	assert.equal(paidBytes - MAX_UNPAID_JSON_BYTES, MAX_PAID_RECORD_JSON_BYTES, "the widest record adds the reserve and not a byte more");
+	assert.equal(paidBytes, MAX_JSON_BYTES, "so the invoice a payee created can take the widest record and still land on the wire cap");
+	assert.deepEqual(decodeInvoice(encodeInvoice(paid)), paid, "and the paid invoice encodes and decodes");
+});
+
+test("an unpaid invoice one byte into the reserve is refused, and the same invoice fits once it is paid", () => {
+	const over = invoiceOfJsonBytes(MAX_UNPAID_JSON_BYTES + 1);
+	rejects(
+		"encoding it while it records no payment",
+		() => encodeInvoice(over),
+		ShareFormatError,
+		new RegExp(`the share limit is ${MAX_JSON_BYTES}, and an invoice that records no payment may use ${MAX_UNPAID_JSON_BYTES} of it`),
+	);
+	// The reserve is the widest record's room, and a privacy-chain id is two characters narrower, so an invoice one byte into the reserve still fits the wire cap once it records one.
+	const zecOver = invoiceOfJsonBytes(MAX_UNPAID_JSON_BYTES + 1, { asset: "zec", chainId: "zcash", payee: { name: "Studio Example", address: UNIFIED } });
+	const zecPaid = markPaid(zecOver, { hash: BARE_HASH, date: PAID_DATE });
+	const paidBytes = Buffer.byteLength(serializeInvoice(zecPaid), "utf8");
+	assert.ok(paidBytes > MAX_UNPAID_JSON_BYTES && paidBytes <= MAX_JSON_BYTES, `a paid invoice may use the whole wire cap, and this one uses ${paidBytes} bytes`);
+	assert.deepEqual(decodeInvoice(encodeInvoice(zecPaid)), zecPaid, "and it encodes and decodes");
+});
+
+test("a legacy unpaid payload between the two caps still opens, and re-encoding it is what the reserve refuses", () => {
+	const legacy = invoiceOfJsonBytes(MAX_UNPAID_JSON_BYTES + 60);
+	const bytes = Buffer.byteLength(serializeInvoice(legacy), "utf8");
+	assert.ok(bytes > MAX_UNPAID_JSON_BYTES && bytes <= MAX_JSON_BYTES, `the fixture sits between the two caps at ${bytes} bytes`);
+	const payload = b32(serializeInvoice(legacy));
+	assert.deepEqual(decodeInvoice(payload), legacy, "a link an older build wrote still opens");
+	assert.deepEqual(decodeShare(`${SHARE_FRAGMENT_PREFIX}${payload}`), legacy, "and still opens through its fragment");
+	assert.deepEqual(decodeInvoiceBlob(`pinv1b-${payload}`), legacy, "and through its blob");
+	rejects("re-encoding it as an unpaid invoice", () => encodeInvoice(legacy), ShareFormatError, new RegExp(`may use ${MAX_UNPAID_JSON_BYTES}`));
 });

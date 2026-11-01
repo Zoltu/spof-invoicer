@@ -4,9 +4,12 @@
  * An {@link Invoice} is the wire object and nothing more: an id, dates, the parties, the asset, the line items, an optional tax, an optional icon and free text.
  * Totals are never transported — {@link computeTotals} derives them from the invoice's own inputs, so a share string cannot smuggle in a total that disagrees with its own lines.
  * {@link validateInvoice} checks every field of an untrusted parsed object and fails closed with a field path; {@link createInvoice} is the same validation for an object built in memory.
- * The optional icon is the one field whose rules live outside this module: `invoice/icon.ts` bounds and canonicalizes it, and {@link validateInvoice} reads that gate's refusal under the `icon` path.
+ * The optional icon is one field whose rules live outside this module: `invoice/icon.ts` bounds and canonicalizes it, and {@link validateInvoice} reads that gate's refusal under the `icon` path.
  * The icon is also the one field whose surrounding whitespace this validator repairs rather than refuses: the gate trims it, where {@link text} refuses any other field that starts or ends with whitespace.
  * That repair admits an icon whose stored text can differ from the spelling a payload carried, so this validator alone cannot hold the field to one wire spelling: the wire format's single-spelling guarantee for the icon rests one layer up, on `invoice/codec.ts`'s byte-for-byte comparison of the decoded JSON against the canonical text `serializeInvoice` writes — the boundary every decode path passes through.
+ *
+ * The optional paid record is the transaction a payer reports for this invoice and the day they recorded it: exactly two fields, whose grammar, canonical case, and size `invoice/paid.ts` owns, and whose hash is validated against the invoice's own asset family, so a record cannot carry a hash of a shape the invoice could not have been paid in.
+ * That validator lower-cases the hash it stores, a repair like the icon gate's, so the field's single wire spelling rests one layer up on `invoice/codec.ts`'s byte-for-byte comparison as well, and not on this validator alone.
  *
  * Text is normalized to Unicode NFC as it is validated, so one visible string has a single encoded form and an NFD spelling of a name is not a second, equally valid spelling of the same invoice.
  * Invisible and direction-formatting characters (zero-width spaces, bidi marks and overrides, the soft hyphen, the byte-order mark, and other default-ignorable formatting) are refused, a single-line field also refuses the Unicode line and paragraph separators, and the C1 control block is refused alongside the C0 controls, so a stored name or id cannot be made to render differently from how it reads.
@@ -30,6 +33,7 @@ import {
 	isAssetNetwork,
 	isSupportedAsset,
 	isSupportedChain,
+	requireAssetFamily,
 	type Asset,
 	type AssetId,
 	type NetworkId,
@@ -38,8 +42,10 @@ import { UINT256_MAX, canonicalAmount, fractionalDigits, fromBaseUnits, toBaseUn
 import { boundMessage, describe, messageOf, preview } from "../util/errors.js";
 import { INVISIBLE_FORMATTING, LONE_SURROGATE, MULTI_LINE_CONTROL, SINGLE_LINE_CONTROL, stripDisplayCharacters } from "../util/text.js";
 import { requirePayoutAddress, type PayoutAddress } from "../wallet/payout-address.js";
+import { InvalidCalendarDateError, requireCalendarDate } from "./calendar-date.js";
 import { canonicalContactText } from "./contact-canonical-text.js";
 import { validateIcon } from "./icon.js";
+import { InvalidPaidRecordError, validatePaidRecord, type PaidRecord } from "./paid.js";
 
 /** The only invoice schema version this build writes and reads. */
 export const INVOICE_VERSION = 1;
@@ -131,6 +137,7 @@ export interface Invoice {
 	readonly tax?: TaxLine;
 	readonly notes?: string;
 	readonly icon?: string;
+	readonly paid?: PaidRecord;
 }
 
 /**
@@ -173,7 +180,7 @@ export interface TotalsInput {
 /**
  * Raised by {@link validateInvoice} for a field that is missing, mis-shaped, or out of range; `path` names the offending field.
  *
- * A refusal this module wraps from another validator — a payout address, a money input, an icon — is kept as the error's own `cause`, so a surface above the model can classify the refusal by the class that raised it rather than by reading the message it was worded into.
+ * A refusal this module wraps from another validator — a payout address, a money input, an icon, a date, a paid record — is kept as the error's own `cause`, so a surface above the model can classify the refusal by the class that raised it rather than by reading the message it was worded into.
  */
 export class InvalidInvoiceError extends Error {
 	/** The offending field, e.g. `payee.address` or `items[0].quantity`. Empty for the root object. */
@@ -208,6 +215,7 @@ const INVOICE_FIELDS = [
 	"tax",
 	"notes",
 	"icon",
+	"paid",
 ] as const;
 
 const PAYEE_FIELDS = ["name", "address", "email", "notes"] as const;
@@ -215,9 +223,7 @@ const PAYER_FIELDS = ["name", "email"] as const;
 const ITEM_FIELDS = ["description", "quantity", "unitPrice"] as const;
 const TAX_FIELDS = ["label", "rate"] as const;
 
-const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
-const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 /** The largest accepted tax rate, expressed in `TAX_RATE_DECIMALS`-scaled percent units. */
 const MAX_TAX_RATE_UNITS = 100n * 10n ** BigInt(TAX_RATE_DECIMALS);
@@ -225,7 +231,7 @@ const MAX_TAX_RATE_UNITS = 100n * 10n ** BigInt(TAX_RATE_DECIMALS);
 /**
  * The most of a wrapped validator message a user-facing refusal carries.
  *
- * {@link payoutAddress} and {@link moneyRefusal} wrap another module's message, {@link date} builds one of its own, and {@link assertKnownFields} puts an unknown JSON key into the field path; each embeds the rejected value, which a share payload within the codec's cap can stretch without bound — the address validator imposes no length of its own, a date string reaches its refusal with no cap at all, and an unknown key's length is limited only by the payload.
+ * {@link payoutAddress}, {@link iconField}, {@link date} and {@link paidField} wrap another module's message, and {@link assertKnownFields} puts an unknown JSON key into the field path; each embeds the rejected value, which a share payload within the codec's cap can stretch without bound — the address validator imposes no length of its own, the calendar rule's clause is the one this cap re-applies, and an unknown key's length is limited only by the payload.
  * Left unbounded, that turns the route notice into ~100 KB and breaks the bounded-message invariant (`util/errors.ts`, `app/shell.ts`).
  * The bound leaves every message this module builds from a legitimate value intact — the longest is well under it — while keeping a hostile one far inside the notice's own limit.
  */
@@ -351,29 +357,20 @@ function firstUnrenderableCodePoint(stored: string): number | null {
 	return null;
 }
 
+/**
+ * A stored date, through the grammar `invoice/calendar-date.ts` states once and the paid record reads too.
+ *
+ * The refusal is published under the path this module read the value from, and the calendar rule's own error travels with it as the `cause`, so a caller can tell a misspelt date from a day its month does not have.
+ */
 function date(value: unknown, path: string): string {
-	if (typeof value !== "string") {
-		throw new InvalidInvoiceError(path, `must be a YYYY-MM-DD date string, got ${preview(value)}`);
+	try {
+		return requireCalendarDate(value);
+	} catch (error) {
+		if (!(error instanceof InvalidCalendarDateError)) {
+			throw error;
+		}
+		throw new InvalidInvoiceError(path, boundMessage(error.reason, WRAPPED_MESSAGE_MAX), { cause: error });
 	}
-	const match = DATE_PATTERN.exec(value);
-	if (match === null) {
-		throw new InvalidInvoiceError(
-			path,
-			boundMessage(`must be a YYYY-MM-DD date string, got ${describe(value)}`, WRAPPED_MESSAGE_MAX),
-		);
-	}
-	const year = Number(match[1]);
-	const month = Number(match[2]);
-	const day = Number(match[3]);
-	if (month < 1 || month > 12) {
-		throw new InvalidInvoiceError(path, `${describe(value)} is not a real calendar date`);
-	}
-	const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-	const longest = month === 2 && leap ? 29 : DAYS_IN_MONTH[month - 1];
-	if (day < 1 || day > longest) {
-		throw new InvalidInvoiceError(path, `${describe(value)} is not a real calendar date`);
-	}
-	return value;
 }
 
 /**
@@ -441,6 +438,25 @@ function iconField(value: unknown, path: string): string {
 		return validateIcon(value);
 	} catch (error) {
 		throw new InvalidInvoiceError(path, boundMessage(messageOf(error), WRAPPED_MESSAGE_MAX), { cause: error });
+	}
+}
+
+/**
+ * The optional paid record, validated by `invoice/paid.ts` against the invoice's own asset family and refused under the record's own path.
+ *
+ * The family is the one the invoice's asset names, read through `assets/registry.ts`'s `requireAssetFamily` — the resolution every reader that acts on a family goes through — so the hash grammar is the asset's statement rather than a label this call chose.
+ * The validator's error carries the record field it is about, so the refusal published here names the field that is wrong (`paid.hash` or `paid.date`) rather than the record as a whole, and it travels as the `cause`.
+ * Its clause echoes the rejected value, so it is bounded with the same cap every wrapped message here uses.
+ */
+function paidField(value: unknown, path: string, asset: Asset): PaidRecord {
+	try {
+		return validatePaidRecord(value, requireAssetFamily(asset));
+	} catch (error) {
+		if (!(error instanceof InvalidPaidRecordError)) {
+			throw error;
+		}
+		const at = error.field === "" ? path : `${path}.${error.field}`;
+		throw new InvalidInvoiceError(at, boundMessage(error.reason, WRAPPED_MESSAGE_MAX), { cause: error });
 	}
 }
 
@@ -605,6 +621,7 @@ export function computeTotals(invoice: Invoice): InvoiceTotals {
  * Dates are compared as `YYYY-MM-DD` strings, which orders identically to the calendar.
  * Text is composed to NFC, invisible formatting is refused, and money fields are folded to their canonical spelling.
  * An optional icon is read through {@link iconField}, so a decoded invoice carries the canonical text the icon gate returned — the `util/icon-canonical-text.ts` spelling, the one repair the module block above states the reason for — and an icon the gate refuses is refused rather than kept.
+ * An optional paid record is read through {@link paidField}, so a decoded invoice carries the record's canonical hash, and a record of another family's shape or of a day that does not exist is refused rather than kept.
  * The result is frozen.
  */
 export function validateInvoice(value: unknown): Invoice {
@@ -638,6 +655,7 @@ export function validateInvoice(value: unknown): Invoice {
 	const tax = source.tax === undefined ? undefined : taxField(source.tax, "tax");
 	const notes = source.notes === undefined ? undefined : text(source.notes, "notes", { max: MAX_INVOICE_NOTES_CHARS, multiline: true });
 	const icon = source.icon === undefined ? undefined : iconField(source.icon, "icon");
+	const paid = source.paid === undefined ? undefined : paidField(source.paid, "paid", asset);
 
 	const invoice: Invoice = Object.freeze({
 		v: INVOICE_VERSION,
@@ -653,6 +671,7 @@ export function validateInvoice(value: unknown): Invoice {
 		...(tax === undefined ? {} : { tax }),
 		...(notes === undefined ? {} : { notes }),
 		...(icon === undefined ? {} : { icon }),
+		...(paid === undefined ? {} : { paid }),
 	});
 	computeTotals(invoice);
 	return invoice;
@@ -661,4 +680,18 @@ export function validateInvoice(value: unknown): Invoice {
 /** Build a validated invoice from everything but the version and kind, which are filled in here. */
 export function createInvoice(input: InvoiceInput): Invoice {
 	return validateInvoice({ v: INVOICE_VERSION, t: INVOICE_KIND, ...input });
+}
+
+/**
+ * The same invoice with a payment recorded, validated: the one transform that turns an unpaid invoice into a paid one.
+ *
+ * It refuses an invoice that already records a payment rather than replacing the record, because an invoice records the one payment made against it and a second call would silently overwrite what the first reported.
+ * The record is validated against the invoice's own asset family, so a hash of the wrong shape is refused here as it is on the wire, and it is stored in its canonical case.
+ * Nothing else about the invoice moves: the parties, the line items, and the totals are the ones it already carried.
+ */
+export function markPaid(invoice: Invoice, record: PaidRecord): Invoice {
+	if (invoice.paid !== undefined) {
+		throw new InvalidInvoiceError("paid", `already records the payment ${preview(invoice.paid.hash)} — an invoice records one payment, so attach a record to an unpaid invoice`);
+	}
+	return validateInvoice({ ...invoice, paid: record });
 }
