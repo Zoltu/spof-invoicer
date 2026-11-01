@@ -100,7 +100,11 @@ const MAX_ACCOUNT_COUNT = 1024;
 /** The most of a provider's own error message a wrapped failure carries. */
 const MAX_PROVIDER_MESSAGE_CHARS = 200;
 
-/** The transaction hash shape a wallet must return. */
+/**
+ * The transaction hash shape a wallet must return: `0x` plus 32 bytes of hex.
+ *
+ * This guards a wallet's response. The invoice's stored-record grammar in `invoice/paid.ts` states the same width for an EVM invoice; widening one without the other leaves the two disagreeing about what a transaction hash looks like.
+ */
 const HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
 /** The widest quantity a provider may return: 32 bytes, the size of an Ethereum `uint256`. */

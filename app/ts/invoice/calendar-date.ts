@@ -2,6 +2,7 @@
  * The one statement of an invoice date: the `YYYY-MM-DD` spelling every stored date carries, and the calendar rules that spelling admits.
  *
  * Two callers read it and neither restates it: `invoice/model.ts` publishes a refused `issued` or `due` value under the field it read, and `invoice/paid.ts` under the day a payment was recorded, so one spelling cannot be a real date in one field and not in the other.
+ * Its length is a fact of the pattern below: every stored date occupies the same characters, so the greatest day the spelling can state — the value `invoice/paid.ts` carries as its widest record — needs no more room than any other.
  * The rule lives here rather than in the model because the paid record is validated by a module the model imports, and a date rule kept in the model would make that import a cycle.
  *
  * A stored date is a calendar day as text, which orders identically to the calendar, so nothing here reads a clock, a locale, or a time zone: the caller supplies the day it already holds.
@@ -21,13 +22,6 @@ const DAY_DIGITS = 2;
 
 /** The character between a stored date's year, month, and day. */
 const DATE_SEPARATOR = "-";
-
-/**
- * The characters a stored date occupies, `YYYY-MM-DD`.
- *
- * A caller that reserves room for a date — `invoice/paid.ts`'s widest-record byte count — reads this figure rather than stating ten of its own, so the room reserved and the spelling checked cannot disagree.
- */
-export const CALENDAR_DATE_CHARS = YEAR_DIGITS + DATE_SEPARATOR.length + MONTH_DIGITS + DATE_SEPARATOR.length + DAY_DIGITS;
 
 /** The one spelling of a stored date: four year digits, two month digits, two day digits, and the separator between them. */
 const DATE_PATTERN = new RegExp(`^(\\d{${YEAR_DIGITS}})${DATE_SEPARATOR}(\\d{${MONTH_DIGITS}})${DATE_SEPARATOR}(\\d{${DAY_DIGITS}})$`);

@@ -6,8 +6,7 @@ import { ASSET_FAMILIES } from "../app/js/assets/registry.js";
 import { InvalidCalendarDateError, requireCalendarDate } from "../app/js/invoice/calendar-date.js";
 import {
 	InvalidPaidRecordError,
-	MAX_PAID_HASH_CHARS,
-	MAX_PAID_RECORD_JSON_BYTES,
+	WIDEST_PAID_RECORD,
 	paidHashForm,
 	validatePaidRecord,
 } from "../app/js/invoice/paid.js";
@@ -189,30 +188,42 @@ test("the recorded date is read by the one calendar rule the model's dates use",
 	assert.equal(requireCalendarDate("2024-02-29"), "2024-02-29", "and a leap day is still a real date");
 });
 
+test("a refused recorded day keeps the calendar rule's own error as its cause", () => {
+	let refusal = null;
+	try {
+		validatePaidRecord({ hash: EVM_HASH, date: "2026-02-30" }, "evm");
+	} catch (error) {
+		refusal = error;
+	}
+	assert.ok(refusal instanceof InvalidPaidRecordError, "the record publishes the refusal under its date field");
+	assert.equal(refusal.field, "date");
+	assert.ok(refusal.cause instanceof InvalidCalendarDateError, "and keeps the calendar rule's error as the cause, so a dialog classifies the refusal by class instead of reading the clause");
+	assert.equal(refusal.cause.reason, refusal.reason, "the clause is the calendar rule's own, unchanged");
+	assert.equal(validatePaidRecord({ hash: EVM_HASH, date: DATE }, "evm").date, DATE, "while a real day is accepted");
+});
+
 test("the hash form is the data a hint draws and the grammar checks, for every family", () => {
 	for (const family of Object.keys(ASSET_FAMILIES)) {
 		const form = paidHashForm(family);
 		assert.ok(form.name.length > 0, `${family}: the form names the value`);
-		assert.ok(form.characters <= MAX_PAID_HASH_CHARS, `${family}: no form is wider than the widest hash the record reserves room for`);
+		assert.ok(form.characters <= WIDEST_PAID_RECORD.hash.length, `${family}: no form is wider than the widest hash the record reserves room for`);
 		const prefix = form.prefixes[0] ?? "";
 		const hash = prefix + "0".repeat(form.characters - prefix.length);
 		assert.equal(hash.length, form.characters, `${family}: the form's character count is the length its hashes have`);
 		assert.equal(validatePaidRecord({ hash, date: DATE }, family).hash, hash, `${family}: a hash at the form's own character count is one the grammar accepts`);
 	}
 	assert.deepEqual(paidHashForm("evm").prefixes, ["0x"], "the EVM family spells its hash with a 0x prefix");
-	assert.equal(paidHashForm("evm").characters, MAX_PAID_HASH_CHARS, "and its spelling is the widest one recorded");
+	assert.equal(paidHashForm("evm").characters, WIDEST_PAID_RECORD.hash.length, "and its spelling is the widest one recorded");
 	for (const family of BARE_FAMILIES) {
 		assert.deepEqual(paidHashForm(family).prefixes, [], `${family}: a bare id carries no prefix`);
 	}
 });
 
-test("the widest record's canonical JSON is the number of bytes the record's room is stated in", () => {
-	// The widest record is derived from the form the grammar publishes rather than from a hash written out here, so the figure the codec subtracts from its cap is the figure the widest legal record occupies.
-	const form = paidHashForm("evm");
-	const prefix = form.prefixes[0];
-	const hash = `${prefix}${"f".repeat(form.characters - prefix.length)}`;
-	const record = validatePaidRecord({ hash, date: "2026-12-31" }, "evm");
-	const canonical = `,"paid":${JSON.stringify({ hash: record.hash, date: record.date })}`;
-	assert.equal(Buffer.byteLength(canonical, "utf8"), MAX_PAID_RECORD_JSON_BYTES, "the reserve is the widest record's field, syntax included");
-	assert.ok(Buffer.byteLength(canonical, "utf8") > MAX_PAID_HASH_CHARS, "and it counts the field's own syntax as well as the values");
+test("the widest record is a value the hash grammar and the date rule both admit", () => {
+	// The bytes a record adds to a payload are `invoice/codec.ts`'s to measure from its own serializer, so this module states what the widest record holds and the codec measures what it costs.
+	assert.deepEqual(Object.keys(WIDEST_PAID_RECORD), ["hash", "date"], "the widest record holds the hash and the date and nothing else");
+	assert.ok(Object.isFrozen(WIDEST_PAID_RECORD), "and it is frozen value data");
+	assert.equal(WIDEST_PAID_RECORD.hash.length, paidHashForm("evm").characters, "its hash is at the widest spelling any family records");
+	assert.equal(validatePaidRecord(WIDEST_PAID_RECORD, "evm").hash, WIDEST_PAID_RECORD.hash, "the grammar accepts that hash as it stands");
+	assert.equal(requireCalendarDate(WIDEST_PAID_RECORD.date), WIDEST_PAID_RECORD.date, "and its day is one the calendar rule accepts, at the only length a stored date has");
 });

@@ -43,8 +43,10 @@ import { boundMessage, describe, messageOf, preview } from "../util/errors.js";
 import { INVISIBLE_FORMATTING, LONE_SURROGATE, MULTI_LINE_CONTROL, SINGLE_LINE_CONTROL, stripDisplayCharacters } from "../util/text.js";
 import { requirePayoutAddress, type PayoutAddress } from "../wallet/payout-address.js";
 import { InvalidCalendarDateError, requireCalendarDate } from "./calendar-date.js";
+import { unknownFieldOf, unknownFieldReason } from "./closed-object.js";
 import { canonicalContactText } from "./contact-canonical-text.js";
 import { validateIcon } from "./icon.js";
+import type { SizeVerdict } from "./codec.js";
 import { InvalidPaidRecordError, validatePaidRecord, type PaidRecord } from "./paid.js";
 
 /** The only invoice schema version this build writes and reads. */
@@ -181,6 +183,7 @@ export interface TotalsInput {
  * Raised by {@link validateInvoice} for a field that is missing, mis-shaped, or out of range; `path` names the offending field.
  *
  * A refusal this module wraps from another validator — a payout address, a money input, an icon, a date, a paid record — is kept as the error's own `cause`, so a surface above the model can classify the refusal by the class that raised it rather than by reading the message it was worded into.
+ * Its `path` is what makes it a field refusal a form can bind to a control, so it is raised only for a value a field carried: a rule about the invoice as a whole is a separate class, {@link InvoiceAlreadyPaidError}.
  */
 export class InvalidInvoiceError extends Error {
 	/** The offending field, e.g. `payee.address` or `items[0].quantity`. Empty for the root object. */
@@ -190,6 +193,36 @@ export class InvalidInvoiceError extends Error {
 		super(path === "" ? `invoice: ${reason}` : `invoice: ${path}: ${reason}`, options);
 		this.name = "InvalidInvoiceError";
 		this.path = path;
+	}
+}
+
+/**
+ * Raised by {@link markPaid} for an invoice that already records a payment.
+ *
+ * It is a state precondition rather than a field refusal: {@link InvalidInvoiceError}'s contract is a field a form can bind to a control under its `path`, and nothing the payee or the payer types is what to change here — the invoice itself already records a payment, and a second record would overwrite the first.
+ * A caller tells the two apart by class, so the surface that offers to record a payment reports the state it found instead of reading a path string.
+ */
+export class InvoiceAlreadyPaidError extends Error {
+	/** The record the invoice already carries, which a surface can show instead of offering to replace it. */
+	readonly paid: PaidRecord;
+
+	constructor(paid: PaidRecord) {
+		super(`invoice: paid: already records the payment ${preview(paid.hash)} — an invoice records one payment, so attach a record to an unpaid invoice`);
+		this.name = "InvoiceAlreadyPaidError";
+		this.paid = paid;
+	}
+}
+
+/**
+ * Raised by {@link markPaid} for a payment whose encoded form would exceed the share cap.
+ *
+ * It is a size refusal rather than a field refusal: the invoice and the record are both well-formed, but together they cannot be shared, and the sentence the verdict carries tells the payer who can fix it — the payee, by sending a smaller invoice.
+ * The encode path raises the same class for a paid invoice it cannot encode, so a caller that skips the verdict still gets the actionable sentence rather than a bare container error.
+ */
+export class PaidInvoiceTooLargeError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PaidInvoiceTooLargeError";
 	}
 }
 
@@ -231,7 +264,8 @@ const MAX_TAX_RATE_UNITS = 100n * 10n ** BigInt(TAX_RATE_DECIMALS);
 /**
  * The most of a wrapped validator message a user-facing refusal carries.
  *
- * {@link payoutAddress}, {@link iconField}, {@link date} and {@link paidField} wrap another module's message, and {@link assertKnownFields} puts an unknown JSON key into the field path; each embeds the rejected value, which a share payload within the codec's cap can stretch without bound — the address validator imposes no length of its own, the calendar rule's clause is the one this cap re-applies, and an unknown key's length is limited only by the payload.
+ * {@link payoutAddress}, {@link iconField}, {@link date} and {@link paidField} wrap another module's message, and each embeds the rejected value, which a share payload within the codec's cap can stretch without bound — the address validator imposes no length of its own, and the calendar rule's clause is the one this cap re-applies.
+ * The unknown JSON key {@link assertKnownFields} refuses is bounded by `invoice/closed-object.ts` instead, which bounds the echo of a key once for every closed record in this format.
  * Left unbounded, that turns the route notice into ~100 KB and breaks the bounded-message invariant (`util/errors.ts`, `app/shell.ts`).
  * The bound leaves every message this module builds from a legitimate value intact — the longest is well under it — while keeping a hostile one far inside the notice's own limit.
  */
@@ -249,12 +283,11 @@ function asRecord(value: unknown, path: string): Record<string, unknown> {
 	return value as Record<string, unknown>;
 }
 
+/** Refuse every field this level does not name, under the closed-object rule and the echoed-key bound `invoice/closed-object.ts` states once for this format. */
 function assertKnownFields(value: Record<string, unknown>, path: string, allowed: readonly string[]): void {
-	for (const key of Object.keys(value)) {
-		if (!allowed.includes(key)) {
-			const at = boundMessage(path === "" ? key : `${path}.${key}`, WRAPPED_MESSAGE_MAX);
-			throw new InvalidInvoiceError(at, `is not a known field — expected one of ${allowed.join(", ")}`);
-		}
+	const unknown = unknownFieldOf(value, allowed, path);
+	if (unknown !== null) {
+		throw new InvalidInvoiceError(unknown.field, unknownFieldReason(allowed));
 	}
 }
 
@@ -685,13 +718,17 @@ export function createInvoice(input: InvoiceInput): Invoice {
 /**
  * The same invoice with a payment recorded, validated: the one transform that turns an unpaid invoice into a paid one.
  *
- * It refuses an invoice that already records a payment rather than replacing the record, because an invoice records the one payment made against it and a second call would silently overwrite what the first reported.
+ * It refuses an invoice that already records a payment with an {@link InvoiceAlreadyPaidError} rather than replacing the record, because an invoice records the one payment made against it and a second call would silently overwrite what the first reported.
  * The record is validated against the invoice's own asset family, so a hash of the wrong shape is refused here as it is on the wire, and it is stored in its canonical case.
+ * The size verdict `paidEncodingSize` returns for the same invoice and record is a required argument, and a payment whose encoded form would exceed the share cap is refused with a {@link PaidInvoiceTooLargeError} carrying the sentence the payer can act on — so the mark-as-paid path cannot skip the size seam.
  * Nothing else about the invoice moves: the parties, the line items, and the totals are the ones it already carried.
  */
-export function markPaid(invoice: Invoice, record: PaidRecord): Invoice {
+export function markPaid(invoice: Invoice, record: PaidRecord, verdict: SizeVerdict): Invoice {
 	if (invoice.paid !== undefined) {
-		throw new InvalidInvoiceError("paid", `already records the payment ${preview(invoice.paid.hash)} — an invoice records one payment, so attach a record to an unpaid invoice`);
+		throw new InvoiceAlreadyPaidError(invoice.paid);
+	}
+	if (!verdict.fits) {
+		throw new PaidInvoiceTooLargeError(verdict.message);
 	}
 	return validateInvoice({ ...invoice, paid: record });
 }

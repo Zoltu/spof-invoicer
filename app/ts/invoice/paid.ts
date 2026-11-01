@@ -11,12 +11,14 @@
  * Case is canonicalized rather than merely accepted: {@link validatePaidRecord} stores the hash lower-cased, so one transaction id has exactly one stored spelling, and `invoice/codec.ts`'s byte-for-byte comparison is what refuses a payload that spells it in another case.
  * That split is the payee address's: this module stores the canonical spelling, and the codec holds the wire format to it.
  *
- * {@link MAX_PAID_RECORD_JSON_BYTES} is how much an invoice's canonical JSON grows when a record is attached, and `invoice/codec.ts` subtracts it from its own size cap so that every invoice a payee creates still has room for the widest record a payer can add.
+ * The record's wire spelling — its two field names, their order, and the punctuation between them — belongs to the serializer in `invoice/codec.ts` and is stated nowhere here.
+ * This module states instead what the record can hold at its widest, {@link WIDEST_PAID_RECORD}, and the codec measures the bytes its own serializer adds for that value, so a field renamed or respelled on the wire moves the room a payment needs with it.
  */
 
 import type { AssetFamily } from "../assets/registry.js";
-import { boundMessage, preview } from "../util/errors.js";
-import { CALENDAR_DATE_CHARS, InvalidCalendarDateError, requireCalendarDate } from "./calendar-date.js";
+import { preview } from "../util/errors.js";
+import { InvalidCalendarDateError, requireCalendarDate } from "./calendar-date.js";
+import { unknownFieldOf, unknownFieldReason } from "./closed-object.js";
 
 /**
  * One hash spelling an asset family records, as a hint and a refusal name it.
@@ -56,34 +58,27 @@ const EVM_HASH_PREFIX = "0x";
 /**
  * The widest hash any family records: the EVM spelling, whose `0x` prefix sits in front of the same 32 hex-encoded bytes a privacy chain's id carries bare.
  *
- * `invoice/codec.ts`'s room for a paid record is derived from the widest record, so one figure covers every family's hash rather than each family reserving its own.
+ * The reserve `invoice/codec.ts` measures is derived from the widest record rather than from each family's own spelling, so one figure covers every family's hash.
  */
-export const MAX_PAID_HASH_CHARS = EVM_HASH_PREFIX.length + HASH_HEX_DIGITS;
+const MAX_PAID_HASH_CHARS = EVM_HASH_PREFIX.length + HASH_HEX_DIGITS;
 
 /** The fields a paid record holds, in the order the canonical JSON writes them; the record is closed to every other field. */
 const PAID_FIELDS = ["hash", "date"] as const;
 
 /**
- * The most of an unknown field's name a refusal echoes.
- *
- * The name comes from the payload, whose keys the payload's own size bounds and nothing narrower, so a hostile one could otherwise stretch both this refusal and the field path a caller publishes it under.
+ * The greatest day a stored date can state, and the widest spelling one takes: `invoice/calendar-date.ts` admits `YYYY-MM-DD` and nothing else, so every recorded day occupies the same characters and no valid day needs more room than this one.
  */
-const UNKNOWN_FIELD_MAX = 60;
+const WIDEST_RECORDED_DAY = "9999-12-31";
 
 /**
- * The canonical JSON a paid record's field adds around its two values: the field's name and the punctuation, with the values themselves left out.
+ * The widest paid record the format can carry: the hash at the widest spelling any family records, and a recorded day.
  *
- * The shape is `invoice/codec.ts`'s, which appends the field last as `,"paid":{"hash":"…","date":"…"}`, so a record written into that position grows a payload by the values' characters plus this syntax.
+ * `invoice/codec.ts` measures the bytes its serializer adds for this record, which is the room a payment needs on an invoice that records none — so a grammar widened here moves the reserve with it instead of leaving it short.
  */
-const PAID_RECORD_JSON_SYNTAX = `,"paid":{"hash":"","date":""}`;
-
-/**
- * The most bytes a paid record adds to an invoice's canonical JSON: the syntax above, the widest hash, and a stored date.
- *
- * The syntax is ASCII, so its length is its byte count, and every value the record can hold is ASCII too, so no escape lengthens a legitimate record past this figure.
- * `invoice/codec.ts` reserves exactly this many bytes on an invoice that records no payment, which is what makes "every invoice a payee can create can still be marked paid" arithmetic rather than hope.
- */
-export const MAX_PAID_RECORD_JSON_BYTES = PAID_RECORD_JSON_SYNTAX.length + MAX_PAID_HASH_CHARS + CALENDAR_DATE_CHARS;
+export const WIDEST_PAID_RECORD: PaidRecord = Object.freeze({
+	hash: `${EVM_HASH_PREFIX}${"f".repeat(HASH_HEX_DIGITS)}`,
+	date: WIDEST_RECORDED_DAY,
+});
 
 /** The hash grammar of one asset family: the spelling it stores, the check that spelling, and the shape a refusal names. */
 interface HashGrammar {
@@ -101,15 +96,20 @@ function hashShape(form: PaidHashForm): string {
 }
 
 /**
- * The grammar for one spelling: the form as frozen data, the pattern its prefixes and character count imply, and the shape a refusal names.
+ * `value` escaped so a `RegExp` source matches it literally.
  *
- * A prefix is interpolated into the pattern literally, which holds while a prefix carries no regex metacharacter: the `0x` below and the bare family's empty string are both literal, so a future prefix with a metacharacter in it needs this line to escape it.
+ * A prefix is data this module states, and a future one could carry a metacharacter, so the escape happens here at construction rather than in a note beside it.
  */
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The grammar for one spelling: the form as frozen data, the pattern its prefixes and character count imply, and the shape a refusal names. */
 function grammar(form: PaidHashForm): HashGrammar {
 	const frozen = Object.freeze({ ...form, prefixes: Object.freeze([...form.prefixes]) });
 	const prefix = frozen.prefixes[0] ?? "";
 	const digits = frozen.characters - prefix.length;
-	return Object.freeze({ form: frozen, pattern: new RegExp(`^${prefix}[0-9a-fA-F]{${digits}}$`), shape: hashShape(frozen) });
+	return Object.freeze({ form: frozen, pattern: new RegExp(`^${escapeRegExp(prefix)}[0-9a-fA-F]{${digits}}$`), shape: hashShape(frozen) });
 }
 
 /**
@@ -117,6 +117,7 @@ function grammar(form: PaidHashForm): HashGrammar {
  *
  * The two privacy families record the same bare 32-byte id, so they share one form: nothing about the record distinguishes them, and a Monero id and a Zcash id are spelled identically.
  * The map is exhaustive by type, so a family added to `assets/registry.ts` is a compile error here until it states the spelling its transactions carry.
+ * The EVM form's width is the same 32-byte width `wallet/eip1193.ts`'s `HASH_PATTERN` checks for a wallet's response; the two are stated separately because this module must accept a bare privacy-chain id and the wallet layer never sees one.
  */
 const BARE_HASH_GRAMMAR: HashGrammar = grammar({ name: "transaction id", prefixes: Object.freeze([]), characters: HASH_HEX_DIGITS });
 
@@ -131,6 +132,7 @@ const HASH_GRAMMARS: Record<AssetFamily, HashGrammar> = Object.freeze({
  *
  * It is this module's single failure channel, including for a value of the wrong type: a share payload can carry anything at this position, and one class is what tells a caller that the record is what to fix rather than the payload's shape.
  * `invoice/model.ts` wraps it under the invoice's `paid` path, keeping this error as the `cause`, and a surface that validates a typed hash reports the clause beside the field.
+ * A refusal this module narrows from another validator keeps that validator's error as its own `cause`, so a surface can tell a date refusal from a hash one by class rather than by reading the clause.
  */
 export class InvalidPaidRecordError extends Error {
 	/** The field the refusal is about — `hash`, `date`, or an unknown key — or the empty string when the record itself is at fault. */
@@ -139,8 +141,8 @@ export class InvalidPaidRecordError extends Error {
 	/** The refusal clause alone, without this module's `invoice: paid.<field>: ` prefix, so a caller that publishes the record under its own path states the path once. */
 	readonly reason: string;
 
-	constructor(field: string, reason: string) {
-		super(field === "" ? `invoice: paid: ${reason}` : `invoice: paid.${field}: ${reason}`);
+	constructor(field: string, reason: string, options?: ErrorOptions) {
+		super(field === "" ? `invoice: paid: ${reason}` : `invoice: paid.${field}: ${reason}`, options);
 		this.name = "InvalidPaidRecordError";
 		this.field = field;
 		this.reason = reason;
@@ -181,13 +183,15 @@ function asRecord(value: unknown): Record<string, unknown> {
 	return value as Record<string, unknown>;
 }
 
-/** Refuse every key the two fields do not name, under that key's own field, so a caller publishing the path names the field the payload spelled. */
+/**
+ * Refuse every key the two fields do not name, under that key's own field, so a caller publishing the path names the field the payload spelled.
+ *
+ * The closed-object rule and the bound on the echoed key are `invoice/closed-object.ts`'s, shared with `invoice/model.ts`, rather than a second wording of them here.
+ */
 function assertKnownFields(record: Record<string, unknown>, fields: readonly string[]): void {
-	for (const key of Object.keys(record)) {
-		if (!fields.includes(key)) {
-			const field = boundMessage(key, UNKNOWN_FIELD_MAX);
-			throw new InvalidPaidRecordError(field, `is not a known field — expected one of ${PAID_FIELDS.join(", ")}`);
-		}
+	const unknown = unknownFieldOf(record, fields);
+	if (unknown !== null) {
+		throw new InvalidPaidRecordError(unknown.field, unknownFieldReason(PAID_FIELDS));
 	}
 }
 
@@ -203,7 +207,11 @@ function paidHash(value: unknown, hashGrammar: HashGrammar): string {
 	return value.toLowerCase();
 }
 
-/** The recorded day, through the calendar rule `invoice/calendar-date.ts` states, as this record's own `date` field. */
+/**
+ * The recorded day, through the calendar rule `invoice/calendar-date.ts` states, as this record's own `date` field.
+ *
+ * The calendar rule's refusal travels as this error's `cause`, so a dialog can tell a date refusal from a hash refusal by class without reading either clause.
+ */
 function paidDate(value: unknown): string {
 	try {
 		return requireCalendarDate(value);
@@ -211,6 +219,6 @@ function paidDate(value: unknown): string {
 		if (!(error instanceof InvalidCalendarDateError)) {
 			throw error;
 		}
-		throw new InvalidPaidRecordError("date", error.reason);
+		throw new InvalidPaidRecordError("date", error.reason, { cause: error });
 	}
 }

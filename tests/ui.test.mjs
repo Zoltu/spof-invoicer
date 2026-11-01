@@ -17,10 +17,10 @@ import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 import { nextTask } from "./helpers/wait.mjs";
 import { installWindow, mockProvider } from "./helpers/wallet-mock.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
-import { MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_EMAIL_CHARS, MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
+import { MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
 import { MAX_JSON_BYTES, encodeInvoice } from "../app/js/invoice/codec.js";
 import { MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
-import { decodeShare } from "../app/js/invoice/share.js";
+import { decodeShare, encodeShare } from "../app/js/invoice/share.js";
 import { parseHash } from "../app/js/app/router.js";
 import { bootApp, createDispatcher, dispatchRoute, mountShell, renderRoute } from "../app/js/app/shell.js";
 import { PaymentLinkBudgetError } from "../app/js/payment/links.js";
@@ -749,6 +749,25 @@ function oversizedState() {
 	});
 }
 
+/**
+ * A form state whose encoded invoice measures exactly `target` bytes, as the form itself measures it.
+ *
+ * Line descriptions are ASCII, so one more description character is one more encoded byte, and the growth is spread across the item list rather than concentrated in one line.
+ */
+function stateAtBytes(target) {
+	const items = Array.from({ length: MAX_ITEMS }, () => ({ description: "x", quantity: "1", unitPrice: "1" }));
+	const state = formState({ items });
+	let remaining = target - shareSizeHint(state).bytes;
+	for (const item of items) {
+		const grow = Math.min(MAX_DESCRIPTION_CHARS - 1, remaining);
+		item.description = "x".repeat(1 + grow);
+		remaining -= grow;
+		if (remaining === 0) break;
+	}
+	assert.equal(shareSizeHint(state).bytes, target, `the fixture measures ${target} bytes`);
+	return state;
+}
+
 function controlNamed(rootNode, name) {
 	const control = findAll(rootNode, (node) => node.attributes?.name === name)[0];
 	assert.ok(control, `no control named ${name}`);
@@ -768,7 +787,9 @@ test("planShare refuses an oversized invoice with a payee-facing message instead
 	}, "an accepted-but-unencodable invoice must not escape as a throw");
 	assert.equal(plan.kind, "too-large");
 	assert.match(plan.message, /too large to share/);
-	assert.match(plan.message, new RegExp(String(MAX_JSON_BYTES)));
+	const budget = shareSizeHint(formState()).limit;
+	assert.match(plan.message, new RegExp(String(budget)), "the message names the budget a new invoice may use");
+	assert.doesNotMatch(plan.message, /[Rr]eload/, "and never tells the payee to reload the page");
 });
 
 test("planShare yields a shareable bundle for a normal invoice", () => {
@@ -854,14 +875,60 @@ test("a refused paste reaches the notice as the app's own sentence, with the cod
 	}
 });
 
-test("shareSizeHint reports the encoded size and flags the over-cap case", () => {
+test("a pasted share blob between the authoring budget and the encode cap opens instead of being refused", () => {
+	// `app/shell.ts` re-encodes what it decoded, so under a reduced encode cap a valid legacy paste surfaced as the app's generic paste failure and an internal report.
+	const fake = installInteractiveDocument();
+	const reported = [];
+	const consoleError = console.error;
+	console.error = (...args) => reported.push(args);
+	try {
+		const budget = shareSizeHint(formState()).limit;
+		const band = createInvoice(invoiceInputFromState(stateAtBytes(budget + 60)));
+		const shell = bootApp(document.createElement("div"), TOTAL_OPTIONS);
+		const form = findAll(shell.root, (node) => node.tagName === "form" && hasClass(node, "open-form"))[0];
+		const input = findAll(shell.root, (node) => node.tagName === "input" && hasClass(node, "open-input"))[0];
+		assert.ok(form !== undefined && input !== undefined, "the header offers the paste box");
+		input.value = `pinv1b-${encodeInvoice(band)}`;
+		form.dispatch("submit", { type: "submit" });
+		assert.equal(shell.notice.children.length, 0, "the payer reads no refusal at all");
+		assert.equal(reported.length, 0, "and nothing was reported as an internal failure");
+	} finally {
+		console.error = consoleError;
+		fake.restore();
+	}
+});
+
+test("shareSizeHint measures against the budget a new invoice may use, not the encode cap", () => {
+	const budget = shareSizeHint(formState()).limit;
+	assert.ok(budget < MAX_JSON_BYTES, `the budget leaves the room a payment record needs under the ${MAX_JSON_BYTES}-byte encode cap`);
 	const normal = shareSizeHint(formState());
 	assert.ok(normal.fits);
-	assert.ok(normal.bytes > 0 && normal.bytes <= MAX_JSON_BYTES);
+	assert.equal(normal.limit, budget, "the hint states the budget it measured against");
+	assert.ok(normal.bytes > 0 && normal.bytes <= budget);
 	const big = shareSizeHint(oversizedState());
 	assert.equal(big.fits, false);
-	assert.ok(big.bytes > MAX_JSON_BYTES);
+	assert.ok(big.bytes > budget);
 	assert.equal(shareSizeHint(emptyFormState("2026-10-03")), null, "nothing is measured before the form is valid");
+});
+
+test("the create form hints and refuses honestly at one byte past the authoring budget", () => {
+	// The band is the point of a separate authoring budget: an invoice this size still decodes and shares, so only the form that authors a new one refuses it.
+	const budget = shareSizeHint(formState()).limit;
+	const atBudget = shareSizeHint(stateAtBytes(budget));
+	assert.equal(atBudget.fits, true, "an invoice exactly on the budget is hinted as fitting");
+	assert.equal(atBudget.bytes, budget);
+	const past = shareSizeHint(stateAtBytes(budget + 1));
+	assert.equal(past.fits, false, "one byte past it is hinted as over");
+	assert.equal(past.bytes, budget + 1);
+	assert.equal(past.limit, budget, "against the budget, not the encode cap");
+	const plan = planShare(stateAtBytes(budget + 1), "https://example.com/app/");
+	assert.equal(plan.kind, "too-large", "and the submit is refused here rather than by the codec throwing");
+	assert.match(plan.message, /too large to share/);
+	assert.match(plan.message, new RegExp(String(budget)), "the refusal names the budget it missed");
+	assert.match(plan.message, /Remove part of the content/, "with an action the payee can take");
+	assert.doesNotMatch(plan.message, /[Rr]eload/, "and not the generic reload advice");
+	const invoice = createInvoice(invoiceInputFromState(stateAtBytes(budget + 1)));
+	assert.deepEqual(decodeShare(encodeShare(invoice)), invoice, "while the same invoice, which an older copy could have written, decodes and re-encodes");
 });
 
 test("a normal invoice opens the share dialog with the URL and the blob", () => {
@@ -1174,7 +1241,7 @@ test("an oversized invoice is refused with a notice instead of an uncaught throw
 		assert.match(last.message, /too large to share/);
 		const warning = findAll(view, (node) => node.attributes?.class === "field-error share-size")[0];
 		assert.ok(warning, "the live size hint flags the invoice as over the cap");
-		assert.match(textOf(warning), /over the .* share limit/);
+		assert.match(textOf(warning), /over the .* budget a new invoice may use/);
 	} finally {
 		fake.restore();
 	}
