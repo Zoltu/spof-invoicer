@@ -15,15 +15,15 @@
  */
 
 import { requireAsset } from "../assets/registry.js";
-import { AuthoringSizeError } from "../invoice/codec.js";
+import { AuthoringSizeError, PaidInvoiceTooLargeError } from "../invoice/codec.js";
 import type { Invoice } from "../invoice/model.js";
 import { h } from "../util/dom.js";
 import { reportInternalFailure } from "../util/errors.js";
 import { isWalletPayable } from "../wallet/payment.js";
 import type { ClipboardLike } from "./clipboard.js";
 import type { LayoutProbe } from "./fit-value.js";
-import { MARK_PAID_TITLE, openMarkPaidDialog, type MarkPaidDialogHandle } from "./mark-paid.js";
-import { SHARE_FAILED_MESSAGE, UNSUPPORTED_WALLET_MESSAGE, VIEW_BUILD_RELEASE_FAILED_MESSAGE } from "./messages.js";
+import { MARK_PAID_CONTROL_LABEL, openMarkPaidDialog, type MarkPaidDialogHandle } from "./mark-paid.js";
+import { SHARE_FAILED_MESSAGE, SHARE_OVER_BUDGET_MESSAGE, UNSUPPORTED_WALLET_MESSAGE, VIEW_BUILD_RELEASE_FAILED_MESSAGE } from "./messages.js";
 import type { NoticeApi } from "./notice.js";
 import { renderPaymentSection } from "./payment-section.js";
 import { buildInvoiceViewModel, type InvoicePartyView, type InvoiceViewModel } from "./presentation.js";
@@ -176,7 +176,7 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
 					"tr",
 					{ class: "totals-due" },
 					// A paid document states an amount rather than an amount owed: the record the invoice carries is the payment it reports, so nothing on the page may invite a payer to send it again.
-					h("th", { scope: "row" }, view.paid === null ? view.labels.totalDue : view.labels.totalPaid),
+					h("th", { scope: "row" }, view.labels.totalDue),
 					h("td", { class: "num" }, view.total),
 				),
 			),
@@ -247,7 +247,7 @@ function documentActions(invoice: Invoice, view: InvoiceViewModel, options: View
 	const paid = view.paid !== null;
 	const markPaidButton = paid
 		? null
-		: h("button", { type: "button", class: "btn btn-secondary" }, MARK_PAID_TITLE);
+		: h("button", { type: "button", class: "btn btn-secondary" }, MARK_PAID_CONTROL_LABEL);
 	if (markPaidButton !== null) {
 		markPaidButton.addEventListener("click", () => {
 			if (options.onPaid === undefined) {
@@ -302,15 +302,22 @@ function documentActions(invoice: Invoice, view: InvoiceViewModel, options: View
 /**
  * Open the share dialog for this document, or report why it cannot be shared.
  *
- * The bundle is built through `invoice/codec.ts`'s guarded encoder, so an unpaid invoice with no room left for the payer's payment record — a link an older copy wrote before that budget existed — is refused here with the sentence the reader can act on, rather than producing a link that could never be marked paid.
- * That refusal is shown as the codec worded it because the reader can act on it; every other failure is a fault this surface cannot explain, so the reader gets the app's own sentence and the error goes where a developer reads it, exactly as the document's other actions report theirs.
+ * The bundle is built through `invoice/codec.ts`'s guarded encoder, which refuses an invoice the size cap cannot hold: an unpaid invoice with no room left for the payer's payment record — a link an older copy wrote before that budget existed — raises the authoring refusal here, and a paid invoice whose encoded form outgrows the one wire cap raises the paid-size refusal, so neither becomes a link that could never be marked paid or one that cannot be written at all.
+ * The two refusals are reported in different words because they are written for different readers: the codec's authoring sentence tells the payee to remove part of the content, which the holder of a link has no form in front of them to do, so this surface states the sentence `ui/messages.ts` owns for that reader.
+ * The paid-size sentence stays the codec's own, worded as it is wherever it is reported: it is the one sentence the mark-paid dialog and the payment panel show for that same measurement, and a paid invoice that reached this document has already been decoded inside the cap the sentence names.
+ * Every other failure is a fault this surface cannot explain, so the reader gets the app's own sentence and the error goes where a developer reads it, exactly as the document's other actions report theirs.
  */
 function openShare(invoice: Invoice, options: ViewOptions): void {
 	let bundle: ShareBundle;
 	try {
 		bundle = buildShareBundle(invoice, options.baseUrl);
 	} catch (error) {
+		// The authoring refusal is worded for the payee editing the form, and this control is offered to whoever holds the document, so the reader gets the sentence written for them instead.
 		if (error instanceof AuthoringSizeError) {
+			options.notice.showNotice(SHARE_OVER_BUDGET_MESSAGE, "error");
+			return;
+		}
+		if (error instanceof PaidInvoiceTooLargeError) {
 			options.notice.showNotice(error.message, "error");
 			return;
 		}

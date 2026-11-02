@@ -1010,7 +1010,7 @@ function drawTotals(flow: Flow, view: InvoiceViewModel): void {
 		left + 12,
 		centerTop(dueTop, dueBoxHeight, SIZE.totalLabel),
 		// A paid document states an amount rather than an amount owed, so the block never invites a second payment for a record the invoice already reports.
-		view.paid === null ? view.labels.totalDue : view.labels.totalPaid,
+		view.labels.totalDue,
 		SIZE.totalLabel,
 		"sansBold",
 		PALETTE.ink,

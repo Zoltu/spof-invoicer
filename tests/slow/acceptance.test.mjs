@@ -19,7 +19,7 @@ import { blockNetwork } from "../helpers/network-block.mjs";
 import { PAYEE, XMR_PAYEE, ZEC_PAYEE, ZEC_TEX_PAYEE, ZEC_UNIFIED_PAYEE } from "../helpers/payee-vectors.mjs";
 import { imageXObjects } from "../helpers/pdf-images.mjs";
 import { assertSymbolCellsInDom } from "../helpers/qr-dom.mjs";
-import { assertSymbolCells } from "../helpers/qr-symbol.mjs";
+import { assertSymbolCells, moduleFills } from "../helpers/qr-symbol.mjs";
 import { refusalError, refusalMessage } from "../helpers/refusals.mjs";
 import { servedTreeProblems } from "../helpers/served-drift.mjs";
 import { USDC_LOWER } from "../helpers/tokens.mjs";
@@ -52,12 +52,13 @@ import { SHARE_FRAGMENT_PREFIX, buildShareUrl, decodeShare, encodeShare } from "
 import { buildPaymentLink } from "../../app/js/payment/links.js";
 import { QR_SYMBOL, buildInvoicePages, downloadPdf, invoiceFileName, renderInvoicePdf } from "../../app/js/pdf/renderer.js";
 import { renderCreateView } from "../../app/js/ui/create.js";
+import { UNVERIFIED_PAYMENT_NOTE } from "../../app/js/ui/messages.js";
 import { UNSUPPORTED_WALLET_MESSAGE } from "../../app/js/ui/pay.js";
 import { buildInvoiceViewModel } from "../../app/js/ui/presentation.js";
 import { base32nopad, bech32m, utf8 } from "../../app/js/util/encoding.js";
 import { encodeQr } from "../../app/js/util/qr.js";
 import { svgDataUrl } from "../../app/js/util/svg-data-url.js";
-import { PDFDocument } from "../../app/js/vendor/pdf-lib/pdf-lib.esm.js";
+import { PDFDocument, decodePDFRawStream } from "../../app/js/vendor/pdf-lib/pdf-lib.esm.js";
 import { WalletClient, toHexQuantity } from "../../app/js/wallet/eip1193.js";
 import { TestnetUnifiedAddressError } from "../../app/js/wallet/zcash-address.js";
 import { encodeBalanceOf, encodeTransfer } from "../../app/js/wallet/erc20.js";
@@ -256,6 +257,22 @@ function iconFile(text, size = text.length) {
 /** Absolute paths of every file under `dir`, wrapping the shared listing the build tooling uses. */
 async function filesUnder(dir) {
 	return (await listFiles(dir)).map((file) => join(dir, file));
+}
+
+/**
+ * Every text-showing run the exported PDF bytes carry, decoded from each page's content stream: the runs the artifact itself holds, which is what a reader selects and copies, rather than the layout ops that only state what the renderer meant to draw.
+ * The artifact holds each stream Flate-compressed, so it is inflated through the vendored pdf-lib's own decoder, the library the export wrote it with.
+ */
+async function pdfShownRuns(bytes) {
+	const document = await PDFDocument.load(bytes, { updateMetadata: false });
+	return document.getPages().flatMap((page) => {
+		const contents = page.node.Contents();
+		const refs = contents === undefined ? [] : (contents.array ?? [contents]);
+		const streams = refs.map((ref) => Buffer.from(decodePDFRawStream(document.context.lookup(ref)).decode()).toString("latin1"));
+		return streams.flatMap((stream) =>
+			[...stream.matchAll(/<([0-9A-Fa-f]+)>\s*Tj/g)].map((match) => Buffer.from(match[1], "hex").toString("latin1")),
+		);
+	});
 }
 
 /**
@@ -1426,4 +1443,195 @@ test("an icon chosen in the create form reaches the shared page's letterhead and
 		fake.restore();
 	}
 	assert.deepEqual(calls, [], `the icon export attempted network I/O: ${calls.join(", ")}`);
+});
+
+/**
+ * The paid journey end to end: the create form builds an unpaid invoice, a payer with no wallet marks it paid from the page by typing the hash, the payee's original link is left untouched, and the paid link it produced renders and exports the record.
+ * The wallet branch runs the same requirement from its own side: the hash the injected wallet returned reaches the paid link from the receipt, without the payer retyping it.
+ */
+test("an invoice created in the form is marked paid without rewriting its link, and the paid link renders and exports the record", async () => {
+	const calls = [];
+	const fake = installInteractiveDocument();
+	const restoreNetwork = blockNetwork(calls);
+	const pageUrl = { href: "https://gateway.example/ipfs/bafy/index.html", hash: "" };
+	const locationHandle = installLocation(pageUrl);
+	const blobs = [];
+	const saved = [];
+	const revoked = [];
+	const originalCreate = URL.createObjectURL;
+	const originalRevoke = URL.revokeObjectURL;
+	const prototype = globalThis.HTMLElement.prototype;
+	const originalClick = prototype.click;
+	URL.createObjectURL = (blob) => {
+		blobs.push(blob);
+		return `blob:paid-${blobs.length}`;
+	};
+	URL.revokeObjectURL = (url) => revoked.push(url);
+	prototype.click = function click() {
+		if (this.hasAttribute("download")) saved.push([this.getAttribute("href"), this.getAttribute("download")]);
+	};
+	const copied = [];
+	const clipboard = {
+		writeText(text) {
+			copied.push(text);
+			return Promise.resolve();
+		},
+	};
+	try {
+		// The payee's half: the form builds the invoice, and its share dialog hands out the one link the payee will publish.
+		const create = renderCreateView({
+			baseUrl: "https://gateway.example/ipfs/bafy/index.html",
+			today: TODAY,
+			clipboard: null,
+			notice: noticeRecorder(),
+		});
+		setControl(create, "payeeName", "Studio Example Ltd");
+		setControl(create, "payeeAddress", PAYEE);
+		setControl(create, "item-0-description", "Design work");
+		setControl(create, "item-0-quantity", "2");
+		setControl(create, "item-0-unitPrice", "0.25");
+		findAll(create, (node) => node.tagName === "form")[0].dispatch("submit");
+		const shareDialog = document.body.children.find((child) => child.attributes?.class?.includes("dialog-backdrop"));
+		assert.ok(shareDialog, "the share dialog opens for the invoice the form built");
+		const shareUrl = findAll(shareDialog, (node) => node.attributes?.class === "share-value")[0].attributes.value;
+		const originalFragment = shareUrl.slice(shareUrl.indexOf("#"));
+		const original = decodeShare(originalFragment);
+		assert.ok(original !== null, "the form's link decodes to the invoice it built");
+		assert.equal(Object.hasOwn(original, "paid"), false, "an invoice the form builds carries no payment record");
+		findButton(shareDialog, "Done").dispatch("click", { type: "click" });
+
+		// The manual capture path: a payer with no browser wallet types the transaction hash they already hold.
+		const shell = mountShell(document.createElement("div"));
+		renderRoute(shell, parseHash(originalFragment), {
+			baseUrl: "https://gateway.example/ipfs/bafy/index.html",
+			today: TODAY,
+			clipboard: null,
+		});
+		assert.ok(findButton(shell.content, "Pay"), "the unpaid document carries the payment control the paid one will lose");
+		const markPaidControl = findButton(shell.content, "Mark invoice as paid");
+		assert.ok(markPaidControl, "and it offers the manual path");
+		markPaidControl.dispatch("click", { type: "click" });
+		const markPaidDialog = findAll(document.body, (node) => hasClass(node, "dialog-backdrop"))[0];
+		assert.ok(markPaidDialog, "the manual dialog opens over the page");
+		const typedHash = `0x${"CD".repeat(32)}`;
+		const canonicalHash = typedHash.toLowerCase();
+		controlNamed(markPaidDialog, "hash").value = `  ${typedHash}  `;
+		findAll(markPaidDialog, (node) => node.tagName === "form")[0].dispatch("submit", { type: "submit" });
+		assert.deepEqual(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")), [], "the dialog closes once the record has been handed over");
+		const paidFragment = pageUrl.hash;
+		assert.match(paidFragment, /^#\/i\//, "the egress navigates to a share fragment rather than a URL of its own");
+
+		// The original link is the payee's and stays that way; the paid link is that same invoice plus the record.
+		assert.notEqual(paidFragment, originalFragment, "the paid link is a second link, not the original rewritten");
+		const paidInvoice = decodeShare(paidFragment);
+		assert.ok(paidInvoice !== null, "the paid link decodes");
+		const { paid: record, ...rest } = paidInvoice;
+		assert.deepEqual(record, { hash: canonicalHash, date: TODAY }, "the typed hash reaches the link in its one stored spelling, recorded on the caller's day");
+		assert.deepEqual(rest, original, "every other field is the invoice the original link carried, so the paid link is derived from it");
+		const originalAgain = decodeShare(originalFragment);
+		assert.deepEqual(originalAgain, original, "the original link still decodes to the identical invoice");
+		assert.equal(Object.hasOwn(originalAgain, "paid"), false, "and it remains unpaid");
+		assert.equal(encodeShare(originalAgain), originalFragment, "byte for byte the link the payee shared");
+
+		// Opening the paid link: the record is readable and copyable, and the terms a payment would need are gone.
+		const paidShell = mountSharedLink(paidFragment, { clipboard });
+		const paidText = textOf(paidShell.content);
+		assert.ok(paidText.includes(canonicalHash), "the transaction hash is readable on the paid document");
+		assert.ok(paidText.includes(UNVERIFIED_PAYMENT_NOTE), "the browser surface states the record is unverified");
+		assert.deepEqual(paymentValues(paidShell.content), [canonicalHash], "the hash is the one verbatim value the document draws");
+		assert.deepEqual(
+			findAll(paidShell.content, (node) => node.tagName === "dt").map((node) => textOf(node)),
+			["Transaction hash", "Recorded"],
+			"the payment terms that no longer apply are replaced by the record's own",
+		);
+		const copyLabels = findAll(paidShell.content, (node) => node.tagName === "button")
+			.map((node) => String(node.attributes["aria-label"] ?? ""))
+			.filter((label) => label.startsWith("Copy"));
+		assert.deepEqual(copyLabels, ["Copy Transaction hash"], "the hash carries the one copy control, and no payment-link control is left");
+		findAll(paidShell.content, (node) => node.attributes["aria-label"] === "Copy Transaction hash")[0].dispatch("click", { type: "click" });
+		assert.deepEqual(copied, [canonicalHash], "the copy control hands the clipboard the whole hash");
+		assert.equal(findButton(paidShell.content, "Pay"), undefined, "no Pay control is offered on a paid document");
+		assert.equal(findAll(paidShell.content, (node) => hasClass(node, "payment-qr")).length, 0, "no QR symbol is drawn");
+
+		// The print path keeps the record and drops only the page's unverified note.
+		const badge = findAll(paidShell.content, (node) => hasClass(node, "status-badge"))[0];
+		assert.equal(textOf(badge), "Paid", "the badge names the record without confirming the payment");
+		const paidSection = findAll(paidShell.content, (node) => hasClass(node, "invoice-payment"))[0];
+		assert.ok(paidSection, "the paid record section is drawn");
+		assert.deepEqual(
+			findAll(paidSection, (node) => hasClass(node, "payment-value-print")).map((node) => textOf(node)),
+			[canonicalHash],
+			"the print only twin carries the record's whole hash",
+		);
+		assert.ok(!hasClass(paidSection, "no-print"), "the paid section prints");
+		assert.ok(!hasClass(badge, "no-print"), "and so does the badge");
+		assert.ok(hasClass(findAll(paidShell.content, (node) => hasClass(node, "paid-unverified"))[0], "no-print"), "the unverified note is page-only");
+
+		// The export: real bytes, the paid file name, the hash as drawn text, and no wording of the page-only note.
+		findButton(paidShell.content, "Save as PDF").dispatch("click", { type: "click" });
+		await waitFor(() => saved.length > 0 || paidShell.notice.children.length > 0, 800);
+		assert.equal(paidShell.notice.children.length, 0, "a successful export shows no notice");
+		assert.deepEqual(saved, [["blob:paid-1", "invoice-INV-20261003-paid.pdf"]], "the download is the invoice's own file, marked paid");
+		assert.equal(blobs.length, 1, "the export produced exactly one file");
+		assert.equal(blobs[0].type, "application/pdf");
+		await waitFor(() => revoked.length > 0, 400);
+		assert.deepEqual(revoked, ["blob:paid-1"], "the object URL is released once the download is under way");
+		const bytes = new Uint8Array(await blobs[0].arrayBuffer());
+		assert.equal(new TextDecoder().decode(bytes.slice(0, 5)), "%PDF-", "the download is a real PDF");
+		const opened = await PDFDocument.load(bytes, { updateMetadata: false });
+		assert.equal(opened.getPageCount(), 1, "the paid invoice is one page");
+		assert.equal(opened.getTitle(), "Invoice #INV-20261003");
+		const layout = buildInvoicePages(buildInvoiceViewModel(paidInvoice, TODAY), PDF_METRICS);
+		assert.equal(layout.length, opened.getPageCount(), "the layout paginates exactly as the exported file does");
+		const layoutText = layout.flatMap((page) => page.ops.filter((op) => op.kind === "text").map((op) => op.text));
+		assert.ok(layoutText.includes(canonicalHash), "the layout behind those bytes carries the hash");
+		assert.ok(layoutText.includes("PAYMENT RECEIVED"), "and states the record as the payer's report");
+		assert.equal(layoutText.join("\n").includes(UNVERIFIED_PAYMENT_NOTE), false, "the layout carries no unverified note");
+		assert.equal(moduleFills(layout[0]).length, 0, "no QR symbol is drawn in the export");
+		const runs = await pdfShownRuns(bytes);
+		const shown = runs.join("\n");
+		assert.equal(runs.filter((run) => run === canonicalHash).length, 1, "the artifact carries the hash as exactly one text run");
+		assert.ok(shown.includes("PAYMENT RECEIVED"), "the artifact states the record's section");
+		assert.equal(shown.includes(UNVERIFIED_PAYMENT_NOTE), false, "the artifact carries no unverified note");
+		assert.equal(shown.toLowerCase().includes("unverified"), false, "no wording of the page-only note reaches the PDF");
+
+		// The wallet capture path: the hash the wallet returned reaches the paid link from the receipt, with nothing retyped.
+		const provider = mockProvider();
+		const installed = installWindow({ ethereum: provider });
+		try {
+			pageUrl.hash = "";
+			const walletShell = mountSharedLink(originalFragment);
+			assert.deepEqual(provider.calls, [], "rendering the unpaid link touches no wallet");
+			findButton(walletShell.content, "Pay").dispatch("click", { type: "click" });
+			const connect = findButton(document.body, "Connect wallet & pay");
+			assert.ok(connect, "the payment panel opened over the page");
+			connect.dispatch("click", { type: "click" });
+			await waitFor(() => provider.calls.some((call) => call.method === "eth_sendTransaction"), 400);
+			await waitFor(() => textOf(walletShell.notice).includes(TX_HASH), 400);
+			const shortcut = findButton(document.body, "Mark invoice as paid with this hash");
+			assert.ok(shortcut, "the receipt offers the shortcut, so the wallet's hash needs no retyping");
+			shortcut.dispatch("click", { type: "click" });
+			const walletFragment = pageUrl.hash;
+			assert.match(walletFragment, /^#\/i\//, "the wallet path navigates to a share fragment too");
+			assert.notEqual(walletFragment, originalFragment, "the wallet's record makes a second link from the same invoice");
+			const walletInvoice = decodeShare(walletFragment);
+			assert.ok(walletInvoice !== null, "the wallet's paid link decodes");
+			const { paid: walletRecord, ...walletRest } = walletInvoice;
+			assert.equal(walletRecord.hash, TX_HASH, "the wallet's own hash reaches the paid link, untrimmed and untranscribed");
+			assert.equal(walletRecord.date, TODAY, "recorded on the boot's own day");
+			assert.deepEqual(walletRest, original, "and the wallet's paid link is derived from the original link too");
+			assert.ok(textOf(mountSharedLink(walletFragment).content).includes(TX_HASH), "the link the wallet produced opens the paid record");
+		} finally {
+			installed.restore();
+		}
+	} finally {
+		URL.createObjectURL = originalCreate;
+		URL.revokeObjectURL = originalRevoke;
+		if (originalClick === undefined) delete prototype.click;
+		else prototype.click = originalClick;
+		locationHandle.restore();
+		restoreNetwork();
+		fake.restore();
+	}
+	assert.deepEqual(calls, [], `the paid journey attempted page-origin network I/O: ${calls.join(", ")}`);
 });

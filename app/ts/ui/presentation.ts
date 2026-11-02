@@ -90,10 +90,10 @@ export function formatInvoiceDate(iso: string): string {
  * The invoice's status against `today` (a `YYYY-MM-DD` date).
  * No due date is `Open`; a due date in the past is `Overdue`; otherwise `Payment due`.
  * Dates compare correctly as `YYYY-MM-DD` strings.
- * An invoice that carries a paid record is `Reported`, whatever its due date: the badge names the record's presence without confirming the payment, because nothing in this app can check a payment against the network.
+ * An invoice that carries a paid record is `Paid`, whatever its due date: the badge names the payment as the payer reported it without the app checking it against the network, and the exported PDF carries no unverified note because the user's binding decision is that the PDF may read as a plain paid invoice; the browser surface states the payment is unverified and the PDF must not contain that text.
  */
 export function invoiceStatus(invoice: Invoice, today: string): InvoiceStatus {
-	if (invoice.paid !== undefined) return Object.freeze({ label: "Reported", tone: "paid" });
+	if (invoice.paid !== undefined) return Object.freeze({ label: "Paid", tone: "paid" });
 	if (invoice.due === undefined) return Object.freeze({ label: "Open", tone: "open" });
 	if (/^\d{4}-\d{2}-\d{2}$/.test(today) && today > invoice.due) {
 		return Object.freeze({ label: "Overdue", tone: "overdue" });
@@ -263,7 +263,6 @@ export interface InvoicePaidView {
  * The payment details' terms are labelled from here too, and the section's own amount term reads the same {@link InvoiceLabels.amount} the item table's column header does: the figure a payer copies and the column it was computed from are worded once, so the section cannot be reworded apart from the table it summarizes.
  * The on-screen view uppercases the tagline, the kind, the status badge, the role labels, the date labels, the column headers, the section titles, and the payment-term labels in CSS; the PDF uppercases the same eight groups at draw time, so neither renderer hardcodes a second spelling.
  * The paid title and its two terms are the section's statement about the record the invoice carries: the title names the section as the payment the payer reported rather than a payment confirmed, and the terms name the transaction hash the payer wrote and the day they wrote it — a recorded date, not a settlement date.
- * {@link InvoiceLabels.totalDue} and {@link InvoiceLabels.totalPaid} are the two spellings of the totals block's figure, so a paid document states an amount rather than an amount owed and no surface has to compose that distinction itself.
  */
 export interface InvoiceLabels {
 	readonly brand: string;
@@ -275,7 +274,6 @@ export interface InvoiceLabels {
 	readonly amount: string;
 	readonly subtotal: string;
 	readonly totalDue: string;
-	readonly totalPaid: string;
 	readonly notesTitle: string;
 	readonly paymentTitle: string;
 	readonly asset: string;
@@ -327,7 +325,6 @@ export const INVOICE_LABELS: InvoiceLabels = Object.freeze({
 	amount: "Amount",
 	subtotal: "Subtotal",
 	totalDue: "Total due",
-	totalPaid: "Total",
 	notesTitle: "Notes and terms",
 	paymentTitle: "Payment details",
 	asset: "Asset",
@@ -335,7 +332,7 @@ export const INVOICE_LABELS: InvoiceLabels = Object.freeze({
 	paysTo: "Pays to",
 	paymentLink: "Payment link",
 	dates: "Dates",
-	paidTitle: "Payment reported",
+	paidTitle: "Payment received",
 	paidHash: "Transaction hash",
 	paidDate: "Recorded",
 });

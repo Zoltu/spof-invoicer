@@ -40,7 +40,7 @@ import {
 } from "../wallet/payment.js";
 import type { ClipboardLike } from "./clipboard.js";
 import { FIT_CUE_CLASS, FIT_SCALE_CLASS, fitValue, type LayoutProbe, type TermFitting } from "./fit-value.js";
-import { PAYMENT_RECORD_FAILED_MESSAGE, UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
+import { OPENED_REFUSAL_MESSAGE, PAYMENT_RECORD_FAILED_MESSAGE, UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import { networkLabel } from "./network-labels.js";
 import type { NoticeApi, NoticeTone } from "./notice.js";
 import { windowHasOpener } from "./opener.js";
@@ -77,15 +77,6 @@ function claimPayment(key: string, owner: object): boolean {
 	attemptedPayments.set(key, owner);
 	return true;
 }
-
-/**
- * Shown when the panel is refused because this window reports an opener.
- *
- * It states what the refusal does — it covers every opener — and why: a page from this website could drive the payment controls, and the page cannot tell which website an opener comes from.
- * A payer who arrived from a plain link carries an opener too, and a sentence naming only a page from this website as the reason told them something untrue about their own window.
- * The presence test it answers is `ui/opener.ts`'s, which states what it covers and what it does not; this module owns only the sentence a refused payer reads.
- */
-const OPENED_MESSAGE = "This page was opened by another page, so paying is refused here — whichever page that is. A page from this website could drive the payment controls, and this page cannot tell which website an opener comes from, so every opener is refused. Open the invoice on its own, from the link you were sent.";
 
 /**
  * Reported when the panel could not be cleared away on dismissal: what the failure leaves running and what the payer can do about it, never the exception's own message, which can carry a validator's echo of a rejected value.
@@ -156,7 +147,7 @@ export function openPayPanel(invoice: Invoice, options: PayPanelOptions): PayPan
 		return null;
 	}
 	if (windowHasOpener()) {
-		options.notice.showNotice(OPENED_MESSAGE, "error");
+		options.notice.showNotice(OPENED_REFUSAL_MESSAGE, "error");
 		return null;
 	}
 	const key = paymentKey(invoice);

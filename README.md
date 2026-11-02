@@ -42,6 +42,7 @@ There is nothing to install and no account to create.
 - Payee entered text never turns into bold or italics, because a link can come from anyone.
 - You get the transaction hash, the code the wallet gives back for the payment, instead of an external link that looks up the payment.
 - The app cannot check a payment against the network, so it takes a paid record as given: the record is a transaction hash and the day it was recorded, and anyone who holds the link can write one or rewrite it, so a paid invoice states what its author says rather than what the network shows.
+- The PDF carries no unverified note, so a printed copy reads as a plain paid invoice; the browser page states that the payment is unverified.
 - Every option weighed for address verification, a double-payment guard, blockies avatars, and a local address book is written down in the [Payment Safety Design Memo](docs/design/payment-safety-memo.md), each claim labelled as verified here, reported from an external source, unverified, or an accepted risk, including what the app deliberately does not build.
 
 ## Open the app

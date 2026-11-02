@@ -2,8 +2,9 @@
  * The share-presentation surface.
  *
  * One invoice becomes two strings — a fragment URL and a standalone base32 blob — and this module owns both how they are built and how they are shown, as a two-option dialog so whoever is sharing can see which one fits how they are sending it.
- * A paid invoice's two strings carry the record the invoice already holds, so the dialog branches on that: the paid body tells the recipient to send the link back to whoever invoiced them, and the unverified note the paid document carries is repeated beside both options so the recipient cannot copy the link without seeing that the record is only their report.
- * That wording follows `docs/design/payment-safety-memo.md`'s constraint: nothing in this app can confirm a payment, so the dialog states the record as the recipient's report and never as a verified settlement.
+ * A paid invoice's two strings carry the record the invoice already holds, so the dialog branches on that: the paid copy serves whoever is holding the link, because nothing in the bundle says whether it opened for the payer passing the link back or for the payee who opened it to keep it.
+ * So the paid copy states the copy as the reader's own to keep and names both readings in the same sentences — a payer reads that the link goes back to whoever invoiced them, a payee reads that this is the copy they asked for and that the invoice saves as a PDF — and the unverified note the paid document carries is repeated beside both options, so whoever hands the link over cannot do it without seeing that the record is only the payer's report.
+ * That wording follows `docs/design/payment-safety-memo.md`'s constraint: nothing in this app can confirm a payment, so the dialog states the record as the payer's report and never as a verified settlement.
  * It carries no dependency on the app shell or on any view, so the create flow and the recipient view open the same dialog instead of duplicating it, and the `#/i/<base32>` wire format stays sourced from `invoice/share.ts` alone.
  * Both strings are written through `invoice/codec.ts`'s guarded encoder, which is where the room a payment record needs is enforced, so an unpaid invoice with none left — a link an older copy wrote before that budget existed — is refused here rather than handed on in a form no payment can be recorded against; `AuthoringSizeError` is that refusal and carries the sentence the reader can act on.
  *
@@ -79,7 +80,6 @@ interface ShareOptionCopy {
  *
  * The copy addresses whoever is looking at the dialog — the recipient who just built the invoice or the recipient who received it — so it says "you" and "the recipient" rather than naming either role, and it avoids internal jargon: a link that only resolves on the sharer's own machine is spelled out without the word "localhost", and the standalone string is described as one long run of letters and digits rather than "base32".
  * The unpaid object is byte-identical to the copy this dialog showed before the paid variant existed, so a wording change for a paid invoice cannot drift into the unpaid one.
- * The paid copy tells the recipient to send the link back to whoever invoiced them and repeats the unverified note `ui/messages.ts` owns, so the affordance that hands over the paid link cannot hide that the record is the recipient's report rather than a confirmation.
  */
 const SHARE_OPTION_COPY_UNPAID: Readonly<Record<ShareFieldKey, ShareOptionCopy>> = {
 	url: {
@@ -97,10 +97,17 @@ const SHARE_OPTION_COPY_UNPAID: Readonly<Record<ShareFieldKey, ShareOptionCopy>>
 	},
 };
 
+/**
+ * The paid copy, written for both readers of the same dialog: the payer handing the link back, and the payee who opened their own paid link to keep it.
+ *
+ * `ShareBundle` carries the invoice's payment record and nothing about who is looking, so the dialog cannot tell the two apart and must not guess: each option states that the copy is the reader's own to keep, which is what the payee keeping their record needs, and still names the send-back the payer needs, in the same sentences rather than in a branch on a viewer identity the app does not hold.
+ * The intro names the PDF, because the record the payee keeps is the document behind the dialog as much as the link itself.
+ * The first option repeats the unverified note `ui/messages.ts` owns, so the affordance that hands over the paid link cannot hide that the record is the payer's report rather than a confirmation.
+ */
 const SHARE_OPTION_COPY_PAID: Readonly<Record<ShareFieldKey, ShareOptionCopy>> = {
 	url: {
 		title: "Option 1 — Share the link",
-		body: "Send this link back to whoever invoiced you. It opens the invoice with your payment record attached.",
+		body: "Send this link back to whoever invoiced you, or keep it as your own copy. It opens the invoice with the payment record attached.",
 		notes: [
 			"This works whenever the tool is at a normal web address. But if you're running it on your own computer, the link only works for you — the recipient can't open it. Use Option 2 in that case.",
 			UNVERIFIED_PAYMENT_NOTE,
@@ -108,11 +115,10 @@ const SHARE_OPTION_COPY_PAID: Readonly<Record<ShareFieldKey, ShareOptionCopy>> =
 	},
 	blob: {
 		title: "Option 2 — Share the text (the blob)",
-		body: "Copy this text and send it back to whoever invoiced you however you like — email, chat, or a note.",
+		body: "Copy this text and send it back to whoever invoiced you however you like — email, chat, or a note. Keep it as your own copy of the paid invoice.",
 		notes: [
-			"The payee opens their own copy of the tool and pastes that text into the box at the top of the page, then clicks Open. The invoice appears with your payment record attached.",
+			"Whoever you pass it to opens their own copy of the tool and pastes that text into the box at the top of the page, then clicks Open. The invoice appears with the payment record attached.",
 			"This text is the whole invoice written out as one long run of letters and digits, and it always begins with pinv1b-. It carries no web address of its own, so it works even where a link won't — with no server in between. That is what lets the tool run decentralized: on your own computer, with no central server.",
-			UNVERIFIED_PAYMENT_NOTE,
 		],
 	},
 };
@@ -136,7 +142,7 @@ function renderShareOptions(container: HTMLElement, bundle: ShareBundle, clipboa
 			"p",
 			{ class: "field-hint" },
 			bundle.paid
-				? "There are two ways to send this paid invoice back. Pick the one that fits how you're sending it."
+				? "There are two ways to pass this paid invoice on. Either one is your own copy to keep, and you can save the invoice as a PDF for your record."
 				: "There are two ways to pass this invoice on. Pick the one that fits how you're sending it.",
 		),
 		...shareFields(bundle).map((field) => shareOption(field, copy, clipboard)),

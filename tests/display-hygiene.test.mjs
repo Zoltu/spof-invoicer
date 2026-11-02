@@ -15,7 +15,7 @@ import { MAX_PAYMENT_LINK_BYTES, buildPaymentLink } from "../app/js/payment/link
 import { buildInvoicePages } from "../app/js/pdf/renderer.js";
 import { chainName, networkLabel } from "../app/js/ui/network-labels.js";
 import { openPayPanel } from "../app/js/ui/pay.js";
-import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
+import { INVOICE_LABELS, buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { renderInvoiceView } from "../app/js/ui/view.js";
 import { base32nopad, base58xmr, keccak256, utf8 } from "../app/js/util/encoding.js";
 import { boundMessage } from "../app/js/util/errors.js";
@@ -180,7 +180,7 @@ test("the view model passes every clipped field through the display strip", () =
 	assert.deepEqual(model.notes, ["first line", "second line"], "the note's line structure survives the strip");
 });
 
-/** Every string the view model hands a renderer, labelled by where it is displayed. */
+/** Every string the view model hands a renderer, labelled by where it is displayed, the paid record's own terms included. */
 function displayedStrings(model) {
 	const entries = [
 		["documentNumber", model.documentNumber],
@@ -196,6 +196,7 @@ function displayedStrings(model) {
 		["total", model.total],
 		["notes", model.notes],
 		["payment", model.payment.map((term) => term.value)],
+		["paid", model.paid === null ? [] : model.paid.terms.flatMap((term) => [term.label, term.value])],
 	];
 	const flat = [];
 	for (const [where, value] of entries) {
@@ -285,7 +286,7 @@ test("the payer-visible network label has one spelling, shared by every surface 
 	}
 });
 
-test("every string the view model displays is free of unshown code points, the payment details included", () => {
+test("every string the view model displays is free of unshown code points, the payment details and the paid record included", () => {
 	const invoice = invoiceFor({
 		id: "INV\uFFF91",
 		payee: { name: "Ana\u{13430}Example", address: PAYEE, email: "bill\uFFF9ing@example.com" },
@@ -295,7 +296,21 @@ test("every string the view model displays is free of unshown code points, the p
 		notes: "first\uFFF9 line\nsecond line",
 	});
 	const model = buildInvoiceViewModel(invoice, "2026-10-03");
-	for (const [where, value] of displayedStrings(model)) {
+	// A paid invoice's record is drawn by the same renderers as every other term — the hash a payer copies and the day the payer recorded it — so the sweep reads its terms too, rather than trusting that the record's own term happens to be stripped.
+	const paid = buildInvoiceViewModel(invoiceFor({ paid: { hash: `0x${"ab".repeat(32)}`, date: "2026-10-03" } }), "2026-10-03");
+	assert.deepEqual(
+		paid.paid.terms.map((term) => term.label),
+		[INVOICE_LABELS.paidHash, INVOICE_LABELS.paidDate],
+		"the sweep has the record's two terms in front of it",
+	);
+	assert.ok(paid.paid.terms.some((term) => term.value === `0x${"ab".repeat(32)}`), "including the hash the payer copies, drawn in the spelling the record stores");
+	// The one record the display boundary cannot carry is the case the hash term is withheld for, and the validator refuses such a hash before it can be stored — so it is driven here by a hand-assembled invoice, the way `ui/presentation.ts` states the guard is reached.
+	const unshowable = buildInvoiceViewModel(
+		{ ...invoiceFor(), paid: { hash: `0x${"ab".repeat(31)}\uFFF9`, date: "2026-10-03" } },
+		"2026-10-03",
+	);
+	assert.equal(unshowable.paid.terms[0].value.includes("\uFFF9"), false, "a hash the display pass would rewrite is withheld rather than drawn");
+	for (const [where, value] of [...displayedStrings(model), ...displayedStrings(paid), ...displayedStrings(unshowable)]) {
 		assert.equal(value, stripDisplayCharacters(value), `${where} carries a code point the display strip removes: ${JSON.stringify(value)}`);
 	}
 });

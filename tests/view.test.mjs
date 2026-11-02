@@ -14,13 +14,13 @@ import { readSymbol } from "./helpers/qr-reader.mjs";
 import { findAll, hasClass, inputValues, paymentValues, walk, textOf } from "./helpers/tree.mjs";
 import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 import { ASSETS, SUPPORTED_CHAIN_IDS } from "../app/js/assets/registry.js";
-import { encodeInvoice, paidEncodingSize, requirePaidEncodingSize } from "../app/js/invoice/codec.js";
+import { AUTHORING_SIZE_REMEDY, authoringSize, encodeInvoice, PaidInvoiceTooLargeError, paidEncodingSize, paidTooLargeMessage, requirePaidEncodingSize } from "../app/js/invoice/codec.js";
 import { MAX_EMAIL_CHARS, createInvoice } from "../app/js/invoice/model.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
 import { FIT_RUNGS } from "../app/js/ui/fit-value.js";
-import { UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES, VIEW_BUILD_RELEASE_FAILED_MESSAGE } from "../app/js/ui/messages.js";
+import { SHARE_FAILED_MESSAGE, SHARE_OVER_BUDGET_MESSAGE, UNSUPPORTED_WALLET_MESSAGE as FROM_MESSAGES, VIEW_BUILD_RELEASE_FAILED_MESSAGE } from "../app/js/ui/messages.js";
 import { CHAIN_NAMES, chainName, networkLabel, requireNamedNetworks } from "../app/js/ui/network-labels.js";
 import { createOverlay, openOverlay } from "../app/js/ui/overlay.js";
 import { openPayPanel, UNSUPPORTED_WALLET_MESSAGE } from "../app/js/ui/pay.js";
@@ -36,7 +36,7 @@ import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
 import { markPaid } from "../app/js/invoice/model.js";
 import { decodeShare } from "../app/js/invoice/share.js";
-import { createMarkPaidDialog } from "../app/js/ui/mark-paid.js";
+import { createMarkPaidDialog, openMarkPaidDialog } from "../app/js/ui/mark-paid.js";
 import { installWindow, mockProvider, TX_HASH } from "./helpers/wallet-mock.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -179,15 +179,16 @@ test("a paid invoice draws the record's own section in place of the payment deta
 		assert.equal(copy[0].attributes["aria-label"], "Copy Transaction hash", "named for the term it hands over, as the panel's receipt control is");
 		assert.deepEqual(paymentValues(view), [hash], "the hash is the one verbatim value the document draws, and nothing draws it a second time");
 		// A paid document states an amount rather than an amount owed: nothing on the page may invite a payer to send the payment the record reports.
-		assert.equal(byText(view, "th", "Total due").length, 0, "the totals block does not call the figure due");
-		assert.equal(byText(view, "th", "Total").length, 1, "and names the amount instead");
+		assert.equal(byText(view, "th", "Total due").length, 1, "the totals block calls the figure due");
+		assert.equal(byText(view, "th", "Total").length, 0, "and does not name the amount instead");
 		const note = findAll(view, (node) => hasClass(node, "paid-unverified"))[0];
 		assert.ok(note, "the unverified note is present");
 		// The payee reading their own invoice is the recipient, so a note naming the recipient as the record's author would tell that reader the report was their own; the author it names is the payer.
 		assert.match(textOf(note), /This page records a payment the payer reported/, "the note names the payment as the payer's report");
 		assert.doesNotMatch(textOf(note), /reported by the recipient/, "and never attributes the record to the recipient, who may be the one reading it");
+		assert.match(textOf(note), /\bunverified\b/, "and calls the record unverified in that word rather than in a paraphrase of it");
 		const badge = findAll(view, (node) => hasClass(node, "status-badge"))[0];
-		assert.equal(textOf(badge), "Reported", "the badge names what the document holds, never a settlement");
+		assert.equal(textOf(badge), "Paid", "the badge names what the document holds, never a settlement");
 		assert.ok(hasClass(badge, "status-paid"));
 		assert.ok(hasClass(note, "no-print"), "the unverified note is page-only");
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
@@ -213,7 +214,7 @@ test("a paid invoice draws the record's own section in place of the payment deta
 			[
 				["h1", "Invoice"],
 				["h2", "Notes and terms"],
-				["h2", "Payment reported"],
+				["h2", "Payment received"],
 			],
 			"the outline names the paid record section",
 		);
@@ -379,6 +380,36 @@ test("formatInvoiceDate renders a deterministic human date and invoiceStatus cla
 		label: "Overdue",
 		tone: "overdue",
 	});
+});
+
+test("a paid invoice is never overdue, whatever its due date says", () => {
+	// Every other paid fixture leaves `due` out, so a paid check placed after the due-date branches would pass them all: this invoice's due date passed before the day it is read on, and the record is what every status surface states.
+	const fake = installInteractiveDocument();
+	try {
+		const hash = "0x" + "a".repeat(64);
+		const paid = invoiceFor({ issued: "2026-09-01", due: "2026-09-30", paid: { hash, date: "2026-10-03" } });
+		const model = buildInvoiceViewModel(paid, VIEW_OPTIONS.today);
+		assert.deepEqual(invoiceStatus(paid, VIEW_OPTIONS.today), { label: "Paid", tone: "paid" }, "the classification is the record's, not the due date's");
+		assert.deepEqual(model.status, { label: "Paid", tone: "paid" }, "and the view model both renderers draw from states the same status");
+		const view = renderInvoiceView(paid, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		const badges = findAll(view, (node) => hasClass(node, "status-badge"));
+		assert.equal(badges.length, 1, "the document draws one status badge");
+		assert.equal(textOf(badges[0]), "Paid", "carrying the record's own words rather than the due date's");
+		assert.ok(hasClass(badges[0], "status-paid"), "and the paid tone");
+		assert.equal(findAll(view, (node) => hasClass(node, "status-overdue")).length, 0, "no part of the document reads as overdue");
+		assert.equal(textOf(view).includes("Overdue"), false, "and the word never reaches the page");
+		// The record outranks the due date rather than hiding it: the due date the invoice carries still draws as a date.
+		assert.deepEqual(
+			model.dates,
+			[
+				{ label: "Issued", value: "1 Sep 2026" },
+				{ label: "Due", value: "30 Sep 2026" },
+			],
+			"the dates block keeps the due date the record does not hide",
+		);
+	} finally {
+		fake.restore();
+	}
 });
 
 test("Save as PDF hands the invoice to the export handler, or notices when none is wired", () => {
@@ -558,6 +589,40 @@ test("the shell forwards the exportPdf and pay seams into the invoice view", () 
 		assert.deepEqual(exported, ["INV-1"]);
 		assert.deepEqual(paid, ["INV-1"]);
 	} finally {
+		fake.restore();
+	}
+});
+
+test("the shell's mark-paid egress builds the paid link from the invoice on screen", () => {
+	// The wallet journey ends at this seam: the hash the payer supplies has to reach a paid link without the payer retyping anything, and that link has to be the invoice they opened plus the record rather than a document built from something else. The shell is the one place that composes it, so this drives its own egress through the control the document offers.
+	const fake = installInteractiveDocument();
+	const before = globalThis.location;
+	// The egress navigates by fragment, and a stand-in `location` is the one property it writes: the composition is then readable without a browser.
+	globalThis.location = { hash: "" };
+	try {
+		const invoice = invoiceFor({ id: "INV-EGRESS" });
+		const shell = mountShell(document.createElement("div"));
+		renderRoute(shell, parseHash(`#/i/${encodeInvoice(invoice)}`), VIEW_OPTIONS);
+		const control = byText(shell.content.children[0], "button", "Mark invoice as paid")[0];
+		assert.ok(control, "the document the route rendered offers the manual path");
+		control.dispatch("click", { type: "click" });
+		const backdrop = findAll(document.body, (node) => hasClass(node, "dialog-backdrop"))[0];
+		assert.ok(backdrop, "the control opens the manual dialog over the page");
+		const input = findAll(backdrop, (node) => node.tagName === "input")[0];
+		input.value = `  0x${"AB".repeat(32)}  `;
+		findAll(backdrop, (node) => node.tagName === "form")[0].dispatch("submit", { type: "submit" });
+
+		const navigated = globalThis.location.hash;
+		assert.match(navigated, /^#\/i\//, "the egress navigates to a share fragment rather than a URL of its own");
+		const paidInvoice = decodeShare(navigated);
+		assert.ok(paidInvoice !== null, "the fragment it navigated to is a link this app decodes");
+		const { paid: record, ...rest } = paidInvoice;
+		assert.deepEqual(record, { hash: `0x${"ab".repeat(32)}`, date: VIEW_OPTIONS.today }, "the supplied hash reaches the paid link in its one stored spelling, recorded on the caller's own day");
+		assert.deepEqual(rest, decodeShare(`#/i/${encodeInvoice(invoice)}`), "and every other field is the invoice the payer opened, so the paid link is derived from the original one");
+		assert.equal(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")).length, 0, "the dialog closes once the record has been handed over");
+	} finally {
+		if (before === undefined) delete globalThis.location;
+		else globalThis.location = before;
 		fake.restore();
 	}
 });
@@ -783,6 +848,31 @@ test("the share dialog presents two explained options with their copy controls",
 		const inputs = findAll(dialog.element, (node) => node.tagName === "input").map((node) => node.attributes.value);
 		assert.ok(inputs[0].includes("#/i/"), "the link option's input holds the URL");
 		assert.ok(inputs[1].startsWith("pinv1b-"), "the blob option's input holds the blob");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("a paid share dialog serves the payer sending it back and the payee keeping it", () => {
+	// The same dialog opens for the payer who just attached the record and for the payee who opened their paid link and keeps it, and the bundle carries nothing about who is looking, so a sentence addressed only to the payer sends the payee a copy of their own record. Both readings sit in the same sentences rather than in a branch on a viewer the app cannot know.
+	const fake = installInteractiveDocument();
+	try {
+		const paid = markPaid(invoiceFor(), { hash: `0x${"ab".repeat(32)}`, date: "2026-10-03" });
+		const dialog = createShareDialog(buildShareBundle(paid, "https://example.com/app/"), { clipboard: null });
+		const intro = textOf(findAll(dialog.element, (node) => hasClass(node, "field-hint"))[0]);
+		assert.match(intro, /Either one is your own copy to keep/, "the dialog states that the copy the payee holds is the one they asked for");
+		assert.match(intro, /save the invoice as a PDF/, "and names the PDF they can keep instead of the link");
+		const options = findAll(dialog.element, (node) => hasClass(node, "share-option")).map((node) => textOf(node));
+		assert.equal(options.length, 2, "both share strings are offered");
+		for (const option of options) {
+			assert.match(option, /back to whoever invoiced you/, "each option still tells the payer where the copy goes");
+			assert.match(option, /keep it as your own copy/i, "and tells the payee holding it that they can keep it as it stands");
+			assert.doesNotMatch(option, /\bverified\b|\bconfirmed\b/, "while claiming no check of the payment the app cannot make");
+		}
+		const unpaid = createShareDialog(buildShareBundle(invoiceFor(), "https://example.com/app/"), { clipboard: null });
+		const unpaidText = textOf(unpaid.element);
+		assert.match(unpaidText, /Send this link to the recipient\./, "the unpaid copy is the one it carried before the paid variant existed");
+		assert.doesNotMatch(unpaidText, /whoever invoiced you|your own copy to keep/, "and carries nothing of the paid copy");
 	} finally {
 		fake.restore();
 	}
@@ -2564,6 +2654,64 @@ test("the payment panel's mark-paid shortcut closes the panel and hands the wall
 	}
 });
 
+test("the payment panel's mark-paid shortcut reports a size refusal after the send", async () => {
+	// The payer who already sent a transaction is told what went wrong and what they can still do, never to pay a second time.
+	const fake = installInteractiveDocument();
+	const installed = installWindow({ ethereum: mockProvider() });
+	try {
+		const notices = noticeRecorder();
+		const refusal = new PaidInvoiceTooLargeError(paidTooLargeMessage(0));
+		const panel = openPayPanel(invoiceFor({ id: "INV-MARK-PAID-SIZE" }), {
+			notice: notices,
+			clipboard: null,
+			onPaid: () => {
+				throw refusal;
+			},
+		});
+		assert.ok(panel !== null);
+		const connect = byText(panel.element, "button", "Connect wallet & pay")[0];
+		assert.ok(connect, "the panel offers the connect control");
+		connect.dispatch("click", { type: "click" });
+		await drain();
+		await drain();
+		await drain();
+		const markPaid = byText(panel.element, "button", "Mark invoice as paid with this hash")[0];
+		assert.ok(markPaid, "the sent frame offers the mark-paid shortcut");
+		markPaid.dispatch("click", { type: "click" });
+		const last = notices.calls.at(-1);
+		assert.equal(last.tone, "error", "the refusal is reported as an error");
+		assert.equal(last.message, refusal.message, "the payer reads the codec's sentence whole");
+		assert.match(last.message, /keep this page and the transaction hash/, "which names the moves it supports");
+		assert.doesNotMatch(last.message, /Ask the payee for a smaller invoice/, "and never asks the payer to pay again");
+		assert.equal(findAll(document.body, (node) => hasClass(node, "pay-dialog")).length, 0, "the panel closes");
+	} finally {
+		installed.restore();
+		fake.restore();
+	}
+});
+
+test("the payment panel offers no mark-paid shortcut when nothing is wired to build the paid link", async () => {
+	// The shortcut's whole job is to hand the receipt's hash to the paid-link egress, so a panel opened without one would offer a control that closes the panel and builds nothing. It is left out of the frame rather than drawn dead, and the panel's own exit is what the payer keeps.
+	const fake = installInteractiveDocument();
+	const installed = installWindow({ ethereum: mockProvider() });
+	try {
+		const panel = openPayPanel(invoiceFor({ id: "INV-NO-ONPAID" }), { notice: noticeRecorder(), clipboard: null });
+		assert.ok(panel !== null, "the panel opens for a window that reports a wallet");
+		byText(panel.element, "button", "Connect wallet & pay")[0].dispatch("click", { type: "click" });
+		await drain();
+		await drain();
+		await drain();
+		const receipt = findAll(panel.element, (node) => hasClass(node, "pay-hash")).map((node) => textOf(node));
+		assert.equal(receipt.length, 1, "the sent frame draws the wallet's receipt, so this is the frame the shortcut would appear in");
+		assert.equal(byText(panel.element, "button", "Mark invoice as paid with this hash").length, 0, "no control offers to record the payment");
+		const actions = findAll(panel.element, (node) => hasClass(node, "pay-actions")).map((row) => findAll(row, (node) => node.tagName === "button").map((button) => textOf(button)));
+		assert.deepEqual(actions, [["Done"]], "the frame's only action is the dismissal, so nothing on it can reach a paid link");
+	} finally {
+		installed.restore();
+		fake.restore();
+	}
+});
+
 test("recording a payment is refused in a window another page opened", () => {
 	const fake = installInteractiveDocument();
 	// A page from this website that opened this window can reach into it and dispatch a click, so it could fill the dialog in and confirm it; what the payer would then hold is their own document and URL rewritten into a paid link carrying a hash of that page's choosing, which the document's own share control would forward. The refusal is the payment panel's, taken on the presence of an opener alone.
@@ -2591,6 +2739,36 @@ test("recording a payment is refused in a window another page opened", () => {
 		assert.match(notice.calls[0].message, /frames this invoice shows no opener/, "and the one route the check cannot see, so the sentence promises no cover a frame served from this website would not meet");
 	} finally {
 		installed.restore();
+		fake.restore();
+	}
+});
+
+test("the manual payment dialog is refused in an opener window and opens in one no page opened", () => {
+	// The refusal is the design memo's own rule, not the payment panel's alone: "the payment panel and the record-a-payment dialog refuse every window that reports one, whatever page that opener names", because an opener served from this website can drive the controls of the page it opened and presence is all this document can test (`docs/design/payment-safety-memo.md`, Section 6; `ui/opener.ts`).
+	// So the manual path is refused here too, and what a payer in such a window has is the invoice on its own — the second half of this case pins that a window no page opened still gets the dialog, which is the path the refusal's own sentence names.
+	const fake = installInteractiveDocument();
+	const opened = installWindow({ opener: {} });
+	try {
+		const notice = noticeRecorder();
+		const handle = openMarkPaidDialog(invoiceFor(), VIEW_OPTIONS.today, { notice, onPaid: () => {} });
+		assert.equal(handle, null, "an opened window is refused the dialog");
+		assert.equal(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")).length, 0, "and nothing is mounted over the page");
+		assert.equal(notice.calls.length, 1, "the refusal is stated once, in the notice region");
+		assert.equal(notice.calls[0].tone, "error");
+		assert.match(notice.calls[0].message, /Open the invoice on its own/, "and names the path the payer does have");
+	} finally {
+		opened.restore();
+	}
+	const direct = installWindow({});
+	try {
+		const notice = noticeRecorder();
+		const handle = openMarkPaidDialog(invoiceFor(), VIEW_OPTIONS.today, { notice, onPaid: () => {} });
+		assert.ok(handle !== null, "a window no page opened gets the dialog, which is the path a payer who needs the manual record has");
+		assert.equal(notice.calls.length, 0, "with nothing refused");
+		assert.equal(findAll(handle.element, (node) => node.attributes?.id === "mark-paid-hash").length, 1, "and the hash field the payer types the transaction into");
+		handle.close();
+	} finally {
+		direct.restore();
 		fake.restore();
 	}
 });
@@ -2634,6 +2812,28 @@ test("the manual mark-paid dialog rejects a malformed hash and does not call onP
 	}
 });
 
+test("the mark-paid dialog, its heading, its confirm control, and the control that opens it carry four distinct names", () => {
+	// A dialog announced with the sentence on the control behind it, and again by its heading and its confirm button, gives a screen reader four announcements it cannot tell apart, so the trigger's sentence is the one place it appears.
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder(), onPaid: () => {} });
+		const trigger = byText(view, "button", "Mark invoice as paid")[0];
+		assert.ok(trigger, "the document's control keeps the sentence it carried");
+		trigger.dispatch("click", { type: "click" });
+		const dialog = findAll(document.body, (node) => hasClass(node, "dialog"))[0];
+		assert.ok(dialog, "the control opens the dialog");
+		const name = dialog.attributes["aria-label"];
+		const heading = textOf(findAll(dialog, (node) => hasClass(node, "dialog-title"))[0]);
+		const footer = findAll(dialog, (node) => hasClass(node, "dialog-footer"))[0];
+		const footerLabels = findAll(footer, (node) => node.tagName === "button").map((node) => textOf(node));
+		assert.deepEqual(footerLabels, ["Done", "Record payment"], "the confirm control names the action it takes");
+		const names = [textOf(trigger), name, heading, footerLabels[1]];
+		assert.equal(new Set(names).size, names.length, `two of the four names repeat: ${names.join(" / ")}`);
+	} finally {
+		fake.restore();
+	}
+});
+
 test("the manual mark-paid dialog surfaces the size refusal's actionable sentence", () => {
 	const fake = installInteractiveDocument();
 	try {
@@ -2653,7 +2853,136 @@ test("the manual mark-paid dialog surfaces the size refusal's actionable sentenc
 		assert.ok(error, "the dialog states the refusal beside the field");
 		assert.equal(textOf(error), verdict.message, "the payer reads the codec's paid-size sentence whole, not a fragment of it");
 		assert.match(textOf(error), /^This invoice is too large to record a payment against/, "which says what cannot be done");
-		assert.match(textOf(error), /Ask the payee for a smaller invoice/, "and whose action clears it");
+		assert.match(textOf(error), /keep this page and the transaction hash/, "and the moves it does support");
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the share control tells the holder of a link what they can do about a document too large to share again", () => {
+	const fake = installInteractiveDocument();
+	try {
+		// One fixture serves both budgets: 200 descriptions at the longest length the model admits put the invoice past the wire cap, which is past the budget an unpaid invoice must fit and past the cap a paid one must fit.
+		const oversized = invoiceFor({ items: Array.from({ length: 200 }, () => line({ description: "x".repeat(500) })) });
+		const record = { hash: "0x" + "ab".repeat(32), date: VIEW_OPTIONS.today };
+		const authoring = authoringSize(oversized);
+		assert.equal(authoring.fits, false, "the unpaid fixture is past the budget a new invoice may use");
+		const paidVerdict = paidEncodingSize(oversized, record);
+		assert.equal(paidVerdict.fits, false, "and the paid invoice is past the wire cap once the payment is added");
+		assert.match(authoring.message, /too large to share/, "the form's own refusal names the budget it missed");
+		assert.ok(authoring.message.includes(AUTHORING_SIZE_REMEDY), "and carries the remedy the payee editing the form can perform");
+
+		// The document's Share control is offered to whoever holds the link, so its refusal states the moves that reader has rather than the form's.
+		const notices = noticeRecorder();
+		const view = renderInvoiceView(oversized, { ...VIEW_OPTIONS, notice: notices });
+		byText(view, "button", "Share")[0].dispatch("click", { type: "click" });
+		const last = notices.calls.at(-1);
+		assert.equal(last.tone, "error", "the refusal is reported as an error");
+		assert.equal(last.message, SHARE_OVER_BUDGET_MESSAGE, "the reader reads the app's own sentence, not the form's");
+		assert.notEqual(last.message, authoring.message, "which is not the codec's authoring refusal");
+		assert.equal(last.message.includes(AUTHORING_SIZE_REMEDY), false, "so it never advises content removal as the only move, which a reader with no form cannot perform");
+		assert.notEqual(last.message, SHARE_FAILED_MESSAGE, "and it is not reported in the app's catch-all sentence");
+		assert.ok(last.message.length <= 300, `the sentence fits the notice bound, got ${last.message.length} characters`);
+		assert.match(last.message, /ask the sender for a fresh link/, "the payer who was sent the link is given a move they can make");
+		assert.match(last.message, /create it again with shorter descriptions or notes/, "and the payee holding their own link is given the one they can make");
+		assert.match(last.message, /It still opens here/, "with the fact that only writing the link again is refused, so the document in front of them is not read as broken");
+		assert.equal(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")).length, 0, "no dialog opens over a share it cannot build");
+
+		// A paid invoice over the one wire cap keeps the codec's sentence: it is the one the mark-paid dialog and the payment panel report for that same measurement.
+		const paidNotices = noticeRecorder();
+		const paidView = renderInvoiceView(markPaid(oversized, record), { ...VIEW_OPTIONS, notice: paidNotices });
+		byText(paidView, "button", "Share")[0].dispatch("click", { type: "click" });
+		const paidLast = paidNotices.calls.at(-1);
+		assert.equal(paidLast.tone, "error", "the paid refusal is reported as an error");
+		assert.equal(paidLast.message, paidVerdict.message, "the paid refusal is the codec's own sentence, whole");
+		assert.match(paidLast.message, /keep this page and the transaction hash/, "which names the moves it does support");
+		assert.notEqual(paidLast.message, SHARE_FAILED_MESSAGE, "and it is not reported in the app's catch-all sentence");
+		assert.equal(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")).length, 0, "and opens no dialog either");
+	} finally {
+		fake.restore();
+	}
+});
+
+/**
+ * The three asset families with the hash each one records and the shape it refuses, so the manual path is driven for a family other than the EVM one.
+ * `own` is the value in the one spelling the record stores, `typed` the same value in another case a paste may carry, `foreign` a hash of another family's shape.
+ */
+const FAMILY_MARK_PAID = [
+	{
+		label: "Ethereum",
+		invoice: () => invoiceFor(),
+		own: `0x${"ab".repeat(32)}`,
+		typed: `0x${"AB".repeat(32)}`,
+		foreign: "ab".repeat(64),
+		hint: "Enter the 66-character transaction hash. It begins with 0x.",
+		refusal: /must be a 0x-prefixed 64-hex-digit transaction hash/,
+	},
+	{
+		label: "Zcash",
+		invoice: () => zecInvoice(),
+		own: "ab".repeat(32),
+		typed: "AB".repeat(32),
+		foreign: `0x${"ab".repeat(32)}`,
+		hint: "Enter the 64-character transaction id. It carries no prefix.",
+		refusal: /must be a bare 64-hex-digit transaction id with no prefix/,
+	},
+	{
+		label: "Monero",
+		invoice: () => xmrInvoice(),
+		own: "cd".repeat(32),
+		typed: "CD".repeat(32),
+		foreign: `0x${"cd".repeat(32)}`,
+		hint: "Enter the 64-character transaction id. It carries no prefix.",
+		refusal: /must be a bare 64-hex-digit transaction id with no prefix/,
+	},
+];
+
+test("every unpaid invoice offers the mark-paid control, whatever its asset family", () => {
+	// The manual path opens no wallet and reads no storage, so a privacy-chain payer who has already sent the payment needs it most: a Zcash or Monero invoice is offered no Pay control at all.
+	const fake = installInteractiveDocument();
+	try {
+		for (const family of FAMILY_MARK_PAID) {
+			const invoice = family.invoice();
+			const unpaid = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder(), onPaid: () => {} });
+			assert.equal(byText(unpaid, "button", "Mark invoice as paid").length, 1, `the ${family.label} document offers the manual path`);
+			const paid = renderInvoiceView(markPaid(invoice, { hash: family.own, date: VIEW_OPTIONS.today }), {
+				...VIEW_OPTIONS,
+				notice: noticeRecorder(),
+				onPaid: () => {},
+			});
+			assert.equal(byText(paid, "button", "Mark invoice as paid").length, 0, `and the ${family.label} paid document offers no way to record a second payment`);
+		}
+	} finally {
+		fake.restore();
+	}
+});
+
+test("the mark-paid dialog's hint and refusal follow the invoice's asset", () => {
+	// One dialog serves three families whose hashes are spelled differently, so the hint and the refusal are read from the asset the invoice names: an EVM hash pasted into a privacy-chain invoice is refused for its prefix, and a bare id into an EVM one for the prefix it lacks.
+	const fake = installInteractiveDocument();
+	try {
+		for (const family of FAMILY_MARK_PAID) {
+			const paid = [];
+			const view = renderInvoiceView(family.invoice(), { ...VIEW_OPTIONS, notice: noticeRecorder(), onPaid: (hash) => paid.push(hash) });
+			byText(view, "button", "Mark invoice as paid")[0].dispatch("click", { type: "click" });
+			const backdrop = findAll(document.body, (node) => hasClass(node, "dialog-backdrop"))[0];
+			assert.ok(backdrop, `the ${family.label} control opens the manual dialog`);
+			const hint = findAll(backdrop, (node) => node.attributes?.id === "mark-paid-hash-hint")[0];
+			assert.ok(hint, "the dialog states the shape it accepts");
+			assert.equal(textOf(hint), family.hint, `the ${family.label} dialog asks for the hash that asset records`);
+			const input = findAll(backdrop, (node) => node.tagName === "input")[0];
+			const form = findAll(backdrop, (node) => node.tagName === "form")[0];
+			input.value = family.foreign;
+			form.dispatch("submit", { type: "submit" });
+			assert.deepEqual(paid, [], `a ${family.label} invoice refuses a hash of another family's shape`);
+			const error = findAll(backdrop, (node) => hasClass(node, "field-error"))[0];
+			assert.ok(error, "the refusal is stated beside the field the payer changes");
+			assert.match(textOf(error), family.refusal, `and names the ${family.label} shape`);
+			input.value = family.typed;
+			form.dispatch("submit", { type: "submit" });
+			assert.deepEqual(paid, [family.own], `the ${family.label} hash reaches the egress in its one stored spelling, whatever case it was typed in`);
+			assert.equal(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")).length, 0, "and the dialog closes once the record has been handed over");
+		}
 	} finally {
 		fake.restore();
 	}

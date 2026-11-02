@@ -252,18 +252,23 @@ export function overageText(bytes: number): string {
 	return sizeText(bytes);
 }
 
-/** The sentence a payee reads when an unpaid invoice outgrows {@link MAX_AUTHORING_JSON_BYTES}: one statement for the verdict, the refusal class, and the encoder. */
-function authoringTooLargeMessage(bytes: number): string {
-	return `The invoice is too large to share: its encoded form is ${overageText(bytes - MAX_AUTHORING_JSON_BYTES)} over the ${sizeText(MAX_AUTHORING_JSON_BYTES)} a new invoice may use — the difference is the room the recipient's payment record needs. ${AUTHORING_SIZE_REMEDY}`;
+/**
+ * The sentence a payee reads when an unpaid invoice outgrows {@link MAX_AUTHORING_JSON_BYTES}: one statement for the verdict, the refusal class, and the encoder.
+ *
+ * Only the overage figure varies, so the fixed part is kept short enough that the whole sentence stays inside the 300-character notice bound `app/shell.ts` applies at every overage an invoice the create form can build produces, whose widest lands a little over 43 KiB past the budget.
+ * The remedy clause closes the sentence and is the part a clip would cut, so the sentence is held well inside that bound rather than on it: the widest overage the form can produce leaves the remedy whole with room to spare.
+ */
+export function authoringTooLargeMessage(bytes: number): string {
+	return `The invoice is too large to share: it is ${overageText(bytes - MAX_AUTHORING_JSON_BYTES)} over the ${sizeText(MAX_AUTHORING_JSON_BYTES)} a new invoice may use, because the recipient needs that room to record the payment. ${AUTHORING_SIZE_REMEDY}`;
 }
 
 /**
  * The sentence a payer reads when a payment cannot be appended inside the one wire cap: one statement for the {@link paidEncodingSize} verdict, {@link requirePaidEncodingSize}, and {@link encodePayload}.
  *
- * It names who can act — the payee, by sending a smaller invoice — because nothing the payer changes makes the record fit.
+ * It states the size failure and the supported actions: the document remains viewable and saveable, but the payment cannot be recorded against this link.
  */
-function paidTooLargeMessage(bytes: number): string {
-	return `This invoice is too large to record a payment against: with the payment added, its encoded form is ${overageText(bytes - MAX_JSON_BYTES)} over the ${sizeText(MAX_JSON_BYTES)} share limit. Ask the payee for a smaller invoice — one with a shorter icon, fewer line items, or shorter descriptions — and pay that one.`;
+export function paidTooLargeMessage(bytes: number): string {
+	return `This invoice is too large to record a payment against. Including the payment details, the encoded form exceeds the maximum allowed size (${sizeText(MAX_JSON_BYTES)}). To keep a record, keep this page and the transaction hash and give them to the payee directly.`;
 }
 
 /**
@@ -419,7 +424,7 @@ function decodePayload(payload: string): Invoice {
 	}
 	// The decode bound is the one wire cap, and it is deliberately not the encoder's authoring budget: a link an older copy wrote between the two figures still opens and renders here, and only writing it again is refused.
 	if (bytes.length > MAX_JSON_BYTES) {
-		throw new ShareFormatError(`the payload is ${bytes.length} bytes of JSON — the share limit is ${sizeText(MAX_JSON_BYTES)}; trim free text or split the invoice`);
+		throw new ShareFormatError(`the payload is ${bytes.length} bytes of JSON — the wire cap is ${sizeText(MAX_JSON_BYTES)}; trim free text or split the invoice`);
 	}
 	let json: string;
 	try {

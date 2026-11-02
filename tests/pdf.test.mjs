@@ -291,20 +291,32 @@ test("a paid invoice draws the record's figures in place of the payment details"
 	const hash = "0x" + "a".repeat(64);
 	const invoice = invoiceFor({ paid: { hash, date: "2026-10-03" } });
 	const view = buildInvoiceViewModel(invoice, "2026-10-03");
-	assert.equal(view.status.label, "Reported", "the badge names what the document holds, never a settlement");
+	assert.equal(view.status.label, "Paid", "the badge states the payment as paid");
 	const pages = buildInvoicePages(view, METRICS);
 	assert.equal(pages.length, 1);
 	const text = textOps(pages[0]).join("\n");
-	for (const fragment of ["REPORTED", "PAYMENT REPORTED", "TRANSACTION HASH", hash, "RECORDED", "3 Oct 2026"]) {
+	for (const fragment of ["PAID", "PAYMENT RECEIVED", "TRANSACTION HASH", hash, "RECORDED", "3 Oct 2026"]) {
 		assert.ok(text.includes(fragment), "the paid layout is missing " + JSON.stringify(fragment));
 	}
-	assert.ok(!text.includes("PAID\n"), "no title or badge in the export reads as a verified settlement");
-	assert.ok(!text.includes("Total due"), "and a paid document states an amount rather than an amount owed");
-	assert.ok(textOps(pages[0]).includes("Total"), "the totals block still names its figure");
+	// The "unverified" guard below forbids the page-only note in the export, as decision 3 requires.
+	assert.ok(text.includes("Total due"), "and a paid document states the amount due");
+	assert.ok(textOps(pages[0]).includes("Total due"), "the totals block names its figure");
 	assert.ok(!text.includes("unverified"), "the export states the record without the page's unverified note");
 	assert.equal(moduleFills(pages[0]).length, 0, "no QR symbol is drawn on a paid invoice");
 	const runs = textDraws(pages[0]).filter((op) => op.font === "mono" && op.text === hash);
 	assert.equal(runs.length, 1, "the hash is drawn as one unbroken monospace run");
+});
+
+test("a paid invoice whose due date has passed draws the paid badge and never the overdue one", () => {
+	// The record outranks the due date on the export as on the page: the badge is drawn from the view model's one status, so a paid invoice past its due date cannot reach the art with an overdue badge.
+	const hash = "0x" + "a".repeat(64);
+	const invoice = invoiceFor({ issued: "2026-09-01", due: "2026-09-30", paid: { hash, date: "2026-10-03" } });
+	const view = buildInvoiceViewModel(invoice, "2026-10-03");
+	assert.deepEqual(view.status, { label: "Paid", tone: "paid" }, "the status derived for the export is the record's");
+	const text = textOps(buildInvoicePages(view, METRICS)[0]).join("\n");
+	assert.ok(text.includes("PAID"), "the export draws the record's badge");
+	assert.equal(text.includes("OVERDUE"), false, "and never the overdue one");
+	assert.ok(text.includes("30 Sep 2026"), "while the due date the invoice carries still draws");
 });
 
 test("a paid invoice's record moves whole onto its own page when the invoice fills one", () => {
@@ -313,7 +325,7 @@ test("a paid invoice's record moves whole onto its own page when the invoice fil
 	const view = buildInvoiceViewModel(invoice, "2026-10-03");
 	const pages = buildInvoicePages(view, METRICS);
 	assert.ok(pages.length > 1, "the long invoice paginates");
-	const holders = pages.filter((page) => textOps(page).join("\n").includes("PAYMENT REPORTED"));
+	const holders = pages.filter((page) => textOps(page).join("\n").includes("PAYMENT RECEIVED"));
 	assert.equal(holders.length, 1, "the paid section is drawn on exactly one page");
 	const text = textOps(holders[0]).join("\n");
 	assert.ok(text.includes(hash), "the record's hash travels with the section");

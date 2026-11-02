@@ -25,6 +25,7 @@ import {
 	validateInvoice,
 } from "../app/js/invoice/model.js";
 import {
+	AUTHORING_SIZE_REMEDY,
 	AuthoringSizeError,
 	MAX_JSON_BYTES,
 	MAX_PAYLOAD_CHARS,
@@ -39,6 +40,7 @@ import {
 	encodeInvoice,
 	encodeInvoiceBlob,
 	isShareBlob,
+	overageText,
 	paidEncodingSize,
 	requirePaidEncodingSize,
 	serializeInvoice,
@@ -47,6 +49,7 @@ import {
 import { MAX_ICON_SVG_BYTES } from "../app/js/invoice/icon.js";
 import { WIDEST_PAID_RECORD } from "../app/js/invoice/paid.js";
 import { SHARE_FRAGMENT_PREFIX, buildShareUrl, decodeShare, encodeShare } from "../app/js/invoice/share.js";
+import { boundMessage } from "../app/js/util/errors.js";
 import { buildShareBundle } from "../app/js/ui/share.js";
 import { currentRoute, parseHash } from "../app/js/app/router.js";
 
@@ -1283,7 +1286,7 @@ test("decode accepts exactly the envelope the encoder writes", () => {
 	assert.ok(payload.length <= MAX_PAYLOAD_CHARS, `the payload is ${payload.length} characters, inside the pre-decode guard`);
 	// The encoder refuses it on the smaller authoring budget an unpaid invoice is written under, while the decoder answers the byte cap itself: both bounds are the codec's own, and each names the figure it applied.
 	rejects("encoding it", () => encodeInvoice(oversized), AuthoringSizeError, /too large to share/);
-	rejects("decoding the same bytes", () => decodeInvoice(payload), ShareFormatError, /the share limit is 64 KiB/);
+	rejects("decoding the same bytes", () => decodeInvoice(payload), ShareFormatError, /the wire cap is 64 KiB/);
 });
 
 /** The canonical JSON a build wrote when a party's `email` field held a single-line email address: the legacy payload the share format has to keep reading, key order and all. */
@@ -1591,7 +1594,7 @@ test("the model records a payment without knowing what a payload may weigh", () 
 	const paid = markPaid(nearCap, WIDEST_PAID_RECORD);
 	assert.equal(paid.paid?.hash, WIDEST_PAID_RECORD.hash, "the record is attached whatever its encoded size");
 	assert.ok(paidEncodingSize(nearCap, WIDEST_PAID_RECORD).fits === false, "while the codec's verdict says the payload will not fit");
-	rejects("encoding it", () => encodeInvoice(paid), PaidInvoiceTooLargeError, /Ask the payee for a smaller invoice/);
+	rejects("encoding it", () => encodeInvoice(paid), PaidInvoiceTooLargeError, /too large to record a payment against/);
 });
 
 test("a payload that spells the paid hash in the other case names that cause", () => {
@@ -1647,6 +1650,29 @@ test("the encoder itself refuses an unpaid invoice with no room for the payer's 
 	assert.equal(refusal.message, verdict.message, "and says exactly what the live hint says, so the payee reads one sentence");
 });
 
+test("the authoring refusal reads whole inside the notice bound, at the widest overage the create form can build", () => {
+	// The sentence is shown in the notice region, which clips at 300 characters, and the remedy clause is its tail: an overage figure that pushed the sentence past the bound would cut the advice off the end and leave a count of characters where the action was. The figure is the only part that varies, so the widths it takes across the range this app can produce are measured here, the widest invoice the create form can build included.
+	const budget = authoringSize(MINIMAL).limit;
+	// The form advertises MAX_ITEMS lines and admits MAX_DESCRIPTION_CHARS in each, so this is the largest overage the form itself can be handed.
+	const widest = make({
+		items: Array.from({ length: MAX_ITEMS }, () => ({ description: "x".repeat(MAX_DESCRIPTION_CHARS), quantity: "1", unitPrice: "1" })),
+	});
+	const widestOverage = authoringSize(widest).bytes - budget;
+	assert.ok(widestOverage > 40000, `the form's own largest overage is the head of this range, ${widestOverage} bytes past the budget`);
+	// The band just under a kibibyte is where the figure is longest in bytes, and the kibibyte figures either side of it are where it is spelled another way, so both are measured rather than the first one that would fit.
+	for (const overage of [1, 9, 10, 999, 1000, 1023, 1024, 10240, widestOverage]) {
+		const invoice = overage === widestOverage ? widest : invoiceOfJsonBytes(budget + overage);
+		const verdict = authoringSize(invoice);
+		assert.equal(verdict.fits, false, `an invoice ${overage} bytes past the budget is refused`);
+		assert.equal(verdict.bytes - budget, overage, "the fixture sits exactly that far past the budget");
+		assert.ok(verdict.message.includes(overageText(overage)), `the refusal states the overage as ${overageText(overage)}: ${verdict.message}`);
+		assert.ok(verdict.message.includes(sizeText(budget)), "and the budget it missed");
+		assert.ok(verdict.message.endsWith(AUTHORING_SIZE_REMEDY), `the remedy clause reaches the reader whole at ${overage} bytes over: ${verdict.message}`);
+		assert.ok(verdict.message.length <= 300, `the whole sentence stays inside the 300-character notice bound at ${overage} bytes over, got ${verdict.message.length}`);
+		assert.equal(boundMessage(verdict.message, 300), verdict.message, "so the notice region's own clip leaves every word of it untouched");
+	}
+});
+
 test("a legacy unpaid payload between the authoring budget and the encode cap opens, and is refused if it would be written again", () => {
 	const budget = authoringSize(MINIMAL).limit;
 	const legacy = invoiceOfJsonBytes(budget + 60);
@@ -1686,7 +1712,7 @@ test("a payment that would outgrow the encode cap is refused with a sentence the
 	assert.ok(refused.bytes > MAX_JSON_BYTES, `the paid encoding needs ${refused.bytes} bytes`);
 	assert.equal(refused.limit, MAX_JSON_BYTES, "against the encode cap");
 	assert.match(refused.message, /too large to record a payment against/, "the refusal says what cannot be done");
-	assert.match(refused.message, /Ask the payee for a smaller invoice/, "and who the payer can act on");
+	assert.match(refused.message, /keep this page and the transaction hash/, "and the supported actions");
 	assert.ok(refused.message.includes(sizeText(MAX_JSON_BYTES)), `and states the cap in the rounded figure every size sentence prints: ${refused.message}`);
 	assert.doesNotMatch(refused.message, /[Rr]eload/, "with no advice to reload a page");
 	let verdictRefusal = null;

@@ -7,6 +7,8 @@
  * A refusal is stated beside the field rather than in the notice region, because the hash is what the payer changes.
  * The wording follows `docs/design/payment-safety-memo.md`'s constraint: nothing in this app can confirm a payment, so the dialog states the record as the payer's report and repeats the unverified note `ui/messages.ts` owns.
  *
+ * Every name a screen reader announces here is its own: the control that opens the dialog, the dialog, its heading, and its confirm control carry four distinct strings, so an announcement of the dialog does not repeat the name of the control behind it or the label of the button inside it.
+ *
  * The modal mechanics — backdrop, Escape, the Tab trap, background hiding, and focus restoration — are `ui/overlay.ts`'s, exactly as the share dialog's are.
  * This module supplies the dialog's content and its close controls, and it subscribes to nothing, so it states `NOTHING_TO_RELEASE` (`ui/release.ts`).
  *
@@ -20,7 +22,7 @@ import { InvalidPaidRecordError, paidHashForm, validatePaidRecord } from "../inv
 import { h } from "../util/dom.js";
 import { boundMessage, reportInternalFailure } from "../util/errors.js";
 import { FIELD_MESSAGE_MAX } from "./constants.js";
-import { PAYMENT_RECORD_FAILED_MESSAGE, UNVERIFIED_PAYMENT_NOTE } from "./messages.js";
+import { OPENED_RECORD_PAYMENT_REFUSAL_MESSAGE, PAYMENT_RECORD_FAILED_MESSAGE, UNVERIFIED_PAYMENT_NOTE } from "./messages.js";
 import type { NoticeApi } from "./notice.js";
 import { windowHasOpener } from "./opener.js";
 import { createOverlay, openOverlay, type OverlayHandle } from "./overlay.js";
@@ -46,20 +48,20 @@ export interface OpenMarkPaidDialogOptions extends MarkPaidDialogOptions {
 export type MarkPaidDialogHandle = OverlayHandle;
 
 /**
- * The dialog's title and accessible name, stating the record as the payer's report rather than a confirmed payment.
+ * The label of the document's control that opens this dialog, and of nothing inside it.
  *
- * The title frames the action as recording what the payer reports, so the dialog's heading and its `aria-label` cannot present the record as a verification the app cannot perform.
+ * The dialog, its heading, and its confirm control each carry a name of their own, so the control behind the overlay is the only place this sentence appears: a screen reader announcing the dialog no longer hears the name of the control it opened, nor a heading and a button that repeat it.
  */
-export const MARK_PAID_TITLE = "Mark invoice as paid";
+export const MARK_PAID_CONTROL_LABEL = "Mark invoice as paid";
 
-/**
- * Shown when the dialog is refused because this window reports an opener.
- *
- * It states what the refusal does — every opener is refused, whichever page that one is — and why: a page from this website could fill this dialog in and record a payment nobody made, and this page cannot tell which website an opener comes from.
- * It names what the check cannot see in the same sentence, because a presence test is the strongest guard a surface inside this document holds and no more: a page that frames this invoice presents no opener, and a frame served from this website shares this document's origin, so no refusal inside the document binds that page — the residual `README.md`'s "Security over features" records as an accepted risk.
- * A payer who arrived from a plain link carries an opener too, so the sentence names every opener rather than telling them their own window is the one hazard.
- */
-const OPENED_MESSAGE = "This page was opened by another page, so recording a payment is refused here. A page from this website could fill this dialog in and record a payment nobody made, so every opener is refused; a page that frames this invoice shows no opener, so this check cannot see it. Open the invoice on its own.";
+/** The dialog's accessible name, stating the record as the payer's report rather than a confirmed payment, and naming the invoice it applies to so it is not the trigger's sentence read a second time. */
+const DIALOG_NAME = "Record a payment on this invoice";
+
+/** The heading over the dialog's body, distinct from the dialog's own name and from the confirm control's label so the heading and the actions do not repeat one string. */
+const DIALOG_HEADING = "Record this payment";
+
+/** The confirm control's own action label, naming what the click does rather than repeating the heading above it. */
+const CONFIRM_LABEL = "Record payment";
 
 /** The hint beside the hash field, naming the asset family's own spelling from `invoice/paid.ts`'s table so a hint cannot offer a shape the validator refuses. */
 export function hashHint(asset: AssetId): string {
@@ -95,7 +97,7 @@ export function createMarkPaidDialog(invoice: Invoice, today: string, options: M
  */
 export function openMarkPaidDialog(invoice: Invoice, today: string, options: OpenMarkPaidDialogOptions): MarkPaidDialogHandle | null {
 	if (windowHasOpener()) {
-		options.notice.showNotice(OPENED_MESSAGE, "error");
+		options.notice.showNotice(OPENED_RECORD_PAYMENT_REFUSAL_MESSAGE, "error");
 		return null;
 	}
 	return openOverlay((close) => buildMarkPaidDialog(invoice, today, options, close), { initialFocus: "#mark-paid-hash", onClose: options.onClose });
@@ -171,14 +173,14 @@ function buildMarkPaidDialog(invoice: Invoice, today: string, options: MarkPaidD
 	closeButton.addEventListener("click", close);
 	const done = h("button", { type: "button", class: "btn btn-secondary" }, "Done");
 	done.addEventListener("click", close);
-	const confirm = h("button", { type: "button", class: "btn btn-primary" }, MARK_PAID_TITLE);
+	const confirm = h("button", { type: "button", class: "btn btn-primary" }, CONFIRM_LABEL);
 	confirm.addEventListener("click", submit);
 
 	return releasable(
 		h(
 			"div",
-			{ class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": MARK_PAID_TITLE },
-			h("div", { class: "dialog-header" }, h("h2", { class: "dialog-title" }, MARK_PAID_TITLE), closeButton),
+			{ class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": DIALOG_NAME },
+			h("div", { class: "dialog-header" }, h("h2", { class: "dialog-title" }, DIALOG_HEADING), closeButton),
 			h("div", { class: "dialog-body" }, note, form),
 			h("div", { class: "dialog-footer" }, done, confirm),
 		),

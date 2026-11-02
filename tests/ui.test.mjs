@@ -18,7 +18,7 @@ import { nextTask } from "./helpers/wait.mjs";
 import { installWindow, mockProvider } from "./helpers/wallet-mock.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
 import { MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
-import { AuthoringSizeError, MAX_JSON_BYTES, encodeInvoice, serializeInvoice, sizeText } from "../app/js/invoice/codec.js";
+import { AuthoringSizeError, MAX_JSON_BYTES, encodeInvoice, serializeInvoice, sizeText, authoringTooLargeMessage, paidTooLargeMessage } from "../app/js/invoice/codec.js";
 import { MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { decodeShare, encodeShare } from "../app/js/invoice/share.js";
 import { parseHash } from "../app/js/app/router.js";
@@ -44,7 +44,7 @@ import {
 	shareSizeHint,
 } from "../app/js/ui/create.js";
 import { FIT_CUE_CLASS, FIT_RUNGS } from "../app/js/ui/fit-value.js";
-import { UNSUPPORTED_WALLET_MESSAGE, UNVERIFIED_PAYMENT_NOTE } from "../app/js/ui/messages.js";
+import { UNSUPPORTED_WALLET_MESSAGE, UNVERIFIED_PAYMENT_NOTE, OPENED_RECORD_PAYMENT_REFUSAL_MESSAGE } from "../app/js/ui/messages.js";
 import { openPayPanel } from "../app/js/ui/pay.js";
 import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { releasable } from "../app/js/ui/release.js";
@@ -1427,6 +1427,25 @@ test("the create form places the asset selection before the payout-address field
 	}
 });
 
+test("the item-count hint names the budget the form's own share hint measures against", () => {
+	// The sentence under the line items tells the payee why the form stops where it does, so its figure is read against the budget the submit enforces rather than trusted: a hint naming the encode cap, or a figure of its own, would either stop the payee short of the size the form accepts or invite a link the submit then refuses.
+	const budget = shareSizeHint(formState()).limit;
+	assert.ok(budget <= MAX_JSON_BYTES, "the budget a new invoice may use is the encode cap less the room a payment record needs");
+	assert.notEqual(sizeText(budget), sizeText(MAX_JSON_BYTES), "and it prints as a different figure, so a hint naming the cap cannot pass this case");
+	const fake = installInteractiveDocument();
+	try {
+		const view = renderCreateView({ ...TOTAL_OPTIONS, notice: noticeRecorder() });
+		const hints = findAll(view, (node) => node.attributes?.class === "field-hint" && textOf(node).startsWith(`Up to ${MAX_ITEMS} lines;`));
+		assert.equal(hints.length, 1, "the form carries one hint stating the line cap the editor enforces");
+		const hint = textOf(hints[0]);
+		assert.ok(hint.includes(sizeText(budget)), `the hint names the budget a new invoice may use, in the rounded figure the refusal beside it states: ${hint}`);
+		assert.equal(hint.includes(sizeText(MAX_JSON_BYTES)), false, "and never the encode cap, which only a paid invoice is held to");
+		assert.match(hint, /leave room for the recipient to record the payment/, "with the reason the budget sits under the cap");
+	} finally {
+		fake.restore();
+	}
+});
+
 test("the payout-address placeholder is read by own property and fails closed", () => {
 	// A plain object literal resolves through `Object.prototype`, so a family name that collides with an inherited member would otherwise yield a function rather than a placeholder; the field then shows no placeholder at all.
 	for (const family of ["constructor", "toString", "hasOwnProperty", "bitcoin", ""]) {
@@ -1660,10 +1679,14 @@ test("no payer- or payee-facing surface cautions that a valid address may be unp
 	assert.ok(read.includes(ZEC_TEX_PAYEE), "and the payee's own spelling, as the document draws it");
 	assert.ok(read.includes(UNSUPPORTED_WALLET_MESSAGE), "and the hand-off sentence, which names where a wallet-less invoice is paid and cautions nothing");
 	assert.match(read, /Payment link/, "and the terms a payer copies from");
-	assert.ok(read.includes("Payment reported"), "the sweep reads the paid section's title, which never claims a verified settlement");
+	assert.ok(read.includes("Payment received"), "the sweep reads the paid section's title, which never claims a verified settlement");
 	assert.ok(read.includes(UNVERIFIED_PAYMENT_NOTE), "and the page-only unverified note");
-	assert.ok(read.includes("Mark invoice as paid"), "and the mark-paid dialog's title");
-	assert.match(read, /send this paid invoice back/, "and the paid share dialog's copy");
+	assert.ok(read.includes("Mark invoice as paid"), "and the control that opens the mark-paid dialog");
+	assert.ok(read.includes("Record a payment on this invoice"), "and the dialog's own accessible name, which is not the sentence on the control behind it");
+	assert.ok(read.includes("Record payment"), "and the confirm control's action label");
+	assert.match(read, /Enter the \d+-character /, "and the mark-paid hash hint, which names the family's own hash form");
+	assert.match(read, /Send this link back to whoever invoiced you, or keep it as your own copy/, "and the paid share dialog's copy, which serves the payer handing the link back and the payee keeping it alike");
+	assert.match(read, /Either one is your own copy to keep/, "including the line naming the copy as the reader's own and the PDF they can save");
 	assert.equal(documents.some((path) => path.endsWith("README.md")), true, "and the top-level README is one of the documents it reads");
 	assert.match(documentProse.join("\n"), /Zcash/, "as is the README's own prose, which names the asset a payee is paid in");
 });
@@ -1694,11 +1717,15 @@ test("the wallet-support guard catches the cautions it exists to catch", () => {
 		payoutAddressGuidance(ASSET_REGISTRY.xmr),
 		"Invoice #INV-2026-0042 is due on 28 Oct 2026.",
 		UNVERIFIED_PAYMENT_NOTE,
-		"Payment reported",
+		"Payment received",
 		"Transaction hash",
 		"Recorded",
-		"There are two ways to send this paid invoice back. Pick the one that fits how you're sending it.",
+		"There are two ways to pass this paid invoice on. Either one is your own copy to keep, and you can save the invoice as a PDF for your record.",
+		"Send this link back to whoever invoiced you, or keep it as your own copy. It opens the invoice with the payment record attached.",
 		"Mark invoice as paid",
+		"Record a payment on this invoice",
+		"Record this payment",
+		"Record payment",
 	];
 	for (const sentence of innocuous) {
 		assert.equal(walletSupportCaution(sentence), null, `the guard flagged the app's own copy: ${JSON.stringify(sentence)}`);
@@ -2240,5 +2267,18 @@ test("a route change dismisses the payment panel the document it replaces was op
 	} finally {
 		installed.restore();
 		fake.restore();
+	}
+});
+test("every notice fits within the 300-character size boundary", () => {
+	const NOTICE_MAX = 300;
+	const notices = [
+		OPENED_RECORD_PAYMENT_REFUSAL_MESSAGE,
+		authoringTooLargeMessage(MAX_JSON_BYTES + 1024),
+		paidTooLargeMessage(MAX_JSON_BYTES + 1024),
+		UNVERIFIED_PAYMENT_NOTE,
+		UNSUPPORTED_WALLET_MESSAGE,
+	];
+	for (const notice of notices) {
+		assert.ok(notice.length <= NOTICE_MAX, `Notice exceeds ${NOTICE_MAX} characters (${notice.length}): ${notice}`);
 	}
 });
