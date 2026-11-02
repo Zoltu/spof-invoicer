@@ -171,6 +171,7 @@ test("a paid invoice draws the record's own section in place of the payment deta
 		const invoice = invoiceFor({ notes: "Thanks.", paid: { hash, date: "2026-10-03" } });
 		const view = renderInvoiceView(invoice, { ...VIEW_OPTIONS, notice: noticeRecorder() });
 		assert.equal(byText(view, "button", "Pay").length, 0, "no Pay control is offered on a paid invoice");
+		assert.equal(byText(view, "button", "Mark invoice as paid").length, 0, "and no control offers to record a second payment");
 		assert.equal(findAll(view, (node) => hasClass(node, "payment-qr")).length, 0, "no QR block is drawn");
 		assert.equal(byText(view, "button", "Copy Payment link").length, 0, "the payment link copy control is absent");
 		const copy = byText(view, "button", "Copy");
@@ -182,7 +183,9 @@ test("a paid invoice draws the record's own section in place of the payment deta
 		assert.equal(byText(view, "th", "Total").length, 1, "and names the amount instead");
 		const note = findAll(view, (node) => hasClass(node, "paid-unverified"))[0];
 		assert.ok(note, "the unverified note is present");
-		assert.match(textOf(note), /This payment was reported by the recipient/, "the note states the record unverified nature");
+		// The payee reading their own invoice is the recipient, so a note naming the recipient as the record's author would tell that reader the report was their own; the author it names is the payer.
+		assert.match(textOf(note), /This page records a payment the payer reported/, "the note names the payment as the payer's report");
+		assert.doesNotMatch(textOf(note), /reported by the recipient/, "and never attributes the record to the recipient, who may be the one reading it");
 		const badge = findAll(view, (node) => hasClass(node, "status-badge"))[0];
 		assert.equal(textOf(badge), "Reported", "the badge names what the document holds, never a settlement");
 		assert.ok(hasClass(badge, "status-paid"));
@@ -2534,6 +2537,58 @@ test("the payment panel's mark-paid shortcut closes the panel and hands the wall
 		assert.equal(findAll(document.body, (node) => hasClass(node, "pay-dialog")).length, 0, "the panel closes");
 	} finally {
 		installed.restore();
+		fake.restore();
+	}
+});
+
+test("recording a payment is refused in a window another page opened", () => {
+	const fake = installInteractiveDocument();
+	// A page from this website that opened this window can reach into it and dispatch a click, so it could fill the dialog in and confirm it; what the payer would then hold is their own document and URL rewritten into a paid link carrying a hash of that page's choosing, which the document's own share control would forward. The refusal is the payment panel's, taken on the presence of an opener alone.
+	const installed = installWindow({ opener: {} });
+	try {
+		const notice = noticeRecorder();
+		const paid = [];
+		const dialogs = [];
+		const view = renderInvoiceView(invoiceFor(), {
+			...VIEW_OPTIONS,
+			notice,
+			onPaid: (hash) => paid.push(hash),
+			onDialog: (dialog) => dialogs.push(dialog),
+		});
+		const control = byText(view, "button", "Mark invoice as paid")[0];
+		assert.ok(control, "the control stays in place, so the payer reads why the action is refused rather than finding nothing");
+		control.dispatch("click", { type: "click" });
+		assert.equal(findAll(document.body, (node) => hasClass(node, "dialog-backdrop")).length, 0, "no dialog opens");
+		assert.deepEqual(dialogs, [], "the shell's modal slot is handed no handle to dismiss");
+		assert.deepEqual(paid, [], "and no hash reaches the egress that builds the paid link");
+		assert.equal(notice.calls.length, 1, "the refusal is stated once, in the notice region");
+		assert.equal(notice.calls[0].tone, "error");
+		assert.match(notice.calls[0].message, /recording a payment is refused here/, "the notice names the action it refuses");
+		assert.match(notice.calls[0].message, /every opener is refused/, "and what the refusal covers, so a payer who arrived from a plain link is not left guessing");
+		assert.match(notice.calls[0].message, /frames this invoice shows no opener/, "and the one route the check cannot see, so the sentence promises no cover a frame served from this website would not meet");
+	} finally {
+		installed.restore();
+		fake.restore();
+	}
+});
+
+test("the document's mark-paid control hands the dialog's canonical hash to onPaid", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const paid = [];
+		const view = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder(), onPaid: (hash) => paid.push(hash) });
+		const control = byText(view, "button", "Mark invoice as paid")[0];
+		assert.ok(control, "an unpaid document offers the control");
+		control.dispatch("click", { type: "click" });
+		const backdrop = findAll(document.body, (node) => hasClass(node, "dialog-backdrop"))[0];
+		assert.ok(backdrop, "the control opens the manual dialog");
+		const input = findAll(backdrop, (node) => node.tagName === "input")[0];
+		assert.equal(input.attributes.type, "text", "the hash is an ordinary text field");
+		input.value = `  0x${"AB".repeat(32)}  `;
+		const form = findAll(backdrop, (node) => node.tagName === "form")[0];
+		form.dispatch("submit", { type: "submit" });
+		assert.deepEqual(paid, [`0x${"ab".repeat(32)}`], "the dialog hands over the one stored spelling, trimmed and lower-cased, rather than the paste");
+	} finally {
 		fake.restore();
 	}
 });

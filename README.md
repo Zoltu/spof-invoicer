@@ -15,7 +15,7 @@ There is nothing to install and no account to create.
 - Share the invoice as a link or a copy-paste code.
 - Let the person you bill see a clean invoice with a scannable QR code and a payment link.
 - Save the invoice as a PDF.
-- Mark the invoice as paid, send the paid invoice back to the person you bill, and save it as a PDF.
+- Record a payment on the invoice with its transaction hash and the day it was recorded, send the paid link back to whoever invoiced you, and save the paid invoice as a PDF.
 - Pay from a crypto wallet (Ethereum, USDC, USDT).
 - Show a QR code the person you bill can scan to pay in Zcash or Monero.
 
@@ -37,11 +37,11 @@ There is nothing to install and no account to create.
 - The app refuses to hand the payment to the crypto wallet unless the wallet reports the invoice's own network.
 - Nothing touches your wallet until you click Connect wallet & pay. That gate is on the click you make, not a control against another page: framing is permitted, so a page served from the app's own website can dispatch that click from inside its frame without covering anything, as the framing bullet below records.
 - The app permits another page to frame it, so a wallet host can show the invoice inside its own frame, and it accepts the risk that permission carries: the framing page could overlay the controls, and a framing page served from the app's own website shares the app's origin, so a script on that page can also dispatch a click on a payment control without covering it. The framing page also chooses which invoice the frame shows, because the invoice is the part of the link after the `#`, and the address a browser displays for a framed page is, by this app's reading of it, that page's own rather than the framed document's — a reading the [Payment Safety Design Memo](docs/design/payment-safety-memo.md) records as unverified rather than measured — so nothing on screen can be relied on to tell you which payout address the frame was given. Framing stays permitted rather than closed, which is why the trust requirement under "Open the app" is load-bearing: any other page on the website that serves the app is trusted with the invoice that page frames.
-- The payment panel refuses a window that another page opened, whichever page that is: a page from this website could drive the payment controls, and the app cannot tell which website an opener comes from, so every opener is refused; the check is best-effort, so a determined page can still get around it.
+- The payment panel and the control that records a payment refuse a window that another page opened, whichever page that is: a page from this website could drive the payment controls, and the app cannot tell which website an opener comes from, so every opener is refused; the check is best-effort, so a determined page can still get around it.
 - Invoice text is always shown as plain text, so a link cannot add code to the page.
 - Payee entered text never turns into bold or italics, because a link can come from anyone.
 - You get the transaction hash, the code the wallet gives back for the payment, instead of an external link that looks up the payment.
-- The app cannot check a payment against the network, so it takes a paid record as given: the transaction hash is the only record the person you bill provides, and they can add a record the same way you can.
+- The app cannot check a payment against the network, so it takes a paid record as given: the record is a transaction hash and the day it was recorded, and anyone who holds the link can write one or rewrite it, so a paid invoice states what its author says rather than what the network shows.
 - Every option weighed for address verification, a double-payment guard, blockies avatars, and a local address book is written down in the [Payment Safety Design Memo](docs/design/payment-safety-memo.md), each claim labelled as verified here, reported from an external source, unverified, or an accepted risk, including what the app deliberately does not build.
 
 ## Open the app

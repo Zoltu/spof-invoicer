@@ -2,9 +2,10 @@
  * The payment panel: what will be sent, and the payer's explicit route to sending it.
  *
  * The panel is the only place the wallet is reached from, and it holds the app's central guarantee: nothing touches a provider until the payer clicks.
- * The panel is refused — with a notice, touching no provider — when this window reports an opener, whatever page that opener names, and when this invoice's payment has already been claimed, so a reopened panel cannot start a second broadcast.
+ * The panel is refused — with a notice, touching no provider — when this window reports an opener, whatever page that opener names, when this invoice's payment has already been claimed, so a reopened panel cannot start a second broadcast, and when the invoice already carries a record of a payment, because the document then states the payment it reports and there is nothing left here to start.
  * Framing is permitted on purpose, because some wallet hosts show the invoice inside their own frame, and the permission accepts that the framing page can overlay the controls it frames: README.md records that risk beside the permission, and nothing here bounds it.
  * Two controls remain, and neither of them covers an overlay: no wallet is touched until the payer's own click, which README.md's "Security over features" states and which a framing host defeats by making that click land on the control it covers, and this page's claim on the invoice's payment lets only one flow send that invoice, which stops a second broadcast of the same invoice rather than an overlaid click.
+ * The refusals stand in this entry and in `wallet/payment.ts`'s `buildPaymentPlan` rather than only in the render branch that offers the Pay control, so a surface that wires this handler for a document that already reports its payment meets the same refusal where the wallet work would happen.
  * Opening the panel computes the transfer from the validated invoice and renders it — asset, amount, recipient, network — and that is all that happens on the Pay click; discovery, connection, the chain check, the balance read, and the transaction itself all wait for the payer's own "Connect wallet & pay".
  *
  * What the flow *does* lives in `ui/pay-flow.ts`, which is free of the DOM and driven directly by tests; this module owns only how each of its states is drawn and which control maps to which step.
@@ -30,6 +31,7 @@ import { stripDisplayCharacters } from "../util/text.js";
 import { toChecksumAddress } from "../wallet/address.js";
 import type { WalletCandidate } from "../wallet/eip1193.js";
 import {
+	PaidInvoiceError,
 	UnsupportedPaymentFamilyError,
 	buildPaymentPlan,
 	isWalletPayable,
@@ -41,6 +43,7 @@ import { FIT_CUE_CLASS, FIT_SCALE_CLASS, fitValue, type LayoutProbe, type TermFi
 import { PAYMENT_RECORD_FAILED_MESSAGE, UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import { networkLabel } from "./network-labels.js";
 import type { NoticeApi, NoticeTone } from "./notice.js";
+import { windowHasOpener } from "./opener.js";
 import { openOverlay, type OverlayHandle } from "./overlay.js";
 import { copyControlClick, wallClockTimer } from "./payment-section.js";
 import { createPayFlow, type PayFlowSnapshot } from "./pay-flow.js";
@@ -80,6 +83,7 @@ function claimPayment(key: string, owner: object): boolean {
  *
  * It states what the refusal does — it covers every opener — and why: a page from this website could drive the payment controls, and the page cannot tell which website an opener comes from.
  * A payer who arrived from a plain link carries an opener too, and a sentence naming only a page from this website as the reason told them something untrue about their own window.
+ * The presence test it answers is `ui/opener.ts`'s, which states what it covers and what it does not; this module owns only the sentence a refused payer reads.
  */
 const OPENED_MESSAGE = "This page was opened by another page, so paying is refused here — whichever page that is. A page from this website could drive the payment controls, and this page cannot tell which website an opener comes from, so every opener is refused. Open the invoice on its own, from the link you were sent.";
 
@@ -96,27 +100,19 @@ export const DISMISS_FAILED_MESSAGE = "The payment panel could not be cleared aw
  */
 const FRAME_FAILED_MESSAGE = "The payment panel could not draw what it had to show, so something it was watching may still be running. Reload the page to start over.";
 
+/**
+ * Shown when the panel is refused because the invoice already carries a record of a payment.
+ *
+ * It states the scope of the refusal's own check — whether a record is present — and says nothing about what the record claims, because nothing in this app can read a chain and whoever holds the link can write that record.
+ * The refusal is here as well as in the render branch that offers the Pay control (`ui/view.ts`): the guard belongs where the wallet work happens, so a document that already reports its payment is refused here whichever surface calls this entry.
+ */
+const PAID_MESSAGE = "This invoice already carries a record of a payment, so paying it is refused here. The refusal reads whether a record is present, not whether the payment it reports happened.";
+
 /** Shown when the panel is refused because this page has already claimed a payment for the same invoice. */
 const REOPEN_MESSAGE = "A payment for this invoice was already attempted from this page. Check your wallet's activity before trying again; reloading the page is the only way to start over.";
 
 /** The hand-off sentence `ui/messages.ts` owns, re-exported so this module's callers keep a single import site. */
 export { UNSUPPORTED_WALLET_MESSAGE };
-
-/**
- * The refusal notice for a window that reports an opener, or `null` when the page stands alone.
- *
- * The test is presence and nothing else: every window whose `window.opener` is neither `undefined` nor `null` is refused, whatever page that opener names, because presence is what the property reports without reaching across a boundary the page may not cross.
- * An opener served from the same website is the case that matters, since it can reach into the popup and drive its controls; an opener served from another website can neither read the fragment nor reach those controls, and the one presence test refuses it too rather than a second test singling it out.
- * The notice says what this test does rather than what the same-website case alone would justify: it tells the payer that every opener is refused, and why — a page from this website could drive the controls, and nothing here can tell which website an opener comes from — so a payer who arrived from a plain link is not told that their window is the one hazard the refusal names.
- * `window.opener` is an ordinary, replaceable window property, so this refusal is best-effort coverage of every opener rather than a control an adversarial page is bound by; the load-bearing control remains README.md's requirement, in "Open the app", that the app's website be one whose pages are trusted with the invoice, because any other page on the same website would be trusted with the fragment.
- * A direct navigation — a modern `target="_blank"` link, a pasted URL, a bookmark — carries no opener, and a window with no `opener` at all (a test harness, a worker) is treated as unopened.
- */
-function openerRefusal(): string | null {
-	if (typeof window === "undefined") return null;
-	const opener = (window as { opener?: unknown }).opener;
-	if (opener === undefined || opener === null) return null;
-	return OPENED_MESSAGE;
-}
 
 /** Everything the payment panel needs: where to report, how to copy, and how a value it states measures the box it is drawn in. */
 export interface PayPanelOptions {
@@ -150,13 +146,17 @@ export type PayPanelHandle = OverlayHandle;
  * Open the payment panel over the page, or refuse it with a notice.
  *
  * Nothing but the invoice is read until the payer asks to pay.
- * The panel is refused when this window reports an opener, whatever page that opener names, and when this page has already claimed a payment for the same invoice content, so a reopened panel — including one reopened by navigating back to the same fragment — cannot begin a second broadcast.
+ * The panel is refused when this window reports an opener, whatever page that opener names, when this page has already claimed a payment for the same invoice content, so a reopened panel — including one reopened by navigating back to the same fragment — cannot begin a second broadcast, and when the invoice already carries a record of a payment, whatever its family, since the document states the payment it reports.
  * It is refused too for an invoice whose asset belongs to a family no injected wallet pays, read through `wallet/payment.ts`'s own `isWalletPayable`; the same typed refusal `buildPaymentPlan` raises is caught here as well, so a privacy-chain invoice can never let that error escape this entry uncaught.
  */
 export function openPayPanel(invoice: Invoice, options: PayPanelOptions): PayPanelHandle | null {
-	const refusal = openerRefusal();
-	if (refusal !== null) {
-		options.notice.showNotice(refusal, "error");
+	// The invoice's own record is read before the window is: a document that already reports its payment has nothing to start here, whichever page opened this one.
+	if (invoice.paid !== undefined) {
+		options.notice.showNotice(PAID_MESSAGE, "error");
+		return null;
+	}
+	if (windowHasOpener()) {
+		options.notice.showNotice(OPENED_MESSAGE, "error");
 		return null;
 	}
 	const key = paymentKey(invoice);
@@ -176,9 +176,13 @@ export function openPayPanel(invoice: Invoice, options: PayPanelOptions): PayPan
 			onDismissFailed: () => options.notice.showNotice(DISMISS_FAILED_MESSAGE, "error"),
 		});
 	} catch (error) {
-		// The typed refusal `buildPaymentPlan` raises for a family this flow cannot pay must not escape the panel entry; the gate above already covers it, and this keeps the guarantee if the two ever diverge.
+		// The typed refusals `buildPaymentPlan` raises — a family this flow cannot pay, and an invoice that already carries a paid record — must not escape the panel entry; the gates above already cover both, and this keeps the guarantee if they ever diverge.
 		if (error instanceof UnsupportedPaymentFamilyError) {
 			options.notice.showNotice(UNSUPPORTED_WALLET_MESSAGE, "error");
+			return null;
+		}
+		if (error instanceof PaidInvoiceError) {
+			options.notice.showNotice(PAID_MESSAGE, "error");
 			return null;
 		}
 		throw error;

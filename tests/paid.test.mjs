@@ -187,6 +187,30 @@ test("the recorded date is read by the one calendar rule the model's dates use r
 	assert.equal(requireCalendarDate("2024-02-29"), "2024-02-29", "and a leap day is still a real date");
 });
 
+test("a refused day echoes the value bounded and stripped of the characters a message cannot show", () => {
+	// The day arrives in a share payload, so it can be arbitrarily long and can carry the characters `JSON.stringify` leaves as themselves: the C1 block, the line and paragraph separators, and the bidi overrides a text node renders without showing. An unbounded echo would spend the notice on the paste and could reorder the clause around it.
+	const hostile = `2026-10-03\u202E\u0085\u2028`;
+	let refusal = null;
+	try {
+		requireCalendarDate(hostile);
+	} catch (error) {
+		refusal = error;
+	}
+	assert.ok(refusal instanceof InvalidCalendarDateError, "a day carrying a bidi override is refused");
+	assert.doesNotMatch(refusal.message, /[\u202E\u0085\u2028]/, "no bidi override, C1 control, or line separator reaches the message");
+
+	const overLong = "1".repeat(5000);
+	let longRefusal = null;
+	try {
+		requireCalendarDate(overLong);
+	} catch (error) {
+		longRefusal = error;
+	}
+	assert.ok(longRefusal instanceof InvalidCalendarDateError, "a day far past the spelling's length is refused");
+	assert.ok(longRefusal.message.length < 200, `the echo of an over-long date stays bounded, got ${longRefusal.message.length} characters`);
+	assert.match(longRefusal.message, /\(5000 characters\)/, "and reports the value's full length, so the cut is stated rather than hidden");
+});
+
 test("a refused recorded day keeps the calendar rule's own error as its cause rather than a new error", () => {
 	let refusal = null;
 	try {

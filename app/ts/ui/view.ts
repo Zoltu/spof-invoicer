@@ -10,6 +10,7 @@
  * Payment details is {@link renderPaymentSection}, the section `ui/payment-section.ts` owns and the payee's create screen draws from the same function: the payee address, the amount, and the payment link, each a plain-text value with its own copy control, beside the symbol of that same URI. A paid invoice draws the same section with the paid record's own title and terms in place of the payment terms, and no symbol, because the record states a transaction and a day rather than a link a wallet scans.
  * The actions around it (back to Create, Share, Save as PDF, Mark invoice as paid, Pay) are chrome, and the Pay control is the injected-wallet flow's alone: a Zcash or Monero invoice is paid by the payment link and QR code the document carries, so it is offered no control that would lead nowhere. A paid invoice offers no Pay control at all, whatever its family, because the payment the record states is the one the document reports and there is nothing left to start.
  * An unpaid invoice also offers a Mark invoice as paid control that opens the manual hash dialog in `ui/mark-paid.ts`, so a payer who has already sent the payment can attach the hash the wallet gave them without reopening the wallet flow; the control is offered for every family, because a privacy-chain payment's hash is as recordable as an EVM one, and it is absent on a paid invoice for the same reason the Pay control is.
+ * The dialog refuses a window another page opened, as the payment panel's own entry does, and the control stays in place so the refusal is what the payer reads.
  * The manual dialog states the record as the payer's report, following `docs/design/payment-safety-memo.md`'s constraint that nothing here can confirm a payment.
  */
 
@@ -233,7 +234,8 @@ export function renderInvoiceView(invoice: Invoice, options: ViewOptions): Relea
  *
  * Pay is the injected-wallet flow, which only the EVM family pays through: on an EVM invoice it is present so the layout is complete and stays disabled — with the reason shown beside it — until a handler is wired, so no click can reach an EVM provider before one exists, while a privacy-chain invoice is offered a hint naming the hand-off it does carry instead of a control that would lead nowhere.
  * A paid invoice offers neither the Pay control nor its hint, whatever its family: the record the document carries is the payment it reports, and there is nothing left to start.
- * The Mark invoice as paid control is offered on every unpaid invoice, whatever its family and whatever the window reports: it opens the manual dialog, which reads no wallet and no storage, so it is the one way a payer who has already sent a privacy-chain payment can attach its hash without reopening the wallet flow the pay panel would refuse in a framed window.
+ * The Mark invoice as paid control is offered on every unpaid invoice, whatever its family: it opens the manual dialog, which reads no wallet and no storage, so it is the one way a payer who has already sent a privacy-chain payment can attach its hash, since `isWalletPayable` offers that family no Pay control at all rather than a flow to reopen.
+ * A window another page opened is refused by the dialog itself, as the payment panel refuses its own entry, and the control stays in place so the refusal is what the payer reads rather than a control that silently does nothing: a page from this website could fill the dialog in and record a payment that was never made.
  */
 function documentActions(invoice: Invoice, view: InvoiceViewModel, options: ViewOptions): HTMLElement {
 	const shareButton = h("button", { type: "button", class: "btn btn-secondary" }, "Share");
@@ -253,9 +255,12 @@ function documentActions(invoice: Invoice, view: InvoiceViewModel, options: View
 				return;
 			}
 			const dialog = openMarkPaidDialog(invoice, options.today, {
+				notice: options.notice,
 				onPaid: options.onPaid,
 				onClose: () => options.onDialog?.(null),
 			});
+			// A refused window opens nothing: the dialog has already reported the refusal through the notice region, and there is no handle for the shell's modal slot to hold.
+			if (dialog === null) return;
 			options.onDialog?.(dialog);
 		});
 	}

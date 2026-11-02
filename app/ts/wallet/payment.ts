@@ -1,9 +1,10 @@
 /**
  * The injected-wallet payment flow: an EVM invoice plus a connected wallet become one exact transfer.
  *
- * Two rules shape this module.
+ * Three rules shape this module.
  * First, the amount is never taken from anything transported: it is recomputed with `computeTotals(invoice)`, so a share string cannot ask for a total that disagrees with its own line items, and the payee comes from the invoice's validated payout address rather than from any field a payload could add.
  * Second, nothing here runs until the payer has explicitly asked to pay — {@link sendPayment} is the only function that sends, and every function is inert until its caller `ui/pay-flow.ts` invokes it from a click.
+ * Third, an invoice that already carries a paid record is refused by {@link buildPaymentPlan} before anything about the transfer is read: the document states the payment it reports, so there is no plan to build for it, and a flow built anyway would ask the payer to send a second payment for one document.
  *
  * The flow is the EVM family's alone: Zcash and Monero invoices are paid by their own payment link and QR code (`payment/links.ts`), so {@link buildPaymentPlan} refuses one by name before any EVM logic reads the chain or the calldata.
  * The family that decides which of those two happens is read through `assets/registry.ts`'s own resolution of an entry's family — judged through `assetFamily`, required by name through `requireAssetFamily` — the same resolution `payment/links.ts` dispatches its schemes on, so the link path and the wallet path cannot read a family differently.
@@ -90,6 +91,24 @@ export class UnsupportedPaymentFamilyError extends Error {
 	}
 }
 
+/**
+ * Raised by {@link buildPaymentPlan} for an invoice that already carries a paid record.
+ *
+ * The document states the payment it reports, so there is no transfer left to build for it; a flow that built one anyway would ask the payer to send a second payment for a document that already reports one.
+ * A typed domain error of its own rather than a {@link PaymentPlanError}, because the invoice is payable in every other respect — the record is what refuses it — and a caller can tell that refusal from an invoice whose own fields disagree.
+ * The check reads the presence of a record and never what the record claims: nothing in this app can read a chain, and `invoice/model.ts`'s `markPaid` is the one writer of a record.
+ */
+export class PaidInvoiceError extends Error {
+	/** The invoice that already carries a record of a payment. */
+	readonly invoiceId: string;
+
+	constructor(invoiceId: string) {
+		super(`payment: ${describe(invoiceId)} already carries a record of a payment, so no transfer can be built for it`);
+		this.name = "PaidInvoiceError";
+		this.invoiceId = invoiceId;
+	}
+}
+
 /** The wallet is on a different network from the one the invoice names, so nothing may be sent. */
 export class WrongChainError extends Error {
 	readonly current: string;
@@ -125,13 +144,17 @@ export function isWalletPayable(asset: Asset): boolean {
 /**
  * Reduce a validated invoice to the one transfer it asks for.
  *
- * The asset's family is read first through {@link isWalletPayable}, whose answer is total: an invoice in a family this injected-wallet flow does not pay is refused with {@link UnsupportedPaymentFamilyError} before anything else here runs, because nothing downstream has a transfer to build for it.
+ * An invoice that already carries a paid record is refused first with {@link PaidInvoiceError}: the document already reports its payment, so no plan exists to build for it, and a caller that reached this far is asking for a second payment of one document.
+ * The asset's family is read next through {@link isWalletPayable}, whose answer is total: an invoice in a family this injected-wallet flow does not pay is refused with {@link UnsupportedPaymentFamilyError} before anything else here runs, because nothing downstream has a transfer to build for it.
  * The refusal names the family through `requireAssetFamily`, the checked resolution, so the family an invoice belongs to is reported as it is rather than as a label this module read for itself; an asset whose own family is one no rule carries — impossible for a registry entry, which the load-time gate refuses first — is refused by that resolution's own error instead.
  * The asset and the chain are then re-derived from the registry rather than trusted, the recipient is re-checked as payable, and the amount is {@link computeTotals}' total in the asset's base units.
  * The chain is read through {@link requireEvmChain}, so an invoice on a network this flow cannot reach is refused by name before any EVM logic runs, and it is then held to the asset's own network through `assets/registry.ts`'s `isAssetNetwork` — the comparison the invoice validator and the link builder read too — so the three cannot disagree about which network an asset is paid on.
  * A native invoice sends the payee the total as `value`; an ERC-20 invoice addresses the token contract with `transfer(payee, total)` calldata and attaches no value.
  */
 export function buildPaymentPlan(invoice: Invoice): PaymentPlan {
+	if (invoice.paid !== undefined) {
+		throw new PaidInvoiceError(invoice.id);
+	}
 	const asset = requireAsset(invoice.asset);
 	if (!isWalletPayable(asset)) {
 		throw new UnsupportedPaymentFamilyError(asset.id, requireAssetFamily(asset));

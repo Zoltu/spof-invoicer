@@ -17,7 +17,7 @@ import {
 } from "./helpers/wallet-mock.mjs";
 import { encodeInvoice } from "../app/js/invoice/codec.js";
 import { encodeShare } from "../app/js/invoice/share.js";
-import { computeTotals, createInvoice } from "../app/js/invoice/model.js";
+import { computeTotals, createInvoice, markPaid } from "../app/js/invoice/model.js";
 import { parseHash } from "../app/js/app/router.js";
 import { mountShell, renderRoute } from "../app/js/app/shell.js";
 import { openPayPanel } from "../app/js/ui/pay.js";
@@ -38,6 +38,7 @@ import {
 } from "../app/js/wallet/eip1193.js";
 import {
 	NoAccountError,
+	PaidInvoiceError,
 	WrongChainError,
 	buildPaymentPlan,
 	connectWallet,
@@ -1146,6 +1147,27 @@ test("a wallet label is stripped of invisible and direction-formatting character
 		["MetaMask", "Wallet"],
 		"the bidi override, zero-width space, and NUL are stripped, and a label that is only invisible characters is dropped",
 	);
+});
+
+test("an invoice that already records a payment is refused by the plan and by the panel", () => {
+	const fake = installInteractiveDocument();
+	const provider = mockProvider();
+	const installed = installWindow({ ethereum: provider });
+	try {
+		const invoice = usdcInvoice();
+		const paid = markPaid(invoice, { hash: TX_HASH, date: "2026-10-03" });
+		// The rule lives in the flow rather than only in the control that renders Pay, so a surface that wires either entry for a paid document meets the refusal where the wallet work would happen instead of opening a wallet path for a payment the document already reports.
+		assert.throws(() => buildPaymentPlan(paid), PaidInvoiceError, "the plan builder refuses a document that already carries a paid record");
+		const notices = noticeRecorder();
+		const handle = openPayPanel(paid, { notice: notices, clipboard: null });
+		assert.equal(handle, null, "no panel is presented over a document that already reports its payment");
+		assert.equal(notices.calls.at(-1).tone, "error", "the refusal is stated as a failure rather than silently doing nothing");
+		assert.match(notices.calls.at(-1).message, /already carries a record of a payment/, "and says what the document already holds");
+		assert.equal(provider.calls.length, 0, "refusing the panel contacts no wallet");
+	} finally {
+		installed.restore();
+		fake.restore();
+	}
 });
 
 test("the payment panel is refused when another page opened this one", async () => {

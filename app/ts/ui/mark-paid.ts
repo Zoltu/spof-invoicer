@@ -9,6 +9,8 @@
  *
  * The modal mechanics — backdrop, Escape, the Tab trap, background hiding, and focus restoration — are `ui/overlay.ts`'s, exactly as the share dialog's are.
  * This module supplies the dialog's content and its close controls, and it subscribes to nothing, so it states `NOTHING_TO_RELEASE` (`ui/release.ts`).
+ *
+ * Opening the dialog is refused in a window another page opened, as the payment panel's own entry is refused: {@link openMarkPaidDialog} states what that refusal holds and what it leaves open.
  */
 
 import { requireAsset, requireAssetFamily, type AssetId } from "../assets/registry.js";
@@ -19,6 +21,8 @@ import { h } from "../util/dom.js";
 import { boundMessage, reportInternalFailure } from "../util/errors.js";
 import { FIELD_MESSAGE_MAX } from "./constants.js";
 import { PAYMENT_RECORD_FAILED_MESSAGE, UNVERIFIED_PAYMENT_NOTE } from "./messages.js";
+import type { NoticeApi } from "./notice.js";
+import { windowHasOpener } from "./opener.js";
 import { createOverlay, openOverlay, type OverlayHandle } from "./overlay.js";
 import { formatInvoiceDate } from "./presentation.js";
 import { NOTHING_TO_RELEASE, releasable, type ReleasableElement } from "./release.js";
@@ -33,6 +37,11 @@ export interface MarkPaidDialogOptions {
 	readonly onClose?: () => void;
 }
 
+/** Options for opening the dialog over the page: the dialog's own, plus the notice region its opener refusal is reported in. */
+export interface OpenMarkPaidDialogOptions extends MarkPaidDialogOptions {
+	readonly notice: NoticeApi;
+}
+
 /** A mounted (or mountable) mark-paid dialog: the element plus the one way to dismiss it. */
 export type MarkPaidDialogHandle = OverlayHandle;
 
@@ -42,6 +51,15 @@ export type MarkPaidDialogHandle = OverlayHandle;
  * The title frames the action as recording what the payer reports, so the dialog's heading and its `aria-label` cannot present the record as a verification the app cannot perform.
  */
 export const MARK_PAID_TITLE = "Mark invoice as paid";
+
+/**
+ * Shown when the dialog is refused because this window reports an opener.
+ *
+ * It states what the refusal does — every opener is refused, whichever page that one is — and why: a page from this website could fill this dialog in and record a payment nobody made, and this page cannot tell which website an opener comes from.
+ * It names what the check cannot see in the same sentence, because a presence test is the strongest guard a surface inside this document holds and no more: a page that frames this invoice presents no opener, and a frame served from this website shares this document's origin, so no refusal inside the document binds that page — the residual `README.md`'s "Security over features" records as an accepted risk.
+ * A payer who arrived from a plain link carries an opener too, so the sentence names every opener rather than telling them their own window is the one hazard.
+ */
+const OPENED_MESSAGE = "This page was opened by another page, so recording a payment is refused here. A page from this website could fill this dialog in and record a payment nobody made, so every opener is refused; a page that frames this invoice shows no opener, so this check cannot see it. Open the invoice on its own.";
 
 /** The hint beside the hash field, naming the asset family's own spelling from `invoice/paid.ts`'s table so a hint cannot offer a shape the validator refuses. */
 export function hashHint(asset: AssetId): string {
@@ -68,9 +86,18 @@ export function createMarkPaidDialog(invoice: Invoice, today: string, options: M
 }
 
 /**
- * Open the mark-paid dialog over the page through `ui/overlay.ts`, which owns the modal mechanics — the backdrop, Escape, the Tab trap, background hiding, and focus restoration — so this module supplies only the dialog's content and close controls.
+ * Open the mark-paid dialog over the page, or refuse it with a notice when this window reports an opener.
+ *
+ * The refusal is the payment panel's rule, applied here because this dialog answers to it the same way: nothing in it needs a gesture a page cannot dispatch, so a page from this website that opened this window could fill the field and confirm, and the payer's own document and URL would then be a paid link carrying a hash of that page's choosing — a link the payer may forward with the document's own share control.
+ * So the control stays present and the refusal is what the payer reads, as the Pay control does; what the presence test covers, and the best-effort limit it carries, are `ui/opener.ts`'s.
+ * A page that frames this invoice is outside that refusal for the reason `ui/opener.ts` states — a frame presents no opener — while a frame served from this website shares this document's origin and can drive the dialog whatever this document refuses, which `README.md`'s "Security over features" records as an accepted risk; the refusal's own sentence says so rather than promising cover it cannot give.
+ * Opening mounts the dialog through `ui/overlay.ts`, which owns the backdrop, Escape, the Tab trap, background hiding, and focus restoration, so this module supplies only the dialog's content and close controls.
  */
-export function openMarkPaidDialog(invoice: Invoice, today: string, options: MarkPaidDialogOptions): MarkPaidDialogHandle {
+export function openMarkPaidDialog(invoice: Invoice, today: string, options: OpenMarkPaidDialogOptions): MarkPaidDialogHandle | null {
+	if (windowHasOpener()) {
+		options.notice.showNotice(OPENED_MESSAGE, "error");
+		return null;
+	}
 	return openOverlay((close) => buildMarkPaidDialog(invoice, today, options, close), { initialFocus: "#mark-paid-hash", onClose: options.onClose });
 }
 

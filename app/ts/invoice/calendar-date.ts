@@ -7,9 +7,11 @@
  *
  * A stored date is a calendar day as text, which orders identically to the calendar, so nothing here reads a clock, a locale, or a time zone: the caller supplies the day it already holds.
  * The day count admits the leap years the Gregorian rule gives every year the four-digit spelling can state, and no other day: a stored date is never the 30th of February.
+ *
+ * Every refusal echoes the rejected value through `util/errors.ts`'s `preview`, which bounds the echo and strips the characters a text node renders without showing: the value arrives from a share payload, so it can be arbitrarily long and can carry the C1 controls, the line and paragraph separators, and the bidi overrides `JSON.stringify` leaves as themselves.
  */
 
-import { boundMessage, describe, preview } from "../util/errors.js";
+import { preview } from "../util/errors.js";
 
 /** The digits a stored date's year occupies. */
 const YEAR_DIGITS = 4;
@@ -28,13 +30,6 @@ const DATE_PATTERN = new RegExp(`^(\\d{${YEAR_DIGITS}})${DATE_SEPARATOR}(\\d{${M
 
 /** The days each month of a common year holds, January first. February's 29th is added by the leap rule in {@link requireCalendarDate}. */
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-
-/**
- * The most of a date refusal a caller carries.
- *
- * The misspelled value a refusal echoes is payload-supplied, and a share payload can stretch it without bound; the bound leaves every message this module builds from a legitimate value intact, since a value that matches the pattern is ten characters long, and it carries only the branch whose value is echoed with `describe`.
- */
-const DATE_MESSAGE_MAX = 200;
 
 /**
  * Raised by {@link requireCalendarDate} for a value that is not a stored date.
@@ -64,18 +59,18 @@ export function requireCalendarDate(value: unknown): string {
 	}
 	const match = DATE_PATTERN.exec(value);
 	if (match === null) {
-		throw new InvalidCalendarDateError(boundMessage(`must be a YYYY-MM-DD date string, got ${describe(value)}`, DATE_MESSAGE_MAX));
+		throw new InvalidCalendarDateError(`must be a YYYY-MM-DD date string, got ${preview(value)}`);
 	}
 	const year = Number(match[1]);
 	const month = Number(match[2]);
 	const day = Number(match[3]);
 	if (month < 1 || month > 12) {
-		throw new InvalidCalendarDateError(`${describe(value)} is not a real calendar date`);
+		throw new InvalidCalendarDateError(`${preview(value)} is not a real calendar date`);
 	}
 	const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
 	const longest = month === 2 && leap ? 29 : DAYS_IN_MONTH[month - 1];
 	if (day < 1 || day > longest) {
-		throw new InvalidCalendarDateError(`${describe(value)} is not a real calendar date`);
+		throw new InvalidCalendarDateError(`${preview(value)} is not a real calendar date`);
 	}
 	return value;
 }
