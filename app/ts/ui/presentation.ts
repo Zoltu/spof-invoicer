@@ -191,18 +191,22 @@ function paymentAddressText(address: PayoutAddress): string {
 	return shown;
 }
 
+/** The value the document draws in a paid hash's place when the display boundary cannot carry the record's own spelling: the term says the hash is withheld, so nothing the document prints can be copied as the transaction. */
+const PAID_HASH_UNSHOWABLE = "Not shown — this hash cannot be displayed safely";
+
 /**
- * The paid record's hash as the document shows it: the record's own stored spelling, or the {@link PaymentLinkError} that says the display boundary could not carry it unchanged under {@link MAX_PAID_HASH_CHARS}.
+ * The paid record's hash as the document draws it: the record's own stored spelling when the display boundary carries it unchanged under {@link MAX_PAID_HASH_CHARS}, and the term that withholds it otherwise.
  *
- * This is the fail-closed shape {@link paymentAddressText} and {@link paymentLinkText} apply, applied to the record's hash for the same reason: the term is marked `verbatim` because a payer copies it into a wallet or a block explorer, so a clip's `… (N characters)` remainder would be handed to a search that finds nothing and reads as the transaction itself.
- * {@link MAX_PAID_HASH_CHARS} is the widest hash any family stores, so no hash a validated record can carry reaches the bound or the strip and the refusal is unreachable from a validated invoice; it is the guard for the day a family grammar admits a code point the display strip removes.
+ * The hash is marked `verbatim` because a payer copies it into a wallet or a block explorer, so a clip's `… (N characters)` remainder would be handed to a search that finds nothing and reads as the transaction itself; the withheld value carries no such flag, so no copy control offers it as a payment value.
+ * Withholding it is where this differs from {@link paymentAddressText} and {@link paymentLinkText}: those throw, and the guard around the document turns that throw into one fixed failure sentence in the document's place, which is right for a value the rest of the document is built from and wrong here — a hash the strip would rewrite costs the reader the totals, the payment details, and the record itself instead of this one term, so this term is what fails, and closed.
+ * {@link MAX_PAID_HASH_CHARS} is the widest hash any family stores, so no hash a validated record can carry reaches the bound or the strip and the withheld value is unreachable from one; it is the guard for the day a family grammar admits a code point the display strip removes.
  */
-function paidHashText(hash: string): string {
+function paidHashTerm(hash: string): InvoicePaymentTermView {
 	const shown = stripDisplayCharacters(hash);
 	if (shown !== hash || hash.length > MAX_PAID_HASH_CHARS) {
-		throw new PaymentLinkError(`the paid transaction hash does not survive the display boundary as the ${MAX_PAID_HASH_CHARS}-character hash the record stores, so the document cannot show the payment the invoice reports`);
+		return Object.freeze({ label: INVOICE_LABELS.paidHash, value: PAID_HASH_UNSHOWABLE });
 	}
-	return shown;
+	return Object.freeze({ label: INVOICE_LABELS.paidHash, value: shown, verbatim: true });
 }
 
 /**
@@ -346,7 +350,7 @@ export const INVOICE_LABELS: InvoiceLabels = Object.freeze({
  * The amount, the address, and the link terms carry `verbatim`, the one thing that marks a value a wallet takes verbatim: the on-screen view draws each of those as plain text with a copy control, so the value a payer copies is the same string the URI and the symbol carry rather than whatever their text selection spanned, and the print path and the PDF draw the same string whole rather than the on-screen run's clipped overflow.
  * The payment link is built once, checked to survive that boundary unchanged, exposed by name, and its symbol is encoded from that one value, so the view model's own {@link InvoiceViewModel.paymentLink}, the term that displays it, and the encoded payload are one string rather than three spellings that happen to agree: a legal invoice's link always fits the encoder's widest symbol, so the two throws those boundaries can raise (`PaymentLinkError`, `RangeError`) are unreachable from a validated invoice and surface only for one a caller assembled by hand.
  * The optional icon is armed here, once, by the icon leaf's `svgDataUrl`: the value is the leaf's own data URL, which is the type every image sink accepts, so the on-screen document and the PDF read one prepared value rather than each building a URL of its own; that call runs the icon gate itself, so it throws the gate's own `TypeError` or `InvalidIconError` for a value the gate refuses, none of which is reachable from a validated invoice — whose `icon` the model already gated to an accepted canonical document — so, like the link boundary's throws above, they surface only for an invoice a caller assembled by hand.
- * The paid record's own terms are read from the invoice's validated record: the hash in the one stored spelling, held fail closed by {@link paidHashText} like every other value a payer copies out, and the day as the document's own deterministic date, labelled as the day the payment was recorded rather than a settlement date. The hash is marked `verbatim`, because a payer copies it into a block explorer or a wallet, while the recorded day is not: a date is read, not copied into anything that acts on it.
+ * The paid record's own terms are read from the invoice's validated record: the hash in the one stored spelling, withheld by {@link paidHashTerm} when the display boundary cannot carry it rather than failing the document every other part of which still draws, and the day as the document's own deterministic date, labelled as the day the payment was recorded rather than a settlement date. The hash is marked `verbatim`, because a payer copies it into a block explorer or a wallet, while the recorded day is not: a date is read, not copied into anything that acts on it.
  * The result is frozen; a renderer reads it and draws, it does not re-derive.
  */
 export function buildInvoiceViewModel(invoice: Invoice, today: string): InvoiceViewModel {
@@ -408,7 +412,7 @@ export function buildInvoiceViewModel(invoice: Invoice, today: string): InvoiceV
 			? null
 			: Object.freeze({
 				terms: Object.freeze([
-					Object.freeze({ label: INVOICE_LABELS.paidHash, value: paidHashText(invoice.paid.hash), verbatim: true }),
+					paidHashTerm(invoice.paid.hash),
 					Object.freeze({ label: INVOICE_LABELS.paidDate, value: formatInvoiceDate(invoice.paid.date) }),
 				]),
 			}),

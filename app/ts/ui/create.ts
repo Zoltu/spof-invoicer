@@ -10,7 +10,7 @@
  */
 
 import { ASSETS, assetFamily, isAssetFamily, isSupportedAsset, requireAsset, type Asset, type AssetFamily, type AssetId } from "../assets/registry.js";
-import { AUTHORING_SIZE_REMEDY, AuthoringSizeError, MAX_AUTHORING_JSON_BYTES, MAX_JSON_BYTES, authoringSize } from "../invoice/codec.js";
+import { AUTHORING_SIZE_REMEDY, AuthoringSizeError, MAX_AUTHORING_JSON_BYTES, MAX_JSON_BYTES, authoringSize, overageText, sizeText } from "../invoice/codec.js";
 import { validateIcon } from "../invoice/icon.js";
 import {
 	InvalidInvoiceError,
@@ -698,8 +698,8 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 			return;
 		}
 		shareSizeNote.textContent = hint.fits
-			? `Encoded size: ${hint.bytes} of ${hint.limit} bytes of JSON, the budget a new invoice may use so the recipient can still record the payment; the share link carries about 1.6 characters per byte, and the optional icon is the largest field.`
-			: `Encoded size: ${hint.bytes} bytes — over the ${hint.limit}-byte budget a new invoice may use, which leaves room for the recipient's payment record. ${AUTHORING_SIZE_REMEDY}`;
+			? `Encoded size: ${sizeText(hint.bytes)} of JSON, inside the ${sizeText(hint.limit)} budget a new invoice may use so the recipient can still record the payment; the share link carries about 1.6 characters per byte, and the optional icon is the largest field.`
+			: `Encoded size: ${sizeText(hint.bytes)} of JSON, ${overageText(hint.bytes - hint.limit)} over the ${sizeText(hint.limit)} budget a new invoice may use, which leaves room for the recipient's payment record. ${AUTHORING_SIZE_REMEDY}`;
 		shareSizeNote.setAttribute("class", hint.fits ? "field-hint share-size" : "field-error share-size");
 	}
 
@@ -1025,7 +1025,7 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 				tbody,
 			),
 			addButton,
-			h("p", { class: "field-hint" }, `Up to ${MAX_ITEMS} lines; a new invoice has to leave room for the recipient to record the payment, so its encoded form is held just under the ${MAX_AUTHORING_JSON_BYTES / 1024} KiB share limit.`),
+			h("p", { class: "field-hint" }, `Up to ${MAX_ITEMS} lines; a new invoice has to leave room for the recipient to record the payment, so its encoded form is held just under the ${sizeText(MAX_AUTHORING_JSON_BYTES)} share limit.`),
 		),
 		h(
 			"fieldset",

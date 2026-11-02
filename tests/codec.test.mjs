@@ -42,6 +42,7 @@ import {
 	paidEncodingSize,
 	requirePaidEncodingSize,
 	serializeInvoice,
+	sizeText,
 } from "../app/js/invoice/codec.js";
 import { MAX_ICON_SVG_BYTES } from "../app/js/invoice/icon.js";
 import { WIDEST_PAID_RECORD } from "../app/js/invoice/paid.js";
@@ -1282,7 +1283,7 @@ test("decode accepts exactly the envelope the encoder writes", () => {
 	assert.ok(payload.length <= MAX_PAYLOAD_CHARS, `the payload is ${payload.length} characters, inside the pre-decode guard`);
 	// The encoder refuses it on the smaller authoring budget an unpaid invoice is written under, while the decoder answers the byte cap itself: both bounds are the codec's own, and each names the figure it applied.
 	rejects("encoding it", () => encodeInvoice(oversized), AuthoringSizeError, /too large to share/);
-	rejects("decoding the same bytes", () => decodeInvoice(payload), ShareFormatError, /the share limit is 65536/);
+	rejects("decoding the same bytes", () => decodeInvoice(payload), ShareFormatError, /the share limit is 64 KiB/);
 });
 
 /** The canonical JSON a build wrote when a party's `email` field held a single-line email address: the legacy payload the share format has to keep reading, key order and all. */
@@ -1633,7 +1634,8 @@ test("the encoder itself refuses an unpaid invoice with no room for the payer's 
 	assert.equal(verdict.fits, false, "an invoice past the budget is not one a payee may publish");
 	assert.equal(verdict.limit, budget, "against the budget a new invoice must fit");
 	assert.match(verdict.message, /too large to share/, "in the sentence the form shows");
-	assert.match(verdict.message, new RegExp(String(budget)), "naming the budget it missed");
+	assert.ok(verdict.message.includes(sizeText(budget)), `naming the budget it missed, as the rounded figure a reader can use: ${verdict.message}`);
+	assert.doesNotMatch(verdict.message, /\d\.\d{2,}/, "with no raw byte count divided by 1024 on the page");
 	assert.doesNotMatch(verdict.message, /[Rr]eload/, "and never in the generic reload advice");
 	let refusal = null;
 	try {
@@ -1669,7 +1671,7 @@ test("the share dialog refuses to hand on an invoice with no room for the payer'
 		"sharing a legacy over-budget invoice",
 		() => buildShareBundle(legacy, "https://example.com/app/"),
 		AuthoringSizeError,
-		new RegExp(`past the ${budget} bytes a new invoice may use`),
+		new RegExp(`over the ${sizeText(budget).replace(".", "\\.")} a new invoice may use`),
 	);
 	const roomy = buildShareBundle(MINIMAL, "https://example.com/app/");
 	assert.ok(roomy.url.includes("#/i/"), "an invoice with room still yields a fragment URL");
@@ -1685,6 +1687,7 @@ test("a payment that would outgrow the encode cap is refused with a sentence the
 	assert.equal(refused.limit, MAX_JSON_BYTES, "against the encode cap");
 	assert.match(refused.message, /too large to record a payment against/, "the refusal says what cannot be done");
 	assert.match(refused.message, /Ask the payee for a smaller invoice/, "and who the payer can act on");
+	assert.ok(refused.message.includes(sizeText(MAX_JSON_BYTES)), `and states the cap in the rounded figure every size sentence prints: ${refused.message}`);
 	assert.doesNotMatch(refused.message, /[Rr]eload/, "with no advice to reload a page");
 	let verdictRefusal = null;
 	let encodeRefusal = null;

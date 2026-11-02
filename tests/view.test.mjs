@@ -221,6 +221,29 @@ test("a paid invoice draws the record's own section in place of the payment deta
 		fake.restore();
 	}
 });
+
+test("a paid hash the display boundary cannot carry is withheld instead of failing the document", () => {
+	const fake = installInteractiveDocument();
+	try {
+		const hash = "0x" + "a".repeat(64);
+		const paid = invoiceFor({ paid: { hash, date: "2026-10-03" } });
+		// The record's stored spelling with a zero-width space after it: no family's grammar admits one today, so the case is the guard for the day one does — a throw here would replace the document, its totals and its payment details with one failure sentence.
+		const unshowable = { ...paid, paid: { ...paid.paid, hash: `${hash}\u200b` } };
+		let view;
+		assert.doesNotThrow(() => {
+			view = renderInvoiceView(unshowable, { ...VIEW_OPTIONS, notice: noticeRecorder() });
+		}, "the document still draws");
+		const terms = buildInvoiceViewModel(unshowable, VIEW_OPTIONS.today).paid.terms;
+		assert.equal(terms.length, 2, "both of the record's terms are drawn");
+		assert.match(terms[0].value, /Not shown/, "the hash's term says the hash is withheld");
+		assert.equal(terms[0].value.includes("0x"), false, "rather than printing any part of it");
+		assert.equal(terms[0].verbatim, undefined, "and a value no payer can copy is not offered as one");
+		assert.equal(terms[1].value, formatInvoiceDate("2026-10-03"), "while the day the payment was recorded still draws");
+		assert.equal(byText(view, "button", "Copy").length, 0, "so the document carries no copy control for the withheld hash");
+	} finally {
+		fake.restore();
+	}
+});
 test("the disabled Pay control exposes its reason as visible, described text", () => {
 	const fake = installInteractiveDocument();
 	try {

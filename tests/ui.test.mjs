@@ -18,7 +18,7 @@ import { nextTask } from "./helpers/wait.mjs";
 import { installWindow, mockProvider } from "./helpers/wallet-mock.mjs";
 import { ASSET_FAMILIES, ASSET_REGISTRY } from "../app/js/assets/registry.js";
 import { MAX_CONTACT_CHARS, MAX_CONTACT_LINE_CHARS, MAX_CONTACT_LINES, MAX_DESCRIPTION_CHARS, MAX_EMAIL_CHARS, MAX_ITEMS, computeTotals, createInvoice } from "../app/js/invoice/model.js";
-import { AuthoringSizeError, MAX_JSON_BYTES, encodeInvoice, serializeInvoice } from "../app/js/invoice/codec.js";
+import { AuthoringSizeError, MAX_JSON_BYTES, encodeInvoice, serializeInvoice, sizeText } from "../app/js/invoice/codec.js";
 import { MAX_ICON_SVG_BYTES, validateIcon } from "../app/js/invoice/icon.js";
 import { decodeShare, encodeShare } from "../app/js/invoice/share.js";
 import { parseHash } from "../app/js/app/router.js";
@@ -789,7 +789,8 @@ test("planShare refuses an oversized invoice with a payee-facing message instead
 	assert.equal(plan.kind, "too-large");
 	assert.match(plan.message, /too large to share/);
 	const budget = shareSizeHint(formState()).limit;
-	assert.match(plan.message, new RegExp(String(budget)), "the message names the budget a new invoice may use");
+	assert.ok(plan.message.includes(sizeText(budget)), `the message names the budget a new invoice may use: ${plan.message}`);
+	assert.doesNotMatch(plan.message, /\d\.\d{2,}/, "in the rounded figure a reader can use rather than a raw byte count divided by 1024");
 	assert.doesNotMatch(plan.message, /[Rr]eload/, "and never tells the payee to reload the page");
 });
 
@@ -925,7 +926,7 @@ test("the create form hints and refuses honestly at one byte past the authoring 
 	const plan = planShare(stateAtBytes(budget + 1), "https://example.com/app/");
 	assert.equal(plan.kind, "too-large", "and the submit is refused here rather than by the codec throwing");
 	assert.match(plan.message, /too large to share/);
-	assert.match(plan.message, new RegExp(String(budget)), "the refusal names the budget it missed");
+	assert.ok(plan.message.includes(sizeText(budget)), `the refusal names the budget it missed: ${plan.message}`);
 	assert.match(plan.message, /Remove part of the content/, "with an action the payee can take");
 	assert.doesNotMatch(plan.message, /[Rr]eload/, "and not the generic reload advice");
 	const invoice = createInvoice(invoiceInputFromState(stateAtBytes(budget + 1)));
@@ -1245,6 +1246,9 @@ test("an oversized invoice is refused with a notice instead of an uncaught throw
 		const warning = findAll(view, (node) => node.attributes?.class === "field-error share-size")[0];
 		assert.ok(warning, "the live size hint flags the invoice as over the cap");
 		assert.match(textOf(warning), /over the .* budget a new invoice may use/);
+		const budget = shareSizeHint(formState()).limit;
+		assert.match(textOf(warning), new RegExp(`over the ${sizeText(budget).replace(".", "\\.")} budget`), `the live hint names the budget a new invoice may use in its rounded form: ${textOf(warning)}`);
+		assert.doesNotMatch(textOf(warning), /\d\.\d{2,}/, "and prints no figure more precise than a reader can use");
 	} finally {
 		fake.restore();
 	}

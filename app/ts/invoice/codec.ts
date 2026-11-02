@@ -233,9 +233,28 @@ export type SizeVerdict =
  */
 export const AUTHORING_SIZE_REMEDY = "Remove part of the content — the optional icon is the largest field, and line descriptions and notes come next — then try again.";
 
+/**
+ * A byte count as this module's size copy states it, e.g. `63.9 KiB`.
+ *
+ * The share budgets and the invoices measured against them are tens of kilobytes, so one decimal of a KiB is as precise as a reader can use in a sentence, and the `.0` a whole number of kibibytes would carry is dropped rather than printed.
+ * The rounding is also why this figure is never stated twice in one comparison: two sizes within about fifty bytes of each other print the same, so a sentence that has to say how far past a budget an invoice is states that distance through {@link overageText} rather than as this figure either side of the budget.
+ */
+export function sizeText(bytes: number): string {
+	return `${(bytes / 1024).toFixed(1).replace(/\.0$/, "")} KiB`;
+}
+
+/**
+ * How far one size exceeds another, in the unit that reads best at that magnitude: bytes while a count of them stays short, and {@link sizeText}'s kibibytes above that.
+ * The small case is the reason this is a second function: a payee one byte past a budget reads `1 byte`, which no rounding of a kibibyte figure can say.
+ */
+export function overageText(bytes: number): string {
+	if (bytes < 1024) return `${bytes} ${bytes === 1 ? "byte" : "bytes"}`;
+	return sizeText(bytes);
+}
+
 /** The sentence a payee reads when an unpaid invoice outgrows {@link MAX_AUTHORING_JSON_BYTES}: one statement for the verdict, the refusal class, and the encoder. */
 function authoringTooLargeMessage(bytes: number): string {
-	return `The invoice is too large to share: its encoded form needs ${bytes} bytes of JSON, past the ${MAX_AUTHORING_JSON_BYTES} bytes a new invoice may use — the difference is the room the recipient's payment record needs. ${AUTHORING_SIZE_REMEDY}`;
+	return `The invoice is too large to share: its encoded form is ${overageText(bytes - MAX_AUTHORING_JSON_BYTES)} over the ${sizeText(MAX_AUTHORING_JSON_BYTES)} a new invoice may use — the difference is the room the recipient's payment record needs. ${AUTHORING_SIZE_REMEDY}`;
 }
 
 /**
@@ -244,7 +263,7 @@ function authoringTooLargeMessage(bytes: number): string {
  * It names who can act — the payee, by sending a smaller invoice — because nothing the payer changes makes the record fit.
  */
 function paidTooLargeMessage(bytes: number): string {
-	return `This invoice is too large to record a payment against: with the payment added, its encoded form needs ${bytes} bytes of JSON, past the ${MAX_JSON_BYTES}-byte share limit. Ask the payee for a smaller invoice — one with a shorter icon, fewer line items, or shorter descriptions — and pay that one.`;
+	return `This invoice is too large to record a payment against: with the payment added, its encoded form is ${overageText(bytes - MAX_JSON_BYTES)} over the ${sizeText(MAX_JSON_BYTES)} share limit. Ask the payee for a smaller invoice — one with a shorter icon, fewer line items, or shorter descriptions — and pay that one.`;
 }
 
 /**
@@ -400,7 +419,7 @@ function decodePayload(payload: string): Invoice {
 	}
 	// The decode bound is the one wire cap, and it is deliberately not the encoder's authoring budget: a link an older copy wrote between the two figures still opens and renders here, and only writing it again is refused.
 	if (bytes.length > MAX_JSON_BYTES) {
-		throw new ShareFormatError(`the payload is ${bytes.length} bytes of JSON — the share limit is ${MAX_JSON_BYTES}; trim free text or split the invoice`);
+		throw new ShareFormatError(`the payload is ${bytes.length} bytes of JSON — the share limit is ${sizeText(MAX_JSON_BYTES)}; trim free text or split the invoice`);
 	}
 	let json: string;
 	try {
