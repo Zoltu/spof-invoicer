@@ -1,3 +1,4 @@
+# Security and Privacy over Features (SPOF) - Decentralized invoicing
 
 Make an invoice in your browser, share it as a link, and get paid in crypto.
 
@@ -14,7 +15,7 @@ There is nothing to install and no account to create.
 - Share the invoice as a link or a copy-paste code.
 - Let the person you bill see a clean invoice with a scannable QR code and a payment link.
 - Save the invoice as a PDF.
-- Mark an invoice as paid, save the paid version as a PDF, and send that link back to whoever invoiced you.
+- Mark the invoice as paid, send the paid invoice back to the person you bill, and save it as a PDF.
 - Pay from a crypto wallet (Ethereum, USDC, USDT).
 - Show a QR code the person you bill can scan to pay in Zcash or Monero.
 
@@ -40,7 +41,7 @@ There is nothing to install and no account to create.
 - Invoice text is always shown as plain text, so a link cannot add code to the page.
 - Payee entered text never turns into bold or italics, because a link can come from anyone.
 - You get the transaction hash, the code the wallet gives back for the payment, instead of an external link that looks up the payment.
-- A paid record is whatever its author says it is: the app cannot verify the payment, so the transaction hash is the only evidence either way, and a payee can add a record the same way a payer can.
+- The app cannot check a payment against the network, so it takes a paid record as given: the transaction hash is the only record the person you bill provides, and they can add a record the same way you can.
 - Every option weighed for address verification, a double-payment guard, blockies avatars, and a local address book is written down in the [Payment Safety Design Memo](docs/design/payment-safety-memo.md), each claim labelled as verified here, reported from an external source, unverified, or an accepted risk, including what the app deliberately does not build.
 
 ## Open the app
@@ -60,7 +61,7 @@ The link that serves the app from your own node is the one where that website an
 
 ## Screenshots
 
-These images are illustrative rather than produced by the build: nothing in this repository captures or refreshes them, so they can lag the interface they show — the address sizing on the shared invoice and the payment panel's copy controls are changes they predate.
+These images are illustrative rather than produced by the build: nothing in this repository captures or refreshes them, so they can lag the interface they show — the address sizing on the shared invoice, the payment panel's copy controls, and the paid invoice surface are changes they predate.
 The app as it runs is the record of what it renders today.
 
 ![The invoice form with a business name, two line items, and a total.](docs/screenshots/create-invoice.png)

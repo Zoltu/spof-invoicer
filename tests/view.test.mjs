@@ -14,7 +14,7 @@ import { readSymbol } from "./helpers/qr-reader.mjs";
 import { findAll, hasClass, inputValues, paymentValues, walk, textOf } from "./helpers/tree.mjs";
 import { unifiedOfBytes } from "./helpers/unified-address.mjs";
 import { ASSETS, SUPPORTED_CHAIN_IDS } from "../app/js/assets/registry.js";
-import { encodeInvoice } from "../app/js/invoice/codec.js";
+import { encodeInvoice, paidEncodingSize, requirePaidEncodingSize } from "../app/js/invoice/codec.js";
 import { MAX_EMAIL_CHARS, createInvoice } from "../app/js/invoice/model.js";
 import { buildPaymentLink } from "../app/js/payment/links.js";
 import { parseHash } from "../app/js/app/router.js";
@@ -34,7 +34,6 @@ import { h } from "../app/js/util/dom.js";
 import { encodeQr } from "../app/js/util/qr.js";
 import { svgDataUrl } from "../app/js/util/svg-data-url.js";
 import { MAX_ZCASH_ADDRESS_LENGTH } from "../app/js/wallet/zcash-address.js";
-import { PaidInvoiceTooLargeError } from "../app/js/invoice/codec.js";
 import { markPaid } from "../app/js/invoice/model.js";
 import { decodeShare } from "../app/js/invoice/share.js";
 import { createMarkPaidDialog } from "../app/js/ui/mark-paid.js";
@@ -174,15 +173,16 @@ test("a paid invoice draws the record's own section in place of the payment deta
 		assert.equal(byText(view, "button", "Pay").length, 0, "no Pay control is offered on a paid invoice");
 		assert.equal(findAll(view, (node) => hasClass(node, "payment-qr")).length, 0, "no QR block is drawn");
 		assert.equal(byText(view, "button", "Copy Payment link").length, 0, "the payment link copy control is absent");
-		assert.equal(byText(view, "button", "Copy Transaction").length, 1, "the record hash carries its own copy control");
-		const hashText = findAll(view, (node) => textOf(node) === hash);
-		assert.equal(hashText.length, 1, "the hash is drawn once");
+		const copy = byText(view, "button", "Copy");
+		assert.equal(copy.length, 1, "the record hash carries the same copy control every other verbatim value carries");
+		assert.equal(copy[0].attributes["aria-label"], "Copy Transaction hash", "named for the term it hands over, as the panel's receipt control is");
+		assert.deepEqual(paymentValues(view), [hash], "the hash is the one verbatim value the document draws, and nothing draws it a second time");
 		// A paid document states an amount rather than an amount owed: nothing on the page may invite a payer to send the payment the record reports.
 		assert.equal(byText(view, "th", "Total due").length, 0, "the totals block does not call the figure due");
 		assert.equal(byText(view, "th", "Total").length, 1, "and names the amount instead");
 		const note = findAll(view, (node) => hasClass(node, "paid-unverified"))[0];
 		assert.ok(note, "the unverified note is present");
-		assert.match(textOf(note), /This page records a payment the payer reported/, "the note states the record unverified nature");
+		assert.match(textOf(note), /This payment was reported by the recipient/, "the note states the record unverified nature");
 		const badge = findAll(view, (node) => hasClass(node, "status-badge"))[0];
 		assert.equal(textOf(badge), "Reported", "the badge names what the document holds, never a settlement");
 		assert.ok(hasClass(badge, "status-paid"));
@@ -191,6 +191,18 @@ test("a paid invoice draws the record's own section in place of the payment deta
 		assert.ok(payment, "the paid section is drawn");
 		assert.ok(!hasClass(payment, "no-print"), "the paid section prints");
 		assert.ok(!hasClass(badge, "no-print"), "the paid badge prints");
+		// The printed page's own presentation of the hash: print.css drops the on-screen run and shows the twin in its place, so the twin is the only way the record reaches paper whole.
+		const printCss = readFileSync(join(root, "app/stylesheets/print.css"), "utf8");
+		const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+		const twins = findAll(payment, (node) => hasClass(node, "payment-value-print"));
+		assert.equal(twins.length, 1, "the record's hash carries a print-only twin, the same span twin every other verbatim value carries");
+		assert.equal(textOf(twins[0]), hash, "holding the record's whole hash rather than a run a print engine would clip at the column's edge");
+		assert.deepEqual(inputValues(payment), [], "and no value in the section is a form control, so the twin is text print.css can size");
+		assert.deepEqual(
+			printRungs(twins[0]),
+			[expectedPrintRung(printCss, invoiceCss, FIT_RUNGS, hash.length)],
+			"at the print rung the hash's own length earns in the column print.css and invoice.css give it",
+		);
 		const document = findAll(view, (node) => hasClass(node, "invoice-document"))[0];
 		const headings = findAll(document, (node) => /^h[1-6]$/.test(node.tagName));
 		assert.deepEqual(
@@ -2515,7 +2527,7 @@ test("the payment panel's mark-paid shortcut closes the panel and hands the wall
 		await drain();
 		await drain();
 		await drain();
-		const markPaid = byText(panel.element, "button", "Mark this invoice paid with this hash")[0];
+		const markPaid = byText(panel.element, "button", "Mark invoice as paid with this hash")[0];
 		assert.ok(markPaid, "the sent frame offers the mark-paid shortcut");
 		markPaid.dispatch("click", { type: "click" });
 		assert.deepEqual(paid, [TX_HASH], "the wallet's hash travels to the onPaid egress");
@@ -2547,19 +2559,23 @@ test("the manual mark-paid dialog rejects a malformed hash and does not call onP
 test("the manual mark-paid dialog surfaces the size refusal's actionable sentence", () => {
 	const fake = installInteractiveDocument();
 	try {
-		const message = "The invoice is too large to share: its encoded form needs 70000 bytes of JSON, past the 65536 bytes a paid invoice may use. Trim free text or split the invoice.";
-		let paid = null;
-		const dialog = createMarkPaidDialog(invoiceFor(), "2026-10-03", {
-			onPaid: () => { throw new PaidInvoiceTooLargeError(message); },
+		// The sentence is the codec's own, raised by the egress the shell wires, so the case pins the paid-size refusal rather than a look-alike: the authoring refusal names a different remedy, and a fragment of either would pass whatever sentence the dialog happened to show.
+		const oversized = invoiceFor({ items: Array.from({ length: 200 }, () => line({ description: "x".repeat(500) })) });
+		const record = { hash: "0x" + "ab".repeat(32), date: "2026-10-03" };
+		const verdict = paidEncodingSize(oversized, record);
+		assert.equal(verdict.fits, false, "the fixture is past the wire cap once the payment record is added");
+		const dialog = createMarkPaidDialog(oversized, "2026-10-03", {
+			onPaid: (hash) => requirePaidEncodingSize(oversized, { hash, date: "2026-10-03" }),
 		});
 		const input = findAll(dialog.element, (node) => node.tagName === "input")[0];
-		input.value = "0x" + "ab".repeat(32);
+		input.value = record.hash;
 		const form = findAll(dialog.element, (node) => node.tagName === "form")[0];
 		form.dispatch("submit", { type: "submit" });
-		assert.equal(paid, null, "the egress refused the mark");
 		const error = findAll(dialog.element, (node) => hasClass(node, "field-error"))[0];
 		assert.ok(error, "the dialog states the refusal beside the field");
-		assert.match(textOf(error), /Trim free text or split the invoice/, "the payer reads the sentence they can act on");
+		assert.equal(textOf(error), verdict.message, "the payer reads the codec's paid-size sentence whole, not a fragment of it");
+		assert.match(textOf(error), /^This invoice is too large to record a payment against/, "which says what cannot be done");
+		assert.match(textOf(error), /Ask the payee for a smaller invoice/, "and whose action clears it");
 	} finally {
 		fake.restore();
 	}

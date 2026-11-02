@@ -38,7 +38,7 @@ import {
 } from "../wallet/payment.js";
 import type { ClipboardLike } from "./clipboard.js";
 import { FIT_CUE_CLASS, FIT_SCALE_CLASS, fitValue, type LayoutProbe, type TermFitting } from "./fit-value.js";
-import { UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
+import { PAYMENT_RECORD_FAILED_MESSAGE, UNSUPPORTED_WALLET_MESSAGE } from "./messages.js";
 import { networkLabel } from "./network-labels.js";
 import type { NoticeApi, NoticeTone } from "./notice.js";
 import { openOverlay, type OverlayHandle } from "./overlay.js";
@@ -475,7 +475,7 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 	 * A size refusal carries the sentence the payer can act on, and the notice region states it after the panel closes; the failure itself goes to the console rather than to the payer.
 	 */
 	function markPaidButton(receipt: PaymentReceipt): HTMLElement {
-		const button = h("button", { type: "button", class: "btn btn-primary pay-mark-paid" }, "Mark this invoice paid with this hash");
+		const button = h("button", { type: "button", class: "btn btn-primary pay-mark-paid" }, "Mark invoice as paid with this hash");
 		button.addEventListener("click", () => {
 			close();
 			if (options.onPaid === undefined) return;
@@ -488,7 +488,7 @@ function buildPayDialog(invoice: Invoice, key: string, options: PayPanelOptions,
 					return;
 				}
 				reportInternalFailure("payment panel mark-paid", error);
-				notice.showNotice("The payment could not be recorded. Reload the page and try again.", "error");
+				notice.showNotice(PAYMENT_RECORD_FAILED_MESSAGE, "error");
 			}
 		});
 		return button;

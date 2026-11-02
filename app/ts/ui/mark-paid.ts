@@ -11,13 +11,14 @@
  * This module supplies the dialog's content and its close controls, and it subscribes to nothing, so it states `NOTHING_TO_RELEASE` (`ui/release.ts`).
  */
 
-import { requireAsset, requireAssetFamily } from "../assets/registry.js";
+import { requireAsset, requireAssetFamily, type AssetId } from "../assets/registry.js";
 import { PaidInvoiceTooLargeError } from "../invoice/codec.js";
 import type { Invoice } from "../invoice/model.js";
 import { InvalidPaidRecordError, paidHashForm, validatePaidRecord } from "../invoice/paid.js";
 import { h } from "../util/dom.js";
 import { boundMessage, reportInternalFailure } from "../util/errors.js";
-import { UNVERIFIED_PAYMENT_NOTE } from "./messages.js";
+import { FIELD_MESSAGE_MAX } from "./constants.js";
+import { PAYMENT_RECORD_FAILED_MESSAGE, UNVERIFIED_PAYMENT_NOTE } from "./messages.js";
 import { createOverlay, openOverlay, type OverlayHandle } from "./overlay.js";
 import { formatInvoiceDate } from "./presentation.js";
 import { NOTHING_TO_RELEASE, releasable, type ReleasableElement } from "./release.js";
@@ -25,26 +26,27 @@ import { NOTHING_TO_RELEASE, releasable, type ReleasableElement } from "./releas
 /** Hand the canonical hash the payer typed to the surface that builds the paid link. */
 export type MarkPaidHandler = (hash: string) => void;
 
-/** Options for the mark-paid dialog: the one egress the confirm hands its canonical hash to. */
+/** Options for the mark-paid dialog: the one egress the confirm hands its canonical hash to, and the optional close report. */
 export interface MarkPaidDialogOptions {
 	readonly onPaid: MarkPaidHandler;
+	/** Called once the dialog has closed, so the surface that opened it can clear the handle it holds. */
+	readonly onClose?: () => void;
 }
 
 /** A mounted (or mountable) mark-paid dialog: the element plus the one way to dismiss it. */
 export type MarkPaidDialogHandle = OverlayHandle;
 
-/** The longest field message this dialog shows, matching the bound the create form's fields use. */
-const FIELD_MESSAGE_MAX = 300;
-
-/** The dialog's title, matching the action row's wording. */
-const MARK_PAID_TITLE = "Mark this invoice paid";
+/**
+ * The dialog's title and accessible name, stating the record as the payer's report rather than a confirmed payment.
+ *
+ * The title frames the action as recording what the payer reports, so the dialog's heading and its `aria-label` cannot present the record as a verification the app cannot perform.
+ */
+export const MARK_PAID_TITLE = "Mark invoice as paid";
 
 /** The hint beside the hash field, naming the asset family's own spelling from `invoice/paid.ts`'s table so a hint cannot offer a shape the validator refuses. */
-function hashHint(invoice: Invoice): string {
-	const form = paidHashForm(requireAssetFamily(requireAsset(invoice.asset)));
-	const prefix = form.prefixes.length === 0
-		? " It carries no prefix."
-		: ` It begins with ${form.prefixes.join(" or ")}.`;
+export function hashHint(asset: AssetId): string {
+	const form = paidHashForm(requireAssetFamily(requireAsset(asset)));
+	const prefix = form.prefixes.length === 0 ? " It carries no prefix." : ` It begins with ${form.prefixes.join(" or ")}.`;
 	return `Enter the ${form.characters}-character ${form.name}.${prefix}`;
 }
 
@@ -58,21 +60,21 @@ function hashLabel(invoice: Invoice): string {
  * Build the mark-paid dialog and wire its dismissal and its focus containment.
  *
  * The element is returned rather than mounted, so a test can drive it against a fake document.
- * Escape, the close button, the cancel button, and a click on the backdrop all route through the same idempotent `close` — mounting, background inertness, and focus restoration are {@link openMarkPaidDialog}'s job.
+ * Escape, the close button, the Done button, and a click on the backdrop all route through the same idempotent `close`; mounting, background inertness, and focus restoration are {@link openMarkPaidDialog}'s job, which delegates them to `ui/overlay.ts`.
  * Every string is a text child, never markup.
  */
 export function createMarkPaidDialog(invoice: Invoice, today: string, options: MarkPaidDialogOptions): MarkPaidDialogHandle {
-	return createOverlay((close) => buildMarkPaidDialog(invoice, today, options, close), { initialFocus: "#mark-paid-hash" });
+	return createOverlay((close) => buildMarkPaidDialog(invoice, today, options, close), { initialFocus: "#mark-paid-hash", onClose: options.onClose });
 }
 
 /**
- * Open the mark-paid dialog over the page: build it, mount it on `document.body`, hide the page behind it from assistive tech and pointer/keyboard focus, move focus into the hash field, and on close remove it, un-hide the page, and return focus to whatever had it.
+ * Open the mark-paid dialog over the page through `ui/overlay.ts`, which owns the modal mechanics — the backdrop, Escape, the Tab trap, background hiding, and focus restoration — so this module supplies only the dialog's content and close controls.
  */
 export function openMarkPaidDialog(invoice: Invoice, today: string, options: MarkPaidDialogOptions): MarkPaidDialogHandle {
-	return openOverlay((close) => buildMarkPaidDialog(invoice, today, options, close), { initialFocus: "#mark-paid-hash" });
+	return openOverlay((close) => buildMarkPaidDialog(invoice, today, options, close), { initialFocus: "#mark-paid-hash", onClose: options.onClose });
 }
 
-/** The dialog's own element: its hash field, its hint and error, its read-only recorded day, and its confirm and cancel controls. */
+/** The dialog's own element: its hash field, its hint and error, its read-only recorded day, and its confirm and Done controls. */
 function buildMarkPaidDialog(invoice: Invoice, today: string, options: MarkPaidDialogOptions, close: () => void): ReleasableElement {
 	const inputId = "mark-paid-hash";
 	const hintId = "mark-paid-hash-hint";
@@ -84,7 +86,7 @@ function buildMarkPaidDialog(invoice: Invoice, today: string, options: MarkPaidD
 		class: "mark-paid-input",
 		"aria-describedby": `${hintId} ${errorId}`,
 	});
-	const hint = h("p", { class: "field-hint", id: hintId }, hashHint(invoice));
+	const hint = h("p", { class: "field-hint", id: hintId }, hashHint(invoice.asset));
 	const error = h("p", { class: "field-error", id: errorId, role: "alert", hidden: "" }, "");
 	const recorded = h("p", { class: "field-hint" }, `Recorded ${formatInvoiceDate(today)}.`);
 	const note = h("p", { class: "field-hint" }, UNVERIFIED_PAYMENT_NOTE);
@@ -101,7 +103,7 @@ function buildMarkPaidDialog(invoice: Invoice, today: string, options: MarkPaidD
 				return;
 			}
 			reportInternalFailure("mark-paid dialog validation", failure);
-			error.textContent = "The payment could not be recorded. Reload the page and try again.";
+			error.textContent = PAYMENT_RECORD_FAILED_MESSAGE;
 			error.removeAttribute("hidden");
 			return;
 		}
@@ -117,7 +119,7 @@ function buildMarkPaidDialog(invoice: Invoice, today: string, options: MarkPaidD
 				return;
 			}
 			reportInternalFailure("mark-paid dialog egress", failure);
-			error.textContent = "The payment could not be recorded. Reload the page and try again.";
+			error.textContent = PAYMENT_RECORD_FAILED_MESSAGE;
 			error.removeAttribute("hidden");
 			return;
 		}
@@ -138,11 +140,11 @@ function buildMarkPaidDialog(invoice: Invoice, today: string, options: MarkPaidD
 		submit();
 	});
 
-	const closeButton = h("button", { type: "button", class: "btn-icon dialog-close", "aria-label": "Close" }, "×");
+	const closeButton = h("button", { type: "button", class: "btn-icon dialog-close", "aria-label": "Close payment dialog" }, "×");
 	closeButton.addEventListener("click", close);
-	const cancel = h("button", { type: "button", class: "btn btn-secondary" }, "Cancel");
-	cancel.addEventListener("click", close);
-	const confirm = h("button", { type: "button", class: "btn btn-primary" }, "Mark as paid");
+	const done = h("button", { type: "button", class: "btn btn-secondary" }, "Done");
+	done.addEventListener("click", close);
+	const confirm = h("button", { type: "button", class: "btn btn-primary" }, MARK_PAID_TITLE);
 	confirm.addEventListener("click", submit);
 
 	return releasable(
@@ -151,7 +153,7 @@ function buildMarkPaidDialog(invoice: Invoice, today: string, options: MarkPaidD
 			{ class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": MARK_PAID_TITLE },
 			h("div", { class: "dialog-header" }, h("h2", { class: "dialog-title" }, MARK_PAID_TITLE), closeButton),
 			h("div", { class: "dialog-body" }, note, form),
-			h("div", { class: "dialog-footer" }, cancel, confirm),
+			h("div", { class: "dialog-footer" }, done, confirm),
 		),
 		NOTHING_TO_RELEASE,
 	);

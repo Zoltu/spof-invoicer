@@ -295,7 +295,7 @@ test("a paid invoice draws the record's figures in place of the payment details"
 	const pages = buildInvoicePages(view, METRICS);
 	assert.equal(pages.length, 1);
 	const text = textOps(pages[0]).join("\n");
-	for (const fragment of ["REPORTED", "PAYMENT REPORTED", "TRANSACTION", hash, "RECORDED", "3 Oct 2026"]) {
+	for (const fragment of ["REPORTED", "PAYMENT REPORTED", "TRANSACTION HASH", hash, "RECORDED", "3 Oct 2026"]) {
 		assert.ok(text.includes(fragment), "the paid layout is missing " + JSON.stringify(fragment));
 	}
 	assert.ok(!text.includes("PAID\n"), "no title or badge in the export reads as a verified settlement");

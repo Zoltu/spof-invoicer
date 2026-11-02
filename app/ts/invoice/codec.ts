@@ -235,7 +235,7 @@ export const AUTHORING_SIZE_REMEDY = "Remove part of the content — the optiona
 
 /** The sentence a payee reads when an unpaid invoice outgrows {@link MAX_AUTHORING_JSON_BYTES}: one statement for the verdict, the refusal class, and the encoder. */
 function authoringTooLargeMessage(bytes: number): string {
-	return `The invoice is too large to share: its encoded form needs ${bytes} bytes of JSON, past the ${MAX_AUTHORING_JSON_BYTES} bytes a new invoice may use — the difference is the room the payer's payment record needs. ${AUTHORING_SIZE_REMEDY}`;
+	return `The invoice is too large to share: its encoded form needs ${bytes} bytes of JSON, past the ${MAX_AUTHORING_JSON_BYTES} bytes a new invoice may use — the difference is the room the recipient's payment record needs. ${AUTHORING_SIZE_REMEDY}`;
 }
 
 /**

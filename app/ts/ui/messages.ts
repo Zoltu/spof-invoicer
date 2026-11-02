@@ -17,15 +17,15 @@ export const UNSUPPORTED_WALLET_MESSAGE = "This invoice is paid by the payment l
  *
  * The record is whatever its author wrote: a transaction hash and a date are a claim about a payment, not a confirmation of one, because nothing in this app can read a chain and nothing here is trusted to.
  * The sentence states that plainly so a payee cannot mistake the record for a verified settlement, and it names the link itself as the reason the claim is only as trustworthy as whoever sent it.
- * It is page-only on purpose: a printed invoice carrying the sentence would be a third artefact disagreeing with both the screen and the exported PDF, and a printed invoice carrying the record without it would present the claim as a confirmation.
- * The constraint this sentence follows is `docs/design/payment-safety-memo.md`'s: nothing in this app can confirm a payment, so the record is stated as the payer's claim and the link is named as the reason its trust is only the sender's.
+ * It is page-only on purpose: the printed page's title already states the record as a payment reported rather than confirmed, so the note is not repeated there; the on-screen page carries it to state the limit plainly.
+ * The constraint this sentence follows is `docs/design/payment-safety-memo.md`'s: nothing in this app can confirm a payment, so the record is stated as the recipient's claim and the link is named as the reason its trust is only the sender's.
  */
-export const UNVERIFIED_PAYMENT_NOTE = "This page records a payment the payer reported. It is unverified: anyone who holds this link can edit it.";
+export const UNVERIFIED_PAYMENT_NOTE = "This payment was reported by the recipient. The app cannot check a payment against the network: anyone who holds this link can edit the invoice.";
 
 /**
  * Reported when an invoice could not be turned into the strings a share dialog offers: a fault this app cannot explain to whoever is sharing, so the failure itself goes to the console and the person reads what they can do about it.
  *
- * The create form's submit and the payer's Share control both report it, so the two surfaces state one sentence rather than two spellings of the same advice.
+ * The create form's submit and the recipient's Share control both report it, so the two surfaces state one sentence rather than two spellings of the same advice.
  */
 export const SHARE_FAILED_MESSAGE = "The invoice could not be shared. Reload the page and try again.";
 
@@ -35,3 +35,11 @@ export const SHARE_FAILED_MESSAGE = "The invoice could not be shared. Reload the
  * The sentence is the message of the error those renderers throw and the failed build is kept on its `cause`, so the console report a developer reads names the stop that failed rather than the render behind it; no catcher here shows a caught message to the payer, so this sentence never reaches the notice region, which states the shell's own fixed sentence for the route that failed (`app/shell.ts`'s `renderGuarded`) and sends the error to `reportInternalFailure`.
  */
 export const VIEW_BUILD_RELEASE_FAILED_MESSAGE = "The view could not be drawn, and something it had already started may still be running. Reload the page to start over.";
+
+/**
+ * Reported when a payment could not be recorded: the mark-paid dialog's validation and egress failures and the payment panel's mark-paid control all state this sentence.
+ *
+ * The sentence states what failed, that something the attempt started may still be running, and the one action that clears it, so the payer knows a reload is what starts over rather than a second attempt.
+ * It is the app's own sentence, never a caught message, because a failure here can carry a validator's echo of a rejected value or an internal path the payer can act on nowhere.
+ */
+export const PAYMENT_RECORD_FAILED_MESSAGE = "The payment could not be recorded, and something it had already started may still be running. Reload the page to start over.";

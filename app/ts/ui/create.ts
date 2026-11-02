@@ -44,12 +44,7 @@ import { buildInvoiceViewModel } from "./presentation.js";
 import { releasable, type ReleasableElement } from "./release.js";
 import { SHARE_FAILED_MESSAGE } from "./messages.js";
 import { buildShareBundle, openShareDialog, type ClipboardLike, type ShareBundle, type ShareDialogHandle } from "./share.js";
-
-/**
- * Upper bound on a field or summary error's rendered length, matching the shell notice's own bound.
- * A model message can embed the rejected value, so the same defensive clip the notice applies is applied here before any error reaches the DOM.
- */
-const FIELD_MESSAGE_MAX = 300;
+import { FIELD_MESSAGE_MAX } from "./constants.js";
 
 /**
  * The hint both contact fields carry.
@@ -63,7 +58,7 @@ const CONTACT_HINT = `Up to ${MAX_CONTACT_LINES} lines, each of at most ${MAX_CO
 /**
  * The hint the bill-to name field carries.
  *
- * The bill-to block is optional as a whole — an invoice with no payer stays valid — while the payer's name is required as soon as the block carries anything else.
+ * The bill-to block is optional as a whole — an invoice with no payer stays valid — while the recipient's name is required as soon as the block carries anything else.
  * That is the requirement {@link requiredFieldErrors} holds, and it is what this hint states: a field whose placeholder called the name optional left a payee who filled the client's contact info to meet the requirement as a post-submit error instead.
  */
 const PAYER_NAME_HINT = "The bill-to block is optional as a whole, but the client name is required as soon as the block carries anything, such as the client's contact info.";
@@ -431,9 +426,9 @@ export function liveLineAmount(state: CreateFormState, index: number): string | 
 /**
  * What the create form does with a submitted form, decided as data rather than thrown.
  *
- * Turning a valid form into a share link can still fail in ways the fields cannot show: the invoice is accepted by the model yet its canonical JSON outgrows the budget a new invoice may use, so the link could be published and then could not be marked paid — `invoice/codec.ts`'s `encodePayload` is what refuses it, so the invariant is the encoder's rather than this form's, and the refusal carries the sentence the payee can act on; the asset's own registry entry builds a link past the byte budget of the largest QR symbol the payer's document draws, which `payment/links.ts`'s `requireLinkBudget` refuses; or building the container throws for some other reason.
+ * Turning a valid form into a share link can still fail in ways the fields cannot show: the invoice is accepted by the model yet its canonical JSON outgrows the budget a new invoice may use, so the link could be published and then could not be marked paid — `invoice/codec.ts`'s `encodePayload` is what refuses it, so the invariant is the encoder's rather than this form's, and the refusal carries the sentence the payee can act on; the asset's own registry entry builds a link past the byte budget of the largest QR symbol the recipient's document draws, which `payment/links.ts`'s `requireLinkBudget` refuses; or building the container throws for some other reason.
  * Returning that decision as a value keeps the submit handler thin and makes the refusals this form can actually reach — the oversized invoice, since it advertises up to {@link MAX_ITEMS} lines of 500 characters each, and the link budget gate — testable without a browser.
- * The budget gate is applied here, where the share is handed out, rather than only where the registry is admitted, so an entry whose widest link outgrows the symbol is refused at the payee's own form instead of reaching the payer as a document that cannot render.
+ * The budget gate is applied here, where the share is handed out, rather than only where the registry is admitted, so an entry whose widest link outgrows the symbol is refused at the payee's own form instead of reaching the recipient as a document that cannot render.
  * Each refusal is classified by class rather than by message: `invoice/codec.ts`'s `AuthoringSizeError` and `payment/links.ts`'s `PaymentLinkBudgetError` are the two a payee's own input can provoke, so each gets its own {@link ShareRefusal} kind and the sentence or action that clears it, while every other throw keeps the generic failure.
  * No branch throws.
  */
@@ -488,9 +483,9 @@ export function planShare(state: CreateFormState, baseUrl: string): SharePlan {
 	if (!outcome.ok) return { kind: "invalid", errors: outcome.errors };
 	const asset = requireAsset(outcome.invoice.asset);
 	try {
-		// The entry's widest link is measured before the share is handed out: the refusal belongs to the payee's form, not to the payer's page.
+		// The entry's widest link is measured before the share is handed out: the refusal belongs to the payee's form, not to the recipient's page.
 		requireLinkBudget(asset);
-		// Building the share encodes the invoice, and the codec refuses an unpaid invoice with no room for the payer's payment record, so this form never has to measure the budget itself.
+		// Building the share encodes the invoice, and the codec refuses an unpaid invoice with no room for the recipient's payment record, so this form never has to measure the budget itself.
 		return { kind: "ready", invoice: outcome.invoice, bundle: buildShareBundle(outcome.invoice, baseUrl) };
 	} catch (error) {
 		return shareFailure(error, asset);
@@ -505,7 +500,7 @@ export interface ShareSizeHint {
 }
 
 /**
- * The size hint the form shows while editing: the encoded byte count and whether it fits the budget a new invoice must leave for the payer's payment record.
+ * The size hint the form shows while editing: the encoded byte count and whether it fits the budget a new invoice must leave for the recipient's payment record.
  *
  * The figures come from `invoice/codec.ts`'s `authoringSize`, the same budget `encodePayload` applies when the share is built, so the hint the payee reads while editing and the refusal a submit earns cannot disagree about the budget or its figure.
  * `null` while the form does not yet parse to a valid invoice, so nothing is measured or shown before there is a shareable invoice to measure.
@@ -703,8 +698,8 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 			return;
 		}
 		shareSizeNote.textContent = hint.fits
-			? `Encoded size: ${hint.bytes} of ${hint.limit} bytes of JSON, the budget a new invoice may use so the payer can still record the payment; the share link carries about 1.6 characters per byte, and the optional icon is the largest field.`
-			: `Encoded size: ${hint.bytes} bytes — over the ${hint.limit}-byte budget a new invoice may use, which leaves room for the payer's payment record. ${AUTHORING_SIZE_REMEDY}`;
+			? `Encoded size: ${hint.bytes} of ${hint.limit} bytes of JSON, the budget a new invoice may use so the recipient can still record the payment; the share link carries about 1.6 characters per byte, and the optional icon is the largest field.`
+			: `Encoded size: ${hint.bytes} bytes — over the ${hint.limit}-byte budget a new invoice may use, which leaves room for the recipient's payment record. ${AUTHORING_SIZE_REMEDY}`;
 		shareSizeNote.setAttribute("class", hint.fits ? "field-hint share-size" : "field-error share-size");
 	}
 
@@ -799,7 +794,7 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 	}
 
 	/**
-	 * Draw the invoice the form just created into this view, through the section the payer's document draws beside it.
+	 * Draw the invoice the form just created into this view, through the section the recipient's document draws beside it.
 	 *
 	 * The replacement is built before the section it replaces is released, so a build that throws leaves the section on screen — its fitting included — exactly as it was, rather than releasing the live section and leaving a visible one unfitted.
 	 * The new section becomes the one this view holds and is mounted before the old one is released, because the release of the section being replaced is the one thing here that can throw: a stop that failed would otherwise strand the fitting of a section this view had built and not yet held, and the throw would leave the submit listener before the share dialog opened.
@@ -1030,7 +1025,7 @@ export function renderCreateView(options: CreateViewOptions): ReleasableElement 
 				tbody,
 			),
 			addButton,
-			h("p", { class: "field-hint" }, `Up to ${MAX_ITEMS} lines; a new invoice has to leave room for the payer to record the payment, so its encoded form is held just under the ${MAX_AUTHORING_JSON_BYTES / 1024} KiB share limit.`),
+			h("p", { class: "field-hint" }, `Up to ${MAX_ITEMS} lines; a new invoice has to leave room for the recipient to record the payment, so its encoded form is held just under the ${MAX_AUTHORING_JSON_BYTES / 1024} KiB share limit.`),
 		),
 		h(
 			"fieldset",

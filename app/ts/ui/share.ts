@@ -2,9 +2,9 @@
  * The share-presentation surface.
  *
  * One invoice becomes two strings — a fragment URL and a standalone base32 blob — and this module owns both how they are built and how they are shown, as a two-option dialog so whoever is sharing can see which one fits how they are sending it.
- * A paid invoice's two strings carry the record the invoice already holds, so the dialog branches on that: the paid body tells the payer to send the link back to whoever invoiced them, and the unverified note the paid document carries is repeated beside both options so the payer cannot copy the link without seeing that the record is only their report.
- * That wording follows `docs/design/payment-safety-memo.md`'s constraint: nothing in this app can confirm a payment, so the dialog states the record as the payer's report and never as a verified settlement.
- * It carries no dependency on the app shell or on any view, so the create flow and the payer view open the same dialog instead of duplicating it, and the `#/i/<base32>` wire format stays sourced from `invoice/share.ts` alone.
+ * A paid invoice's two strings carry the record the invoice already holds, so the dialog branches on that: the paid body tells the recipient to send the link back to whoever invoiced them, and the unverified note the paid document carries is repeated beside both options so the recipient cannot copy the link without seeing that the record is only their report.
+ * That wording follows `docs/design/payment-safety-memo.md`'s constraint: nothing in this app can confirm a payment, so the dialog states the record as the recipient's report and never as a verified settlement.
+ * It carries no dependency on the app shell or on any view, so the create flow and the recipient view open the same dialog instead of duplicating it, and the `#/i/<base32>` wire format stays sourced from `invoice/share.ts` alone.
  * Both strings are written through `invoice/codec.ts`'s guarded encoder, which is where the room a payment record needs is enforced, so an unpaid invoice with none left — a link an older copy wrote before that budget existed — is refused here rather than handed on in a form no payment can be recorded against; `AuthoringSizeError` is that refusal and carries the sentence the reader can act on.
  *
  * The modal behaviour itself — the backdrop, Escape, the Tab trap, hiding the page behind the dialog, and focus restoration — belongs to `ui/overlay.ts`, which the payment panel shares.
@@ -39,7 +39,7 @@ export interface ShareBundle {
 /**
  * Build the two share strings for an invoice.
  *
- * This is the one place a decoded invoice is written again — the payer's document shares what it opened — so the codec's authoring guard is what decides whether it can be: an unpaid invoice with no room for the payer's payment record raises `AuthoringSizeError` here instead of producing a link that could never be marked paid, and the surface that asked reports the sentence the error carries.
+ * This is the one place a decoded invoice is written again — the recipient's document shares what it opened — so the codec's authoring guard is what decides whether it can be: an unpaid invoice with no room for the recipient's payment record raises `AuthoringSizeError` here instead of producing a link that could never be marked paid, and the surface that asked reports the sentence the error carries.
  */
 export function buildShareBundle(invoice: Invoice, baseUrl: string): ShareBundle {
 	return Object.freeze({
@@ -77,9 +77,9 @@ interface ShareOptionCopy {
 /**
  * The verbatim explanation each option block carries, keyed by the field it presents and by whether the invoice carries a payment record.
  *
- * The copy addresses whoever is looking at the dialog — the payee who just built the invoice or the payer who received it — so it says "you" and "the recipient" rather than naming either role, and it avoids internal jargon: a link that only resolves on the sharer's own machine is spelled out without the word "localhost", and the standalone string is described as one long run of letters and digits rather than "base32".
+ * The copy addresses whoever is looking at the dialog — the recipient who just built the invoice or the recipient who received it — so it says "you" and "the recipient" rather than naming either role, and it avoids internal jargon: a link that only resolves on the sharer's own machine is spelled out without the word "localhost", and the standalone string is described as one long run of letters and digits rather than "base32".
  * The unpaid object is byte-identical to the copy this dialog showed before the paid variant existed, so a wording change for a paid invoice cannot drift into the unpaid one.
- * The paid copy tells the payer to send the link back to whoever invoiced them and repeats the unverified note `ui/messages.ts` owns, so the affordance that hands over the paid link cannot hide that the record is the payer's report rather than a confirmation.
+ * The paid copy tells the recipient to send the link back to whoever invoiced them and repeats the unverified note `ui/messages.ts` owns, so the affordance that hands over the paid link cannot hide that the record is the recipient's report rather than a confirmation.
  */
 const SHARE_OPTION_COPY_UNPAID: Readonly<Record<ShareFieldKey, ShareOptionCopy>> = {
 	url: {
@@ -102,7 +102,7 @@ const SHARE_OPTION_COPY_PAID: Readonly<Record<ShareFieldKey, ShareOptionCopy>> =
 		title: "Option 1 — Share the link",
 		body: "Send this link back to whoever invoiced you. It opens the invoice with your payment record attached.",
 		notes: [
-			"This works whenever the tool is at a normal web address. But if you're running it on your own computer, the link only works for you — the payee can't open it. Use Option 2 in that case.",
+			"This works whenever the tool is at a normal web address. But if you're running it on your own computer, the link only works for you — the recipient can't open it. Use Option 2 in that case.",
 			UNVERIFIED_PAYMENT_NOTE,
 		],
 	},

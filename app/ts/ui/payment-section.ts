@@ -12,7 +12,9 @@
  * The fitting is a subscription of its own, so the section returns the `<footer>` it built carrying that release (`ui/release.ts`), and the surface that mounted the section is what runs it: a surface that replaces the section — the create screen rebuilding it for the next invoice — releases the one it is about to discard, and a surface that drops the whole document, as the router replaces the payer's document, carries the section's release on the document it returns.
  * The control's confirmation is a status line with a lifecycle: it is cleared after a pause so the section returns to its uniform resting height, and a repeated copy of the same value blanks the line first and re-sets it, so the change is one an assistive technology announces rather than an identical rewrite it may pass over.
  *
- * When the invoice carries a paid record, this same section is the one place that draws it: the section title names the payment the payer reported rather than a payment received, the record's own terms replace the payment terms, and the payment link's symbol is not drawn. The record's terms carry the transaction hash as one verbatim run with its copy control and the day the payer recorded it, and the section states the record's unverified nature in a page-only note. The change is a branch on the view model's own `paid` field, so the same renderer draws one section for either state and neither surface has a second layout to keep in step.
+ * When the invoice carries a paid record, this same section is the one place that draws it: the section title names the payment the payer reported rather than a payment received, the record's own terms replace the payment terms, and the payment link's symbol is not drawn.
+ * The record's terms carry the transaction hash as one verbatim run with its copy control and the day the payer recorded it, and the section states the record's unverified nature in a page-only note.
+ * The change is a branch on the view model's own `paid` field, so the same renderer draws one section for either state and neither surface has a second layout to keep in step.
  *
  * The print path is given a second presentation of the same string.
  * A print engine cannot be trusted with the on-screen run — it is not allowed to wrap, and the copy control beside it is chrome the print path hides — so each copyable term also carries a print-only twin of its value: the same string as text, which `print.css` swaps in for the value, drawn at the print rung `ui/fit-value.ts` computes from the value's own length and broken only past the print floor, so a printed invoice carries the complete amount, payee address, and payment link of every legal invoice.
@@ -137,7 +139,8 @@ export interface PaymentSectionOptions {
  * The release drains that collector through `ui/release.ts`'s `runReleases`, so one stop that throws cannot strand the subscriptions after it on a section the page has dropped.
  * A release that throws while the section is already unwinding a failed build is surfaced as `ui/messages.ts`'s fixed sentence rather than in the stop's own words, with the failed build kept on the error's `cause`, so the console report names the stop that failed rather than the build behind it; the payer reads the catcher's own fixed sentence for the route, so a stopped subscriber's message, which can carry internal detail, arrives nowhere that is announced.
  *
- * When the view model carries a paid record, the section draws the record's own title and terms in place of the payment title and terms, and no symbol: the record states a transaction and a day, not a link a wallet scans. The unverified note follows the record's terms on the page and carries the `no-print` class, so the printed page states the record without a caution its page cannot print.
+ * When the view model carries a paid record, the section draws the record's own title and terms in place of the payment title and terms, and no symbol: the record states a transaction and a day, not a link a wallet scans.
+ * The unverified note follows the record's terms on the page and carries the `no-print` class, so the printed page states the record without a caution its page cannot print.
  * The wording follows `docs/design/payment-safety-memo.md`'s constraint: nothing in the app can confirm a payment, so the record is presented as the payer's claim rather than a verified settlement.
  */
 export function renderPaymentSection(view: InvoiceViewModel, options: PaymentSectionOptions = {}): ReleasableElement {
@@ -160,7 +163,7 @@ export function renderPaymentSection(view: InvoiceViewModel, options: PaymentSec
 				"footer",
 				{ class: "invoice-payment" },
 				h("h2", { class: "section-title" }, view.labels.paidTitle),
-				h("dl", { class: "payment-list" }, ...view.paid.terms.map((term) => paymentTerm(term, clipboard, fitting, term.verbatim === true))),
+				h("dl", { class: "payment-list" }, ...view.paid.terms.map((term) => paymentTerm(term, clipboard, fitting))),
 				h("p", { class: "paid-unverified no-print" }, UNVERIFIED_PAYMENT_NOTE),
 			);
 		return releasable(element, release);
@@ -184,8 +187,8 @@ export function renderPaymentSection(view: InvoiceViewModel, options: PaymentSec
  * The value element is the one {@link paymentValue} just built and handed back, so the fit is taken against the element itself rather than a search of the row for a class name that could be renamed out from under it, and the scale box it hands back with it is the element that reports a change to the value's drawn font size — the one change the value's own column-wide box cannot report (`ui/fit-value.ts`).
  * A term whose value is handed to the fitting carries `fit-sized`, which states what no rung class can: this row's value is one the ladder sizes. It carries `fit-cue` beside it, because the state a row is built in is a state no measurement has settled, and `ui/fit-value.ts` is the one thing that clears that class, on the one verdict its own measurement takes. A term no wallet takes verbatim carries neither class, because nothing sizes its value and its value wraps rather than scrolls, so nothing can clip it and no cue is owed.
  */
-function paymentTerm(term: InvoicePaymentTermView, clipboard: ClipboardLike | null, fitting: TermFitting, printAsField = false): HTMLElement {
-	const built = paymentValue(term, clipboard, printAsField);
+function paymentTerm(term: InvoicePaymentTermView, clipboard: ClipboardLike | null, fitting: TermFitting): HTMLElement {
+	const built = paymentValue(term, clipboard);
 	const row = h(
 		"div",
 		{ class: built.value === null ? "payment-term" : `payment-term fit-sized ${FIT_CUE_CLASS}` },
@@ -221,7 +224,7 @@ interface PaymentTermValue {
  * The button's accessible name carries the term's label, so two controls reading "Copy" on one document are still told apart.
  * The one flag is what the term's own `verbatim` statement is: the copy control, the print twin, and the PDF's unbroken run all read it, so no surface can disagree about which values a wallet takes.
  */
-function paymentValue(term: InvoicePaymentTermView, clipboard: ClipboardLike | null, printAsField = false): PaymentTermValue {
+function paymentValue(term: InvoicePaymentTermView, clipboard: ClipboardLike | null): PaymentTermValue {
 	if (term.verbatim !== true) {
 		return { children: [h("span", { class: "payment-value payment-value-wrapping" }, term.value)], value: null, scale: null };
 	}
@@ -233,25 +236,16 @@ function paymentValue(term: InvoicePaymentTermView, clipboard: ClipboardLike | n
 		term.value,
 		scale,
 	);
-	const printed = printAsField
-		? h("input", {
-				type: "text",
-				readonly: "",
-				class: `payment-value-print payment-value-print-field ${printFitRung(term.value)}`,
-				value: term.value,
-				"aria-label": term.label,
-			})
-		: h(
-				"span",
-				{ class: `payment-value-print ${printFitRung(term.value)}` },
-				...printedSegments(term.value).map((segment) =>
-					h("span", { class: "payment-value-print-segment" }, h("span", { class: "payment-value-print-run" }, segment)),
-				),
-			);
+	const printed = h(
+		"span",
+		{ class: `payment-value-print ${printFitRung(term.value)}` },
+		...printedSegments(term.value).map((segment) =>
+			h("span", { class: "payment-value-print-segment" }, h("span", { class: "payment-value-print-run" }, segment)),
+		),
+	);
 	// The status is built with no children at all rather than an empty string: `h()` turns a string child into a text node, and the stylesheet's `:empty` rule — what takes the status's reserved full-width row out of flow while it is silent — need not match an element holding one.
 	const status = h("span", { class: "payment-status no-print", role: "status" });
-	// The wording comes from the term itself rather than from comparing its label: the view model states what its control says, so a term added later cannot pick up the record's wording by happening to share its label.
-	const copy = h("button", { type: "button", class: "btn btn-secondary payment-copy no-print", "aria-label": `Copy ${term.label}` }, term.copyText ?? "Copy");
+	const copy = h("button", { type: "button", class: "btn btn-secondary payment-copy no-print", "aria-label": `Copy ${term.label}` }, "Copy");
 	copy.addEventListener("click", copyControlClick(term.value, clipboard, value, status, wallClockTimer));
 	return { children: [value, printed, copy, status], value, scale };
 }

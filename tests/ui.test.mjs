@@ -1658,7 +1658,7 @@ test("no payer- or payee-facing surface cautions that a valid address may be unp
 	assert.match(read, /Payment link/, "and the terms a payer copies from");
 	assert.ok(read.includes("Payment reported"), "the sweep reads the paid section's title, which never claims a verified settlement");
 	assert.ok(read.includes(UNVERIFIED_PAYMENT_NOTE), "and the page-only unverified note");
-	assert.ok(read.includes("Mark this invoice paid"), "and the mark-paid dialog's title");
+	assert.ok(read.includes("Mark invoice as paid"), "and the mark-paid dialog's title");
 	assert.match(read, /send this paid invoice back/, "and the paid share dialog's copy");
 	assert.equal(documents.some((path) => path.endsWith("README.md")), true, "and the top-level README is one of the documents it reads");
 	assert.match(documentProse.join("\n"), /Zcash/, "as is the README's own prose, which names the asset a payee is paid in");
@@ -1691,10 +1691,10 @@ test("the wallet-support guard catches the cautions it exists to catch", () => {
 		"Invoice #INV-2026-0042 is due on 28 Oct 2026.",
 		UNVERIFIED_PAYMENT_NOTE,
 		"Payment reported",
-		"Transaction",
+		"Transaction hash",
 		"Recorded",
 		"There are two ways to send this paid invoice back. Pick the one that fits how you're sending it.",
-		"Mark this invoice paid",
+		"Mark invoice as paid",
 	];
 	for (const sentence of innocuous) {
 		assert.equal(walletSupportCaution(sentence), null, `the guard flagged the app's own copy: ${JSON.stringify(sentence)}`);

@@ -113,14 +113,17 @@ function grammar(form: PaidHashForm): HashGrammar {
 }
 
 /**
+ * The grammar for a privacy-chain transaction id: a bare 32-byte id with no prefix, shared by Zcash and Monero because nothing about the record distinguishes them.
+ */
+const BARE_HASH_GRAMMAR: HashGrammar = grammar({ name: "transaction id", prefixes: Object.freeze([]), characters: HASH_HEX_DIGITS });
+
+/**
  * The families' hash grammars, keyed by the family an invoice names.
  *
  * The two privacy families record the same bare 32-byte id, so they share one form: nothing about the record distinguishes them, and a Monero id and a Zcash id are spelled identically.
  * The map is exhaustive by type, so a family added to `assets/registry.ts` is a compile error here until it states the spelling its transactions carry.
  * The EVM form's width is the same 32-byte width `wallet/eip1193.ts`'s `HASH_PATTERN` checks for a wallet's response; the two are stated separately because this module must accept a bare privacy-chain id and the wallet layer never sees one.
  */
-const BARE_HASH_GRAMMAR: HashGrammar = grammar({ name: "transaction id", prefixes: Object.freeze([]), characters: HASH_HEX_DIGITS });
-
 const HASH_GRAMMARS: Record<AssetFamily, HashGrammar> = Object.freeze({
 	evm: grammar({ name: "transaction hash", prefixes: Object.freeze([EVM_HASH_PREFIX]), characters: MAX_PAID_HASH_CHARS }),
 	zcash: BARE_HASH_GRAMMAR,

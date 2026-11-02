@@ -412,8 +412,10 @@
 	padding-top: 1rem;
 }
 
+/* Paid record ------------------------------------------------------------------------------------ */
+
 /*
- * The note that states the payment is unverified: it belongs to the page alone and is hidden from the print path by the `no-print` class its renderer gives it, so a printed invoice carries neither a caution its page does not print nor a caution it cannot print.
+ * The note that states the payment is unverified: it belongs to the page alone and is hidden from the print path by the `no-print` class its renderer gives it, so a printed invoice omits the caution entirely.
  * The text is set in the document's own sans face at the size of the document's other notes, and coloured with the muted ink so it reads as a qualification of the record above it rather than as a payment value.
  */
 .paid-unverified {
@@ -513,6 +515,7 @@
 /*
  * The fitter sets one of these classes on the row according to the rung it chose, and the rung sets the value's font size and the scroll bar's width; the fitter's own class, `.fit-cue`, states that a value may be cut off where nothing measured it whole.
  * The base rules here hold a verbatim value at a size a column can fit, and the rung classes narrow or widen it from there.
+ * The floor is 10px because `ui/fit-value.ts`'s `FIT_RUNGS` states it as the smallest legible size, so a rung that narrows below it would trade a clipped value for an unreadable one.
  */
 .payment-term.fit-inline-13 .payment-value {
 	font-size: 0.8125rem;
