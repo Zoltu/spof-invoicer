@@ -128,10 +128,17 @@ export function printedLinePx(printCss) {
 }
 
 /**
+ * The `grid-template-columns` tracks a payment list or term may state: the intrinsic `max-content` label column a list sizes from its labels, the single full-width column a narrow section or the printed page takes, and the `subgrid` a term lays over its list's tracks.
+ * A track a label rail is stated in — a length, a percentage, a `minmax` with a floor above zero — is in none of them.
+ */
+const LABEL_TRACKS = ["max-content minmax(0, 1fr)", "minmax(0, 1fr)", "subgrid"];
+
+/**
  * The width of the column a printed payment value is laid out on, in CSS pixels: the page's own content line.
  *
  * A printed payment term stacks its value under its label — `print.css` gives the printed list and term one full-width column and its value the whole of that row — so a twin is laid out on the line `@page` draws, with no label rail between it and the paper's margin to subtract.
- * Every half of that is checked rather than assumed: the print stylesheet must state the single column and the spanning value, and the invoice stylesheet must give the label no stated width and size its shared column from the labels themselves, so a fixed label column creeping back into either file fails here.
+ * Every half of that is checked rather than assumed: the print stylesheet must state the single column and the spanning value, the invoice stylesheet must size its shared label column from the labels themselves, neither stylesheet may give the label a stated width, and neither may state a label track of any other shape on its payment list or term — a rail can be stated on the label or as the list's own first column, so a fixed label column creeping back into either file, on the label or on the list, fails here.
+ * The stated width is swept for in both writings a rail is stated in: the physical properties, and the logical `inline-size` that says the same thing in the writing direction the page runs in.
  */
 export function printedValueColumnPx(printCss, invoiceCss) {
 	const page = printedLinePx(printCss);
@@ -144,10 +151,26 @@ export function printedValueColumnPx(printCss, invoiceCss) {
 	}
 	const stacked = cssRules(printCss).filter((rule) => rule.selectors.includes(".payment-list .payment-term dd") && declaration(rule.body, "grid-column") === "1 / -1");
 	assert.ok(stacked.length > 0, "print.css gives a printed payment term's value the row's whole width, so the column it is laid out on is the page's own content line");
-	const rail = cssRules(invoiceCss).filter(
-		(rule) => rule.selectors.some((selector) => selector.startsWith(".payment-term dt")) && ["width", "min-width", "max-width", "flex-basis"].some((property) => declaration(rule.body, property) !== undefined),
-	);
-	assert.deepEqual(rail.map((rule) => rule.selectors.join(", ")), [], "invoice.css gives the payment term's label no stated width, so no rail is subtracted from the line a printed value is laid out on");
+	const widthProperties = ["width", "min-width", "max-width", "flex-basis", "inline-size", "min-inline-size", "max-inline-size"];
+	const labelSelector = /(?:^|\s)\.payment-term dt$/;
+	for (const [name, css] of [["print.css", printCss], ["invoice.css", invoiceCss]]) {
+		const rail = cssRules(css).filter(
+			(rule) => rule.selectors.some((selector) => labelSelector.test(selector)) && widthProperties.some((property) => declaration(rule.body, property) !== undefined),
+		);
+		assert.deepEqual(rail.map((rule) => rule.selectors.join(", ")), [], `${name} gives the payment term's label no stated width, in the physical or the logical property, so no rail is subtracted from the page's content line a printed value is laid out on`);
+	}
+	// The label's track is the other half of the same rail, and it is stated on the list rather than on the label: a `grid-template-columns` whose first track is a length draws the rail the width properties above cannot reach.
+	const trackSelector = /\.payment-(?:list|term)$/;
+	for (const [name, css] of [["print.css", printCss], ["invoice.css", invoiceCss]]) {
+		const stated = cssRules(css).filter((rule) => rule.selectors.some((selector) => trackSelector.test(selector)) && declaration(rule.body, "grid-template-columns") !== undefined);
+		for (const rule of stated) {
+			const columns = String(declaration(rule.body, "grid-template-columns")).trim();
+			assert.ok(
+				LABEL_TRACKS.includes(columns),
+				`${name} gives ${rule.selectors.join(", ")} no fixed label track: its columns are ${LABEL_TRACKS.join(" or ")}, not ${JSON.stringify(columns)}`,
+			);
+		}
+	}
 	const intrinsic = cssRules(invoiceCss).filter((rule) => String(declaration(rule.body, "grid-template-columns") ?? "").startsWith("max-content "));
 	assert.ok(intrinsic.length > 0, "invoice.css sizes the payment terms' shared label column from the labels themselves — a max-content track — rather than from a stated length");
 	return page;
@@ -160,7 +183,7 @@ export function printedCharactersAt(printCss, invoiceCss, points) {
 
 /**
  * The print rung a value of `characters` length earns on the page `printCss` describes and in the column `invoiceCss` gives it, walking the module's own `ladder`: the largest sized rung whose column holds the value, or the rung that wraps when even the last one does not.
- * The break points come from the stylesheets' geometry — the page block's line less the payment term's own rail and gap — rather than from the module's arithmetic, so a width, a rail, or a unit stated wrongly on the module's side fails a suite rather than being transcribed into it.
+ * The break points come from the stylesheets' geometry — the page block's own content line, which the printed term stacks its value on — rather than from the module's arithmetic, so a width, a stacking rule, or a unit stated wrongly on the module's side fails a suite rather than being transcribed into it.
  */
 export function expectedPrintRung(printCss, invoiceCss, ladder, characters) {
 	for (const rung of ladder.print) {

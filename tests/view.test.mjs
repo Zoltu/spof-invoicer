@@ -1331,7 +1331,7 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		const payment = findAll(view, (node) => hasClass(node, "invoice-payment"))[0];
 		const printed = findAll(payment, (node) => hasClass(node, "payment-value-print"));
 		const amount = model.payment.find((term) => term.label === model.labels.amount).value;
-		assert.equal(amount.length, 79, "the amount fixture is 79 characters, past what the 9pt rung's column holds and inside the next rung's");
+		assert.equal(amount.length, 79, "the amount fixture is 79 characters, inside the column the 9pt rung holds");
 		assert.deepEqual(
 			printed.map((node) => textOf(node)),
 			[address, amount, model.paymentLink],
@@ -1414,6 +1414,9 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 
 		// The rungs the twins carry, derived from the stylesheets' own geometry — the @page block print.css declares, less its margin, which is the line a printed term stacks its value on — rather than from the module's arithmetic, so a units, margin, or stacking error on the module's side fails here instead of being transcribed into the expectation.
 		const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+		// The printed label is the same unbreakable phrase the screen draws: print.css says nothing about how a label's line breaks, so the nowrap invoice.css gives every term's label is what the printed page keeps, and a print rule that reset it would break `TRANSACTION HASH` at its space and set the phrase on two lines above the value.
+		assert.equal(appliedDeclaration(printCss, ".payment-term dt", "white-space"), undefined, "print.css states no line rule of its own for the printed term's label, so it does not reset the label's line to wrapping");
+		assert.equal(appliedDeclaration(invoiceCss, ".payment-term dt", "white-space"), "nowrap", "and invoice.css holds the label on one line, which is the rule the printed page inherits");
 		assert.deepEqual(
 			printed.map(printRungs),
 			[address, amount, model.paymentLink].map((value) => [expectedPrintRung(printCss, invoiceCss, FIT_RUNGS, [...value].length)]),

@@ -27,6 +27,7 @@ import {
 	downloadPdf,
 	exportFontMetrics,
 	invoiceFileName,
+	paymentLabelWidth,
 	renderInvoicePdf,
 	renderPdf,
 	toPdfText,
@@ -1201,6 +1202,50 @@ test("the widest symbol the link layer can produce fits the payment section whol
 		// What pins the bounce is the page count and the single holder asserted above; a fixture tuned to land a point or two above the floor would assert float luck rather than intent.
 		assert.ok(symbolBlockBottom <= FLOOR_TOP, `${fixture}: the symbol's block must stay above the page's content floor: ${symbolBlockBottom} > ${FLOOR_TOP}`);
 	}
+});
+
+test("the payment terms' label column follows the widest label rather than a stated width", async () => {
+	// The labels are the app's own strings rather than invoice text, so the column that separates a label from the value beside it is measured from them: a stated width would be a figure guessed against one face's metrics, and a label wider than it would be drawn over that value.
+	const view = buildInvoiceViewModel(invoiceFor(), "2026-10-03");
+	const metrics = await exportFontMetrics();
+	const column = paymentLabelWidth(view.payment, metrics);
+	const labels = buildInvoicePages(view, metrics)
+		.flatMap((page) => textDraws(page))
+		.filter((op) => view.payment.some((term) => term.label.toUpperCase() === op.text));
+	assert.ok(labels.length >= view.payment.length, `the export draws every payment term's label: ${labels.length} of ${view.payment.length}`);
+	for (const op of labels) {
+		const drawn = metrics.widthOfText(op.text, op.size, op.font);
+		assert.ok(column >= drawn, `the label column holds ${op.text} at the ${drawn} points it is drawn at, inside its ${column} points`);
+	}
+	// The column is the widest label's rather than the first term's: a term whose label is wider than any the invoice states widens it, and one narrower than the widest leaves it where the widest put it.
+	assert.ok(paymentLabelWidth([...view.payment, { ...view.payment[0], label: "A".repeat(40) }], metrics) > column, "a wider label widens the column every term shares");
+	assert.equal(paymentLabelWidth([...view.payment, { ...view.payment[0], label: "A" }], metrics), column, "while a label narrower than the widest is drawn inside the column the widest set");
+
+	// The measured column is what places each value, not a figure of its own: a value drawn beside its label starts the column's own width right of it, which is the widest label plus the gap the function returns, so a renderer that measured a column and then drew its values at an offset of its own fails here while the width function alone stays green.
+	// The same terms are laid out under two faces that measure the labels differently — the export's own metrics and a half-em stand-in — so an offset stated anywhere rather than measured cannot satisfy both.
+	const placements = (fixtureMetrics) => {
+		const draws = buildInvoicePages(view, fixtureMetrics).flatMap((page) => textDraws(page));
+		const lineTop = (op) => PAGE.height - op.y - op.size * BASELINE_ASCENT;
+		const beside = [];
+		for (const term of view.payment) {
+			const label = draws.find((op) => op.text === term.label.toUpperCase());
+			if (label === undefined) continue;
+			const value = draws.find((op) => op.text === term.value && op.font === "mono" && Math.abs(lineTop(op) - lineTop(label)) < 1e-9);
+			if (value === undefined) continue;
+			beside.push({ label: term.label, offset: value.x - label.x });
+		}
+		return { column: paymentLabelWidth(view.payment, fixtureMetrics), beside };
+	};
+	const exported = placements(metrics);
+	const standIn = placements(METRICS);
+	const shared = exported.beside.filter((entry) => standIn.beside.some((other) => other.label === entry.label));
+	assert.ok(shared.length > 0, "at least one term's value is drawn beside its label on the same line, which is the offset the measured column positions");
+	for (const entry of shared) {
+		const other = standIn.beside.find((candidate) => candidate.label === entry.label);
+		assertClose(entry.offset, exported.column, `${entry.label} starts the measured column's own width from its label, the widest label plus the gap`);
+		assertClose(other.offset, standIn.column, `${entry.label} moves with that measurement when the face measures the labels differently`);
+	}
+	assert.notEqual(exported.column, standIn.column, "and the two faces measure the column differently, so no stated offset can satisfy both");
 });
 
 test("the values a payer copies out of the payment details are drawn as single unbroken runs", async () => {

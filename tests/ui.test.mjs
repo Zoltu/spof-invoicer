@@ -46,7 +46,7 @@ import {
 import { FIT_CUE_CLASS, FIT_RUNGS } from "../app/js/ui/fit-value.js";
 import { UNSUPPORTED_WALLET_MESSAGE, UNVERIFIED_PAYMENT_NOTE, OPENED_RECORD_PAYMENT_REFUSAL_MESSAGE } from "../app/js/ui/messages.js";
 import { openPayPanel } from "../app/js/ui/pay.js";
-import { buildInvoiceViewModel } from "../app/js/ui/presentation.js";
+import { INVOICE_LABELS, buildInvoiceViewModel } from "../app/js/ui/presentation.js";
 import { releasable } from "../app/js/ui/release.js";
 import { buildShareBundle, copyText, createShareDialog } from "../app/js/ui/share.js";
 import { createMarkPaidDialog } from "../app/js/ui/mark-paid.js";
@@ -1086,13 +1086,51 @@ test("the create view rendered with no release slot at all still returns an elem
 const MONO_ADVANCE_EM = 0.62;
 
 /**
+ * The column the create screen's preview reserves beside a copyable value, in CSS pixels: the `max-content` first track `.payment-list` declares, which `invoice.css` sizes from the widest label the list spells and states no length for.
+ * `.payment-term dt` states the size and the tracking that label is measured at, and no glyph advance, so this model reads those two declarations out of `invoice.css` and bounds the column from them: one em per character, an upper bound on an uppercase glyph's advance in a proportional sans face, plus the tracking stated after each.
+ */
+function labelTextMeasures() {
+	const css = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const body = ruleBody(css, ".payment-term dt");
+	assert.ok(body !== undefined, "invoice.css declares `.payment-term dt`, the rule the preview's label column is measured from");
+	const size = String(declaration(body, "font-size") ?? "");
+	const tracking = String(declaration(body, "letter-spacing") ?? "");
+	const sizeRem = /^([\d.]+)rem$/.exec(size);
+	const trackingEm = /^([\d.]+)em$/.exec(tracking);
+	assert.ok(sizeRem !== null, "the label states its font size in rem, the unit this model measures it at, not " + JSON.stringify(size));
+	assert.ok(trackingEm !== null, "and its tracking in em against that size, not " + JSON.stringify(tracking));
+	return { fontRem: Number(sizeRem[1]), trackingEm: Number(trackingEm[1]) };
+}
+
+const LABEL_TEXT_MEASURES = labelTextMeasures();
+const LABEL_FONT_REM = LABEL_TEXT_MEASURES.fontRem;
+const LABEL_TRACKING_EM = LABEL_TEXT_MEASURES.trackingEm;
+const WIDEST_LABEL_ADVANCE_EM = 1;
+
+/** The labels the create screen's preview spells in its payment list, in the order `buildInvoiceViewModel` sets them: read from the app's own label map, so a wider label widens this model's column rather than being left out of it. */
+const PREVIEW_TERM_LABELS = [INVOICE_LABELS.asset, INVOICE_LABELS.network, INVOICE_LABELS.paysTo, INVOICE_LABELS.amount, INVOICE_LABELS.paymentLink];
+
+/** The 158.4px the widest of those labels — `PAYMENT LINK`, twelve characters — takes in the list's `max-content` track: its characters at the one-em bound and the tracking, at the label's own `font-size` read above. */
+const PREVIEW_LABEL_COLUMN_PX = Math.max(...PREVIEW_TERM_LABELS.map((label) => [...label].length)) * (WIDEST_LABEL_ADVANCE_EM + LABEL_TRACKING_EM) * LABEL_FONT_REM * 16;
+
+/**
  * The room a copyable value has in the create screen's preview at the two window widths `app.css` lays the page out for, in CSS pixels.
- * At desktop it is the 60rem (960px) `#app` container less its 1.25rem side padding (40px), less the widest label the section spells at its own face (about 148px, the width the engine gives it) and the 0.5rem row gap (8px), less the 3.5rem (56px) the copy control and its own gap occupy: at least 708, stated as 696 so the model never assumes more room than the page gives.
+ * At desktop it is the 60rem (960px) `#app` container less its 1.25rem side padding (40px) and the 3.5rem (56px) the copy control and its own gap occupy — 864 — less the 0.5rem row gap (8px) `.payment-list` declares and the 158.4px label column above: 697, the column the page is sure to give a value rather than one it might not.
  * At the 320px phone width it is the 320px viewport less `#app`'s 0.75rem side padding (24px), less the same 56px copy overhead: 320 - 24 - 56 = 240.
- * The label's width and the gap are not subtracted at the phone width because the term wraps there: the value takes a line of its own and the row's whole width under its label.
+ * The label's width and the gap are not subtracted at the phone width because the preview's section stacks there: the preview draws the payer's own `<footer class="invoice-payment">`, whose `container-type: inline-size` is the container `@container (max-width: 26rem)` reads, and at this window the section is the 296px `#app`'s `0.75rem` side padding leaves of the 320px viewport — below that query's 416px threshold — so `.payment-list` and `.payment-term` take the single column and the value takes the row's whole width under its label.
+ * That stacking is the stylesheet's arrangement of the section the preview draws whole: the phone figure above follows the section's own width query rather than a break this model assumes at a narrower width of its own.
  * Both figures are stated rather than measured, because the suites drive a fake DOM with no CSS: what they model is the column the preview gives a value, and the fit below is the search that column's geometry earns.
  */
-const PREVIEW_VALUE_BOX = { desktop: 696, phone: 240 };
+const PREVIEW_APP_PX = 960;
+const PREVIEW_APP_PADDING_PX = 40;
+const PREVIEW_COPY_OVERHEAD_PX = 56;
+const PREVIEW_ROW_GAP_PX = 8;
+const PREVIEW_PHONE_PX = 320;
+const PREVIEW_PHONE_PADDING_PX = 24;
+const PREVIEW_VALUE_BOX = {
+	desktop: Math.floor(PREVIEW_APP_PX - PREVIEW_APP_PADDING_PX - PREVIEW_COPY_OVERHEAD_PX - PREVIEW_ROW_GAP_PX - PREVIEW_LABEL_COLUMN_PX),
+	phone: PREVIEW_PHONE_PX - PREVIEW_PHONE_PADDING_PX - PREVIEW_COPY_OVERHEAD_PX,
+};
 
 /**
  * A mainnet Monero integrated address — the 106-character form the validator accepts — built the way `wallet/monero-address.ts` reads one: the `0x13` mainnet prefix, a 77-byte body, and the four-byte Keccak-256 checksum over everything before them, in Monero's block-padded base58.
@@ -2343,9 +2381,17 @@ test("the payment terms stack on the payment section's own width, stated in rem 
 		"and it stands under a container query on the section's own width, with its length in rem so the threshold scales with the reader's text size",
 	);
 	const [, threshold] = /^@container \(max-width: ([\d.]+)rem\)$/.exec(stacking[0].at);
-	assert.ok(
-		Number(threshold) > 25,
-		"the threshold lies above the widest label the section spells, the gap beside it, and a workable value column — about 9rem + 0.5rem + 16rem — so a side-by-side row that is in force is never crammed",
+	// The three parts of the threshold: the widest label the section spells in the label's own face (`TRANSACTION HASH`, 9rem), the gap beside it, and the narrowest value column a payment value is worth sharing a line with a label in (16rem).
+	// Only the gap is a declaration a stylesheet states, so it is read from `.payment-list` rather than repeated.
+	// The 9rem is the design's own content measure of `TRANSACTION HASH` — sixteen characters, fifteen letters and a space — in the face `.payment-term dt` states, 0.75rem upper-cased with 0.1em tracking, and the 16rem is the design's own floor for a value column: neither stylesheet states a glyph advance or a value-column floor, and nothing here measures a typeface, so both are the figures the threshold was drawn from rather than measurements this test makes.
+	const gapRem = declaration(ruleBody(invoiceCss, ".payment-list"), "gap");
+	assert.equal(gapRem, "0.5rem", "the row gap the threshold counts is the one the list declares");
+	const narrowestSideBySideRem = 9 + Number(gapRem.slice(0, -3)) + 16;
+	assert.equal(narrowestSideBySideRem, 25.5, "the label, the gap, and the value column need 25.5rem between them before a row may be set side by side");
+	assert.equal(
+		Number(threshold),
+		Math.ceil(narrowestSideBySideRem),
+		"the threshold is the least whole rem above those three parts, so it is the width the layout implies rather than any figure above it",
 	);
 	assert.deepEqual(
 		stacking[0].selectors,

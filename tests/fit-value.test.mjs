@@ -356,7 +356,7 @@ test("a rung whose own measurement overflows is never written, however the propo
 });
 
 test("the print ladder's break points follow print.css's own page geometry and the column it leaves a value", () => {
-	// Every expectation below is derived from the stylesheets that lay a printed value out — the @page block's Letter page less its declared margin, and then the payment term's own label rail and column gap, at 96 CSS pixels to the inch — so a width, a rail, or a units error in the module fails here instead of being transcribed into the expectation.
+	// Every expectation below is derived from the stylesheets that lay a printed value out — the @page block's Letter page less its declared margin, which is the whole line the printed term stacks its value on, at 96 CSS pixels to the inch — so a width, a stacking rule, or a units error in the module fails here instead of being transcribed into the expectation.
 	const sized = FIT_RUNGS.print.filter((entry) => !entry.wraps);
 	assert.equal(sized[sized.length - 1].points, 6, "the ladder stops at the 6pt floor, ordinary fine print");
 	// The twin is laid out on the page's own content line, because the printed term stacks its value under its label: the column the ladder prices is a width the stylesheets state, and the label's own width takes no part in it.
@@ -372,7 +372,7 @@ test("the print ladder's break points follow print.css's own page geometry and t
 	for (const characters of [0, 42, 74, 75, 84, 95, 106, 111, 112, 116, 311]) {
 		assert.equal(printFitRung("x".repeat(characters)), expectedPrintRung(PRINT_CSS, INVOICE_CSS, FIT_RUNGS, characters), `${characters} characters take the rung the printed value's own column earns`);
 	}
-	// The lengths this app's pages actually carry: a Sapling address is 78 characters, which the 8pt rung's column holds, and a Monero integrated address is 106, which the 6pt floor holds.
+	// The lengths this app's pages actually carry: a Sapling address is 78 characters, which the 9pt rung's column holds, and a Monero integrated address is 106, which the 7pt rung's column holds.
 	const wrapRung = FIT_RUNGS.print[FIT_RUNGS.print.length - 1].rung;
 	assert.equal(printFitRung("x".repeat(78)), expectedPrintRung(PRINT_CSS, INVOICE_CSS, FIT_RUNGS, 78), "a 78-character Sapling address stays at the size the column earns");
 	assert.equal(printFitRung("x".repeat(106)), expectedPrintRung(PRINT_CSS, INVOICE_CSS, FIT_RUNGS, 106), "a 106-character Monero integrated address takes the rung the page's own content line earns for it, rather than shrinking past the floor");

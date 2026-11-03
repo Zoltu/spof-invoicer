@@ -1113,8 +1113,9 @@ function layoutPaymentTerms(
  *
  * The labels are the app's own strings rather than invoice text, so this width is bounded by the phrases the model states and can be measured with the face the export embeds; a stated width would be a figure guessed against one face's metrics, and a label wider than it would be drawn over the value beside it.
  * The band a long value takes draws its own label on a line of its own, so it needs no part of this width.
+ * Exported with the figure it states, so a test can hold the column to the labels the section spells rather than to a number restated in the suite.
  */
-function paymentLabelWidth(terms: readonly InvoicePaymentTermView[], metrics: FontMetrics): number {
+export function paymentLabelWidth(terms: readonly InvoicePaymentTermView[], metrics: FontMetrics): number {
 	let widest = 0;
 	for (const term of terms) {
 		widest = Math.max(widest, metrics.widthOfText(toPdfText(term.label.toUpperCase()), SIZE.paymentLabel, "sansBold"));
