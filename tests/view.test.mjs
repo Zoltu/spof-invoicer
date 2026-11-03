@@ -1356,6 +1356,28 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		assert.doesNotMatch(twin, /white-space|overflow-wrap|word-break/, "with no line rule of its own: the rung the twin carries is what decides whether the value may break");
 		assert.doesNotMatch(printCss, /\.payment-value\s*\{/, "while the plain values of terms no wallet takes verbatim stay in the printed document");
 
+		// The printed term stacks on the page's own line. The screen layout's intrinsic label track and its width query are both overridden, because either would put a label rail on paper: the query would read the printed page's width, and the max-content track would set a rail beside the value.
+		assert.equal(
+			appliedDeclaration(printCss, ".invoice-payment .payment-list", "grid-template-columns"),
+			"minmax(0, 1fr)",
+			"print.css gives the printed list one full-width column, so no label rail is subtracted from the line a value is laid out on",
+		);
+		assert.equal(
+			appliedDeclaration(printCss, ".payment-list .payment-term", "grid-template-columns"),
+			"minmax(0, 1fr)",
+			"and the printed term the same, so its label sits on a line of its own",
+		);
+		assert.equal(
+			appliedDeclaration(printCss, ".payment-list .payment-term dd", "grid-column"),
+			"1 / -1",
+			"with the value spanning the row under it, on the page's whole content line",
+		);
+		assert.equal(
+			appliedDeclaration(printCss, ".payment-list .payment-term dd", "flex-basis"),
+			undefined,
+			"and no flex basis standing in for that span, which would mean nothing in a grid row",
+		);
+
 		// The ladder: one rule per rung, the sizes descending to the 6pt floor, and no break allowed before it.
 		// The rungs and their point sizes are read from the module's table, because a printed value is sized from that table and a rule resized on one side alone would leave the page laying out a rung at a size the choice did not assume.
 		const sizedPrint = FIT_RUNGS.print.filter((entry) => !entry.wraps);
@@ -1390,7 +1412,7 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 			}
 		}
 
-		// The rungs the twins carry, derived from the stylesheets' own geometry — the @page block print.css declares, less its margin, and then the payment term's own label rail and gap, which is the column a twin is laid out in — rather than from the module's arithmetic, so a units, margin, or rail error on the module's side fails here instead of being transcribed into the expectation.
+		// The rungs the twins carry, derived from the stylesheets' own geometry — the @page block print.css declares, less its margin, which is the line a printed term stacks its value on — rather than from the module's arithmetic, so a units, margin, or stacking error on the module's side fails here instead of being transcribed into the expectation.
 		const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
 		assert.deepEqual(
 			printed.map(printRungs),
@@ -1399,7 +1421,7 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		);
 		assert.deepEqual(printRungs(printed[0]), ["print-fit-wrap"], "the 311-character address is past the print floor and wraps");
 		assert.deepEqual(printRungs(printed[2]), ["print-fit-wrap"], "as is the 404-character link that carries it");
-		assert.deepEqual(printRungs(printed[1]), [expectedPrintRung(printCss, invoiceCss, FIT_RUNGS, [...amount].length)], "while the 79-character amount takes the rung the narrower printed column's own geometry earns for it");
+		assert.deepEqual(printRungs(printed[1]), [expectedPrintRung(printCss, invoiceCss, FIT_RUNGS, [...amount].length)], "while the 79-character amount takes the rung the page's own content line earns for it");
 		const evm = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
 		const evmTwins = findAll(evm, (node) => hasClass(node, "payment-value-print"));
 		assert.deepEqual(
@@ -1474,7 +1496,7 @@ test("the values no wallet takes verbatim wrap rather than scroll, so none can b
 		...ASSETS.map((asset) => `${asset.name} (${asset.symbol})`.length),
 		...SUPPORTED_CHAIN_IDS.map((chainId) => networkLabel(chainId).length),
 	);
-	// The value column at the narrowest viewport the page is laid out for (320px): the 256px document column, because at ≤640px the payment term stacks and its label spans the row, so the value takes that whole column rather than the remainder a label rail leaves. The widest non-verbatim value still fits it at the value face's half-em average.
+	// The value column at the narrowest viewport the page is laid out for (320px): the 256px document column, because at that width the payment term wraps and its value takes a line of its own, so it has that whole column rather than the share a label leaves. The widest non-verbatim value still fits it at the value face's half-em average.
 	const valueColumnPx = 256;
 	const perCharPx = 0.9375 * ROOT_FONT_PX * 0.5;
 	assert.ok(

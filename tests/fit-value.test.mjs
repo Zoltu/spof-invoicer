@@ -359,9 +359,9 @@ test("the print ladder's break points follow print.css's own page geometry and t
 	// Every expectation below is derived from the stylesheets that lay a printed value out — the @page block's Letter page less its declared margin, and then the payment term's own label rail and column gap, at 96 CSS pixels to the inch — so a width, a rail, or a units error in the module fails here instead of being transcribed into the expectation.
 	const sized = FIT_RUNGS.print.filter((entry) => !entry.wraps);
 	assert.equal(sized[sized.length - 1].points, 6, "the ladder stops at the 6pt floor, ordinary fine print");
-	// The twin is laid out in the term's value column, not across the page's whole line: a rung sized against the line overflows the column, and the twin's `white-space: nowrap` runs the tail of an address past the paper's margin, with the copy control that would hand the value over whole hidden in print.
+	// The twin is laid out on the page's own content line, because the printed term stacks its value under its label: the column the ladder prices is a width the stylesheets state, and the label's own width takes no part in it.
 	const column = printedValueColumnPx(PRINT_CSS, INVOICE_CSS);
-	assert.ok(column < printedLinePx(PRINT_CSS), `a printed payment value's ${column}px column is narrower than the page's ${printedLinePx(PRINT_CSS)}px line, so the ladder cannot be sized against the line`);
+	assert.equal(column, printedLinePx(PRINT_CSS), `a printed payment value is laid out on the page's ${printedLinePx(PRINT_CSS)}px content line, which is the column the ladder prices`);
 	for (const rung of sized) {
 		const holds = printedCharactersAt(PRINT_CSS, INVOICE_CSS, rung.points);
 		assert.ok(holds > 0, `the ${rung.points}pt rung holds characters in the printed value's column`);
@@ -375,7 +375,7 @@ test("the print ladder's break points follow print.css's own page geometry and t
 	// The lengths this app's pages actually carry: a Sapling address is 78 characters, which the 8pt rung's column holds, and a Monero integrated address is 106, which the 6pt floor holds.
 	const wrapRung = FIT_RUNGS.print[FIT_RUNGS.print.length - 1].rung;
 	assert.equal(printFitRung("x".repeat(78)), expectedPrintRung(PRINT_CSS, INVOICE_CSS, FIT_RUNGS, 78), "a 78-character Sapling address stays at the size the column earns");
-	assert.equal(printFitRung("x".repeat(106)), wrapRung, "at the wider label rail the 6pt floor's column holds fewer characters, so a 106-character Monero integrated address wraps rather than shrinking past the floor; every printed line is marked, so no character is lost");
+	assert.equal(printFitRung("x".repeat(106)), expectedPrintRung(PRINT_CSS, INVOICE_CSS, FIT_RUNGS, 106), "a 106-character Monero integrated address takes the rung the page's own content line earns for it, rather than shrinking past the floor");
 	assert.equal(printFitRung("x".repeat(136)), wrapRung, "only a value past the floor wraps rather than shrinking further, so a value no rung can hold reaches paper whole rather than as a prefix");
 	assert.equal(printFitRung("x".repeat(311)), wrapRung, "as does the widest address the Zcash validator accepts");
 	assert.equal(printFitRung(""), "print-fit-1", "an empty value needs no shrinking");
@@ -487,14 +487,14 @@ test("both stylesheets agree with the ladder the module states", () => {
 		}
 	}
 
-	// The stacked phase buys the value the row's whole width, and invoice.css is where the invoice's own row states that geometry: the one rule must name exactly the stacked rungs, because a rung left out sizes the value for a full row while the row still draws the label's rail.
+	// The stacked phase buys the value a line of the row's own, and invoice.css is where the invoice's own row states that geometry: the one rule must name exactly the stacked rungs, because a rung left out sizes the value for a full line while the row still draws it in the share a label leaves it.
 	const stacked = FIT_RUNGS.screen.filter((entry) => entry.phase === "stacked").map((entry) => entry.rung);
-	const stackedRules = rules["invoice.css"].filter((rule) => declaration(rule.body, "grid-template-columns") === "1fr");
-	assert.equal(stackedRules.length, 1, "invoice.css states the invoice row's stacked columns once");
+	const stackedRules = rules["invoice.css"].filter((rule) => rule.selectors.every((selector) => selector.startsWith(".payment-term.") && selector.endsWith(" dd")) && declaration(rule.body, "grid-column") === "1 / -1");
+	assert.equal(stackedRules.length, 1, "invoice.css states the invoice row's stacked geometry once, on the value column rather than on the row");
 	assert.deepEqual(
 		stackedRules[0].selectors.slice().sort(),
-		[...stacked, residual.rung].map((rung) => `.payment-term.${rung}`).sort(),
-		"and names every stacked rung beside the residual one, so a dropped selector cannot leave a stacked term in the label's rail and the row that certainly scrolls is drawn in the whole width the stacked phase measured in rather than in the rail",
+		[...stacked, residual.rung].map((rung) => `.payment-term.${rung} dd`).sort(),
+		"and names every stacked rung beside the residual one, so a dropped selector cannot leave a stacked term in the share a label leaves it and the row that certainly scrolls is drawn across both of the list's tracks, in the whole width the stacked phase measured in",
 	);
 
 	// The size a value is drawn at before any script runs is the ladder's base rung, and each surface states it in its own base rule rather than in a rung class, so those two declarations are held to the same ladder: a base size changed on one side alone would draw a value at a size no rung prices.

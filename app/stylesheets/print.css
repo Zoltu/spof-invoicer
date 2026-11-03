@@ -92,10 +92,18 @@
 	}
 
 	/*
-	 * The payment term's rail is the width `invoice.css` states for it, and the label's no-break rule is that base rule's too, so a printed term reads its labels in the same column and never breaks the phrase.
+	 * A printed term stacks: its value sits under its label and takes the page's whole content line, so the column a printed value is laid out in is the width `@page` states rather than that line less a label whose own width follows whatever phrase it holds.
+	 * The screen layout gives the terms a two-track grid, and neither its intrinsic label track nor its width query belongs on paper: the query would read the printed page's own width, and the label track would put a rail of the label's width on paper. So the printed list and term are both stated as one full-width column here.
+	 * Every selector names the term through its list, so these rules outweigh the grid `invoice.css` states for the same elements whatever order the two stylesheets load in, rather than leaving the printed arrangement to the link order.
+	 * That column is the one the print ladder in `ui/fit-value.ts` prices a value against: the label above it never wraps, and a value the rung does not hold continues on a line of its own rather than running past the paper's margin.
 	 */
-	.payment-term {
-		grid-template-columns: 10rem 1fr;
+	.invoice-payment .payment-list,
+	.payment-list .payment-term {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.payment-list .payment-term dd {
+		grid-column: 1 / -1;
 	}
 
 	.status-badge {
@@ -178,7 +186,7 @@
 	 * A copyable payment value prints whole.
 	 * The value is drawn on one run, which a print engine lays out on one line and clips at the column's edge, and the copy control beside it — the only affordance that hands over the complete value — is hidden above with the rest of the chrome, so a payee address or payment link longer than the column would otherwise reach paper as the prefix that fitted.
 	 * The value is dropped and its print twin, the same string as a text node, takes its place on a row of its own; only the values a wallet takes verbatim are dropped, which is what the class on them names: a term no wallet takes verbatim carries no twin, and its text prints as it stands.
-	 * The twin's font size is a rung of the print ladder `ui/fit-value.ts` declares, chosen by that module from the value's character count rather than from a measurement: at Letter with these margins the column the twin is laid out in is priced at 5.25in — the page's 7in line less the payment term's 10rem label rail and its 0.5rem gap — and print metrics are not measurable from script, so the length of the string is the only thing the page can know before it prints.
+	 * The twin's font size is a rung of the print ladder `ui/fit-value.ts` declares, chosen by that module from the value's character count rather than from a measurement: at Letter with these margins the twin is laid out on the page's own 7in content line, which is the column the ladder prices it against, and print metrics are not measurable from script, so the length of the string is the only thing the page can know before it prints.
 	 * That column is the width this page draws, not a width a printed page is guaranteed to give the twin: another page size, a margin changed in the print dialog, or a narrower paper leaves a narrower column, and script cannot see it before it prints.
 	 * So a printed twin never clips its tail on paper, whatever column it lands in: a sized rung states that the value keeps every character and may break, so a column narrower than the width the rung was priced against continues the value on the next printed line rather than running it past the paper's right margin, where there is no cue and no copy control to recover it from.
 	 * The print rungs below shrink the twin in steps to the 6pt floor, whose reason the `FIT_RUNGS` doc comment in `ui/fit-value.ts` states, and `print-fit-wrap`, the last, is the rung a value past that floor takes: its segments put the first breaks where that module put them rather than wherever the box ends, and a break the page makes inside one of them is marked exactly as a break between two of them is.
@@ -196,7 +204,7 @@
 	}
 
 	/*
-	 * The twin takes a line of its own inside the payment term's value column, which is the width `ui/fit-value.ts` sizes its rung against: the page's whole line is not the width the twin has, and a twin sized against that line would overflow its column and run the tail of a value past the paper's right margin, with the copy control that hands the value over whole hidden above.
+	 * The twin takes a line of its own inside the payment term's value column, which the rule above gives the row's whole width, so the column `ui/fit-value.ts` sizes its rung against is the page's own content line.
 	 */
 	.payment-value-print {
 		display: block;

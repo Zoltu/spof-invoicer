@@ -27,8 +27,8 @@
  *
  * The stylesheets carry the other half of that: a row whose value a fitter sizes states it with `fit-sized`, and the cue that the value may be cut off is a second class on that row, {@link FIT_CUE_CLASS}, which the surface writes as it builds the row — a state no measurement has settled — and which this module clears only for a rung whose own measurement showed the box holding the value.
  *
- * The print twin is sized here too: print metrics are not measurable from script, so {@link printFitRung} maps a character count to the rung `print.css` declares, priced against the column the twin is laid out on a Letter page rather than the page's whole line, and shrinking to the print floor before it hands a longer value to the wrap that breaks it into segments.
- * That column is the one the printed page draws, not one a printed page is guaranteed to give the twin — another page size or a changed margin leaves a narrower column, which no script can see before the page prints — so `print.css` states every rung as a line that keeps the value's characters and may break them, and a price taken against a wider column costs paper a visible continuation rather than the tail of an address.
+ * The print twin is sized here too: print metrics are not measurable from script, so {@link printFitRung} maps a character count to the rung `print.css` declares, priced against the page's content line — the column `print.css` gives a printed term's value, which it stacks under the label rather than setting beside a rail of its own width — and shrinking to the print floor before it hands a longer value to the wrap that breaks it into segments.
+ * That line is the one the printed page intends, not one a printed page is guaranteed to give the twin — another page size or a changed margin leaves a narrower column, which no script can see before the page prints — so `print.css` states every rung as a line that keeps the value's characters and may break them, and a price taken against a wider column costs paper a visible continuation rather than the tail of an address.
  * {@link printedSegments} is the other half of that break: the string split into the runs one printed line of that column holds at the floor's size, so the first breaks fall where this module put them at the width the ladder prices.
  * A column narrower than that one breaks inside a segment, which no script can place or see, so the marking is the stylesheet's rather than this module's: `print.css` rules under every printed line of the value, and a break inside a segment is marked exactly as a break between two segments is.
  *
@@ -44,20 +44,14 @@ import type { Release } from "./release.js";
 /** The width of the printed page's content line in CSS pixels: the seven inches `print.css`'s `@page` block leaves between its margins, at the 96 CSS pixels an inch the page assumes. */
 const PAGE_CONTENT_WIDTH_PX = 7 * 96;
 
-/** The width of a printed payment term's label rail in CSS pixels: the ten rem `invoice.css` gives `.payment-term`'s first column, at the 16 CSS pixels the page's root font size stands for. */
-const PRINT_LABEL_RAIL_PX = 10 * 16;
-
-/** The gap between a printed payment term's two columns in CSS pixels: the half rem `invoice.css` states for `.payment-term`. */
-const PRINT_ROW_GAP_PX = 0.5 * 16;
-
 /**
- * The width of the column a printed payment value is laid out on, in CSS pixels: the page's content line less the label's rail and the row's gap.
+ * The width of the column a printed payment value is laid out on, in CSS pixels: the page's content line, which a printed payment term gives its value in full.
  *
- * The print twin is a block inside the term's own value column, so the page's whole line is not the width it has: a twin sized against that line would set a value larger than its column holds on the page these margins draw, which is a printed value continuing past the width the rung was priced for.
- * The rail stated here is the widest `invoice.css` gives a printed term, so this is the narrowest the value's column is drawn at: the `640px` block at the foot of that stylesheet states the same rail, so the printed column keeps that width.
- * `tests/fit-value.test.mjs` derives the same figure from `print.css`'s own page block and `invoice.css`'s own term rule, so a changed margin, rail, or gap fails a test rather than leaving a comment behind.
+ * The printed term stacks its value under its label — `print.css` gives the term's value column the row's whole width — so the column a twin is laid out in is the line `@page` draws, with no label rail to subtract and no gap beside a label that could change width with the phrase it holds.
+ * `tests/helpers/css.mjs` derives this figure from `print.css`'s page block and holds the stack rule to it, so a changed margin or an unstacked term fails a test rather than leaving a comment behind.
+ * It is the width the page intends, not one a printed page is guaranteed to give the twin: another page size or a margin changed in the print dialog leaves a narrower column, which is why every print rung's rule keeps the value's characters and may break them.
  */
-const PRINT_VALUE_WIDTH_PX = PAGE_CONTENT_WIDTH_PX - PRINT_LABEL_RAIL_PX - PRINT_ROW_GAP_PX;
+const PRINT_VALUE_WIDTH_PX = PAGE_CONTENT_WIDTH_PX;
 
 /**
  * The advance of one character in the widest monospace face a page is likely to substitute, in em: Courier and DejaVu Mono are about 0.602em, so 0.62em bounds them and no printed value is sized against a narrower face than the printer draws.
@@ -403,7 +397,7 @@ function isRung(name: string): boolean {
 /**
  * The print rung a value's length earns: the largest rung of the print ladder whose line holds the value, or the wrapping rung when even the print floor cannot.
  *
- * A printed page cannot be measured from script and does not resize, so the choice is made from the character count: {@link printedCharacters} prices each rung from the width of the column the print twin is laid out in and the mono advance bound, and the rungs are tried largest first.
+ * A printed page cannot be measured from script and does not resize, so the choice is made from the character count: {@link printedCharacters} prices each rung from the width of the page's content line, which is the column a printed term gives its value, and the mono advance bound, and the rungs are tried largest first.
  * That count is the whole of the estimate — a printer substitutes its own face, and the bound is what keeps the substituted face on a line of the column the price was taken against — so a value past the floor takes the segment-building wrap, whose first breaks {@link printedSegments} decides, rather than shrinking past the floor.
  * A printed column narrower than the priced one is a case no script can see, so the rung's rule in `print.css` keeps the value's characters and lets them break: a price taken against a wider column costs paper a visible continuation, never the tail of the value.
  * The break points are not restated here: the suite derives them from `print.css`'s page block and `invoice.css`'s own payment term, and holds every rung to that geometry, so a changed constant fails a test rather than leaving a comment behind.
@@ -435,7 +429,7 @@ export function printedSegments(text: string): readonly string[] {
 	return segments.length === 0 ? [""] : segments;
 }
 
-/** How many monospace characters a value set at `points` fits on a printed payment value's line: the width of the column the twin is laid out in, in CSS pixels, against one character's advance — its em advance at the point size converted to those same pixels. */
+/** How many monospace characters a value set at `points` fits on a printed payment value's line: the width of the page's content line, in CSS pixels, against one character's advance — its em advance at the point size converted to those same pixels. */
 function printedCharacters(points: number): number {
 	return Math.floor(PRINT_VALUE_WIDTH_PX / (points * PIXELS_PER_POINT * MONO_ADVANCE_EM));
 }

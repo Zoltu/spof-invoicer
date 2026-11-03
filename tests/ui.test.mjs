@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { appliedDeclaration, cssRules, declaration, pxLength, ruleBody } from "./helpers/css.mjs";
+import { appliedDeclaration, cssRules, declaration, ruleBody } from "./helpers/css.mjs";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
 import { fakeProbe } from "./helpers/layout-probe.mjs";
 import { XMR_PAYEE, ZEC_PAYEE, ZEC_TEX_PAYEE } from "./helpers/payee-vectors.mjs";
@@ -1087,9 +1087,9 @@ const MONO_ADVANCE_EM = 0.62;
 
 /**
  * The room a copyable value has in the create screen's preview at the two window widths `app.css` lays the page out for, in CSS pixels.
- * At desktop it is the 60rem (960px) `#app` container less its 1.25rem side padding (40px), less the payment term's 10rem label rail (160px) and 0.5rem column gap (8px), less the 3.5rem (56px) the copy control and its gap occupy: 960 - 40 - 160 - 8 - 56 = 696.
+ * At desktop it is the 60rem (960px) `#app` container less its 1.25rem side padding (40px), less the widest label the section spells at its own face (about 148px, the width the engine gives it) and the 0.5rem row gap (8px), less the 3.5rem (56px) the copy control and its own gap occupy: at least 708, stated as 696 so the model never assumes more room than the page gives.
  * At the 320px phone width it is the 320px viewport less `#app`'s 0.75rem side padding (24px), less the same 56px copy overhead: 320 - 24 - 56 = 240.
- * The rail and gap are not subtracted at the phone width because `.payment-term` stacks there: the value takes the row's whole width under its label.
+ * The label's width and the gap are not subtracted at the phone width because the term wraps there: the value takes a line of its own and the row's whole width under its label.
  * Both figures are stated rather than measured, because the suites drive a fake DOM with no CSS: what they model is the column the preview gives a value, and the fit below is the search that column's geometry earns.
  */
 const PREVIEW_VALUE_BOX = { desktop: 696, phone: 240 };
@@ -2286,13 +2286,70 @@ test("every notice fits within the 300-character size boundary", () => {
 	}
 });
 
-test("the payment term's label is held on one line in a rail wide enough for its widest phrase", () => {
+test("the payment terms share one label column sized from the widest label, and the value takes the rest", () => {
 	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
-	assert.equal(declaration(ruleBody(invoiceCss, ".payment-term dt"), "white-space"), "nowrap", "the term's label is held on one line, so the phrase cannot break at its space");
-	const rails = cssRules(invoiceCss).filter((rule) => rule.selectors.length === 1 && rule.selectors[0] === ".payment-term" && declaration(rule.body, "grid-template-columns") !== undefined);
-	assert.ok(rails.length >= 2, "invoice.css states the term's rail at the base width and again at the ≤640px breakpoint");
-	for (const rule of rails) {
-		const stated = String(declaration(rule.body, "grid-template-columns")).trim().split(/\s+/)[0];
-		assert.ok(pxLength(stated, ".payment-term grid-template-columns") >= 10 * 16, `every statement of the term's rail is at least ten rem, so the widest label the section spells stays one phrase: ${stated}`);
+	const list = ruleBody(invoiceCss, ".payment-list");
+	assert.equal(declaration(list, "display"), "grid", "the terms are one grid, so their labels share one alignment column instead of taking a column each");
+	assert.equal(
+		declaration(list, "grid-template-columns"),
+		"max-content minmax(0, 1fr)",
+		"that column is the widest label's own max-content width, and the second track is the value's",
+	);
+	const term = ruleBody(invoiceCss, ".payment-term");
+	assert.equal(declaration(term, "display"), "grid", "a term is a grid of its own");
+	assert.equal(
+		declaration(term, "grid-template-columns"),
+		"subgrid",
+		"laid over the list's tracks, so every term's label stands in the one column the widest label sized and the values start on one line down the section",
+	);
+	assert.equal(declaration(term, "grid-column"), "1 / -1", "and it spans that pair of tracks, so it can draw the value's own line when the section is too narrow to set the two side by side");
+	const label = ruleBody(invoiceCss, ".payment-term dt");
+	assert.equal(declaration(label, "white-space"), "nowrap", "the label is held on one line, so the phrase cannot break at its space");
+	for (const property of ["width", "min-width", "max-width", "flex-basis"]) {
+		assert.equal(declaration(label, property), undefined, `the label states no ${property}: its width is the width of its own text in the track the engine sizes, not a figure measured against the widest phrase`);
 	}
+	const value = ruleBody(invoiceCss, ".payment-term dd");
+	assert.equal(declaration(value, "min-width"), "0", "the value may shrink below its own content in its track, so a long value scrolls its box rather than widening the section");
+	assert.equal(declaration(value, "flex"), undefined, "and its share of the row is the grid's track rather than a flex basis");
+	// The label's column is asked of the engine, so no rule of the term may state a length for it: the list's max-content track and the term's subgrid say where the labels sit, and the one width a term states is the single-column arrangement the narrow section takes.
+	const stated = cssRules(invoiceCss)
+		.filter((rule) => rule.selectors.some((selector) => selector.startsWith(".payment-term")) && declaration(rule.body, "grid-template-columns") !== undefined)
+		.map((rule) => declaration(rule.body, "grid-template-columns"));
+	assert.deepEqual(
+		[...new Set(stated)].sort(),
+		["minmax(0, 1fr)", "subgrid"],
+		"no rule of the payment term states a length for the label's track: the term subgrids over the list's tracks, and the only column a term states itself is the full-width one the narrow section takes",
+	);
+});
+
+test("the payment terms stack on the payment section's own width, stated in rem rather than on the viewport", () => {
+	// A shared alignment column cannot reflow per row, so the row cannot answer a narrow section by itself the way a wrapping flex row did: the section states one width, under which its terms stack. That threshold is the price of the alignment and is stated here.
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	const payment = ruleBody(invoiceCss, ".invoice-payment");
+	assert.equal(
+		declaration(payment, "container-type"),
+		"inline-size",
+		"the payment section is the container the query reads, so the switch follows the room the section has rather than the room the window has",
+	);
+	const stacking = cssRules(invoiceCss).filter(
+		(rule) =>
+			declaration(rule.body, "grid-template-columns") === "minmax(0, 1fr)" &&
+			rule.selectors.some((selector) => selector === ".payment-list" || selector === ".payment-term"),
+	);
+	assert.equal(stacking.length, 1, "one rule states the stacked arrangement the section takes below the threshold");
+	assert.match(
+		stacking[0].at,
+		/^@container \(max-width: [\d.]+rem\)$/,
+		"and it stands under a container query on the section's own width, with its length in rem so the threshold scales with the reader's text size",
+	);
+	const [, threshold] = /^@container \(max-width: ([\d.]+)rem\)$/.exec(stacking[0].at);
+	assert.ok(
+		Number(threshold) > 25,
+		"the threshold lies above the widest label the section spells, the gap beside it, and a workable value column — about 9rem + 0.5rem + 16rem — so a side-by-side row that is in force is never crammed",
+	);
+	assert.deepEqual(
+		stacking[0].selectors,
+		[".payment-list", ".payment-term"],
+		"the list and the term both take the single column, so the label sits on a line of its own and the value takes the section's whole width below it",
+	);
 });

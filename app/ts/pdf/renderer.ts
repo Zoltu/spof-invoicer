@@ -192,7 +192,8 @@ const AMOUNT_RIGHT = CONTENT_RIGHT;
 const TOTALS_W = 240;
 const TOTALS_ROW_H = 19;
 const DUE_H = 32;
-const PAYMENT_LABEL_W = 120;
+/** The least gap a payment term keeps between its label and the value drawn on the same line, in points. */
+const PAYMENT_LABEL_GAP = 10;
 const MIN_FIT_SIZE = 7;
 /** The gap the running footer keeps between the document number and its right-aligned page label. */
 const FOOTER_GAP = 12;
@@ -1108,6 +1109,20 @@ function layoutPaymentTerms(
 }
 
 /**
+ * The width the payment terms give their labels, in points: the widest label the section spells, measured in the face the labels are drawn in, plus the gap that separates it from the value on the same line.
+ *
+ * The labels are the app's own strings rather than invoice text, so this width is bounded by the phrases the model states and can be measured with the face the export embeds; a stated width would be a figure guessed against one face's metrics, and a label wider than it would be drawn over the value beside it.
+ * The band a long value takes draws its own label on a line of its own, so it needs no part of this width.
+ */
+function paymentLabelWidth(terms: readonly InvoicePaymentTermView[], metrics: FontMetrics): number {
+	let widest = 0;
+	for (const term of terms) {
+		widest = Math.max(widest, metrics.widthOfText(toPdfText(term.label.toUpperCase()), SIZE.paymentLabel, "sansBold"));
+	}
+	return widest + PAYMENT_LABEL_GAP;
+}
+
+/**
  * Draw the payment details: the terms that state what is owed beside the symbol of the URI those terms spell, and the values a payer copies out — the amount, the payee address, and the payment link — each drawn as a single unbroken monospace run.
  *
  * A copied value has to survive the copy whole: a value broken at the margin is handed back with a line break inside it, which is not the address or the URI a wallet's field reads.
@@ -1121,7 +1136,8 @@ function drawPayment(flow: Flow, view: InvoiceViewModel): void {
 	const terms = paid ? view.paid.terms : view.payment;
 	const symbolSide = paid ? 0 : qrBlockSize(view.paymentQr);
 	const columnWidth = paid ? CONTENT_W : CONTENT_W - symbolSide - GAP.termsToSymbol;
-	const besideWidth = columnWidth - PAYMENT_LABEL_W;
+	const labelWidth = paymentLabelWidth(terms, flow.metrics);
+	const besideWidth = columnWidth - labelWidth;
 	const { rows, bands } = layoutPaymentTerms(terms, besideWidth, flow.metrics);
 	const blockHeight = paid
 		? rows.reduce((total, entry) => total + entry.height + 6, 0)
@@ -1140,7 +1156,7 @@ function drawPayment(flow: Flow, view: InvoiceViewModel): void {
 		flow.text(CONTENT_LEFT, y, entry.label.toUpperCase(), SIZE.paymentLabel, "sansBold", PALETTE.muted);
 		let lineTop = y;
 		for (const line of entry.lines) {
-			flow.text(CONTENT_LEFT + PAYMENT_LABEL_W, lineTop, line, entry.size, entry.font, PALETTE.ink, entry.xScale);
+			flow.text(CONTENT_LEFT + labelWidth, lineTop, line, entry.size, entry.font, PALETTE.ink, entry.xScale);
 			lineTop += leading(entry.size);
 		}
 		y += entry.height + 6;

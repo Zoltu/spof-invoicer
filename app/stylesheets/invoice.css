@@ -406,7 +406,9 @@
 	overflow-wrap: anywhere;
 }
 
+/* The section is the container the payment terms' width query reads: what a value has room for is the room the section has, not the room the window has. */
 .invoice-payment {
+	container-type: inline-size;
 	border-top: 3px solid var(--inv-ink);
 	margin-top: 1.5rem;
 	padding-top: 1rem;
@@ -427,22 +429,31 @@
 	overflow-wrap: anywhere;
 }
 
+/*
+ * The terms are one two-track grid, so the label column is a column of the section rather than a figure stated here: the `max-content` track is sized by the engine from the widest label the list actually spells, and no pixel value stands in for it.
+ * The second track is the value's, `minmax(0, 1fr)` so it takes whatever the label column leaves and may shrink below its own content rather than widening the section.
+ */
 .payment-list {
 	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
 	gap: 0.5rem;
 	margin: 0;
 }
 
+/*
+ * A term is a grid of its own that subgrids over the list's two tracks, so its label sits in the one column the widest label sized and its value in the one the rest of the section leaves — the values line up down the whole section without a stated width anywhere.
+ * Spanning both tracks lets a term draw the rows it owns on a line of their own: the value when the section is too narrow to set it beside its label, and the cue beneath it.
+ */
 .payment-term {
 	display: grid;
-	grid-template-columns: 10rem 1fr;
+	grid-template-columns: subgrid;
+	grid-column: 1 / -1;
 	gap: 0.5rem;
 	align-items: baseline;
 }
 
 /*
- * The label is held on one line, and the rail `.payment-term` states is wide enough for the widest label the section spells: `TRANSACTION HASH` measures about 148px at 0.75rem with its 0.1em tracking, so the rail states 10rem (160px) with a small safety margin.
- * Every row of one payment list therefore reads its labels in one column.
+ * The label is one unbreakable phrase in an intrinsic track: `white-space: nowrap` keeps `TRANSACTION HASH` from breaking at its space, and the `max-content` track the list states is measured from these labels, so the phrase is never squeezed into a column narrower than it needs and a longer label in a future term widens the shared column instead of overflowing a stated width.
  */
 .payment-term dt {
 	font-family: var(--inv-sans);
@@ -466,6 +477,7 @@
 	flex-wrap: wrap;
 	align-items: baseline;
 	gap: 0.35rem 0.5rem;
+	/* The value's share of the row is the list's second track, and `min-width: 0` lets the value's own box shrink below its content there instead of pushing the section past the page. */
 	min-width: 0;
 }
 
@@ -551,19 +563,32 @@
 }
 
 /*
- * The stacked phase of a payment term: the label gives up the rail it shares with the value on one row, so the value takes the row's whole width, which is the geometry the stacked rungs are measured against.
- * The rail the `640px` breakpoint states below is outranked by the phase's own class, which is the point: once a script has chosen the phase, the phase decides the row's columns.
- * The residual rung states the same columns, because it is the one state the row certainly scrolls: it is reached only after both phases' rungs have been measured and none held the value, so restoring the rail under it would draw the value in a column narrower than the ones the search already refused it in and leave the painted cue as the only thing between a clipped address and a payer reading it as whole.
+ * The stacked phase of a payment term: the value takes a line of the row's own, which is the geometry the stacked rungs are measured against.
+ * The row draws that arrangement by itself only where the section's own width query has stacked it, so the class is what states the phase: a fit that chose it decides the row rather than the width the section happened to run at.
+ * The residual rung states the same width, because it is the one state the row certainly scrolls: it is reached only after both phases' rungs have been measured and none held the value, so leaving the value in the share a label left it would draw it in a column narrower than the ones the search already refused it in and leave the painted cue as the only thing between a clipped address and a payer reading it as whole.
  */
-.payment-term.fit-stacked-12,
-.payment-term.fit-stacked-11,
-.payment-term.fit-stacked-10,
-.payment-term.fit-residual {
-	grid-template-columns: 1fr;
+.payment-term.fit-stacked-12 dd,
+.payment-term.fit-stacked-11 dd,
+.payment-term.fit-stacked-10 dd,
+.payment-term.fit-residual dd {
+	grid-column: 1 / -1;
 }
 
 /*
- * The residual rung: no rung of either phase holds the value, so it keeps the floor's font size, scrolls its overflow, and takes the row's whole width under the stacked columns stated above — the widest column the row gives a value, and the one the cue is drawn beside rather than an alternative to.
+ * The one width this layout states, and the only reason it states one: a shared alignment column cannot reflow per row, so a term cannot keep its label and value side by side once the section is too narrow to give both the room the row needs — the whole section stacks instead, which is what this query does.
+ * The query reads the payment section's own width rather than the viewport's, because the room a value gets is the room the section has, not the room the window has.
+ * The length is in rem so the switch follows the reader's text size rather than a fixed count of pixels: 26rem is a little above the widest label the section spells — `TRANSACTION HASH`, about 9rem in the label's own face — plus the 0.5rem gap and a 16rem value column, the narrowest column a payment value is worth sharing a line with a label in.
+ * Below it the label takes a line of its own and the value the section's whole width, which is the arrangement `print.css` draws on paper.
+ */
+@container (max-width: 26rem) {
+	.payment-list,
+	.payment-term {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+/*
+ * The residual rung: no rung of either phase holds the value, so it keeps the floor's font size, scrolls its overflow, and takes the row's whole width under the stacked rule stated above — the widest line the row gives a value, and the one the cue is drawn beside rather than an alternative to.
  * `scrollbar-width: thin` bounds the bar in the engines that honour it, while the 6px height on `::-webkit-scrollbar` bounds it in WebKit alone, so the row gains no more height than the thinnest scrollbar draws.
  * The bar alone is not a cue a payer is guaranteed to see: an overlay-scrollbar engine paints no bar until the payer scrolls, so a value clipped at the column's edge would be drawn as a bare prefix of a Zcash or Monero address that reads as the whole address.
  * The cue below is what this stylesheet states instead, on the row rather than in the scroll box, because a text line on the row is painted whether or not the engine paints the bar.
@@ -602,7 +627,7 @@
  * A term no wallet takes verbatim carries no cue at all, because nothing sizes its value and its value wraps, so nothing may clip it.
  * Its wording states no fact about whether the value is whole, and it does not have to: the cue stands only where a clip is possible and unproven, so "If the value is cut off, scroll it." is an instruction conditioned on the clip rather than a claim about it, and it reads true beside a cued value that is whole and beside one that is clipped. It names the scroll box and focus stop every cued row gives its value, and it names scrolling rather than copying because the value is read by arrowing along it whether or not a copy control sits beside it.
  * `app.css` states the same sentence beside the payment panel's own rows, so the two surfaces say one thing rather than two.
- * The cue is the value's neighbour in the row's grid, which is why it alters nothing the value draws: the run keeps its own glyphs — no ellipsis, no fade or mask over them, no respacing, and no transform — and stays the single scrollable line the rules above state.
+ * The cue is the value's neighbour in the row's flex line and takes a line of its own beneath it, which is why it alters nothing the value draws: the run keeps its own glyphs — no ellipsis, no fade or mask over them, no respacing, and no transform — and stays the single scrollable line the rules above state.
  * It is generated content of the row, so it is never a text node of the document: a term's value is the term's own text and nothing else, which is the string the copy control is handed and the run any read of the rendered value picks up, so no path from a value to a copied string carries the sentence.
  * `user-select: none` is what keeps the sentence out of a mouse selection that spans the term, and it is the only exclusion a stylesheet can state here: no test in this repository can observe a selection or a copied string, because the suites drive a fake DOM with no CSS. The residual is that an engine which serializes generated content into a copied selection can paste the sentence after the value; what the placement above pins is that the cue sits outside the value's own box and outside every string the app copies.
  * It is scoped to the screen because the printed page drops the on-screen run for its print twin, which carries the whole value.
@@ -718,18 +743,5 @@
 
 	.invoice-parties {
 		gap: 1rem;
-	}
-
-	/*
-	 * At this width every payment term stacks: the label spans the row, and the value takes the row's whole width under it rather than the narrow remainder a 10rem rail would leave.
-	 * The rail stays a length rather than `1fr`, so the first track every rule states remains the width a printed value's column is derived from.
-	 */
-	.payment-term {
-		grid-template-columns: 10rem 1fr;
-	}
-
-	.payment-term dt,
-	.payment-term dd {
-		grid-column: 1 / -1;
 	}
 }

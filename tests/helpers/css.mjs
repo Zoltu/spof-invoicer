@@ -128,22 +128,29 @@ export function printedLinePx(printCss) {
 }
 
 /**
- * The width of the column a printed payment value is laid out on, in CSS pixels: the page's own content line less the label rail and the column gap the invoice stylesheet gives `.payment-term`.
- * The print twin is a block inside that term's own value column, so this — not the page's whole line — is the width the print ladder is sized against; a rung sized against the line overflows the column, and `white-space: nowrap` then runs the tail of an address past the paper's margin.
- * The widest rail and gap any statement of the term gives are used, so the narrowest column a rung must hold the value in is the one the page draws.
+ * The width of the column a printed payment value is laid out on, in CSS pixels: the page's own content line.
+ *
+ * A printed payment term stacks its value under its label — `print.css` gives the printed list and term one full-width column and its value the whole of that row — so a twin is laid out on the line `@page` draws, with no label rail between it and the paper's margin to subtract.
+ * Every half of that is checked rather than assumed: the print stylesheet must state the single column and the spanning value, and the invoice stylesheet must give the label no stated width and size its shared column from the labels themselves, so a fixed label column creeping back into either file fails here.
  */
 export function printedValueColumnPx(printCss, invoiceCss) {
 	const page = printedLinePx(printCss);
-	const terms = cssRules(invoiceCss).filter((rule) => rule.selectors.length === 1 && rule.selectors[0] === ".payment-term");
-	assert.ok(terms.length > 0, "invoice.css states the payment term whose value column a printed value is laid out in");
-	const widest = (property) => {
-		const stated = terms.map((rule) => declaration(rule.body, property)).filter((value) => value !== undefined);
-		assert.ok(stated.length > 0, `invoice.css's .payment-term states its ${property}, which is what a printed value's column is derived from`);
-		return Math.max(...stated.map((value) => pxLength(String(value).trim().split(/\s+/)[0], `.payment-term ${property}`)));
-	};
-	const column = page - widest("grid-template-columns") - widest("gap");
-	assert.ok(column > 0 && column < page, `a printed payment value's column is narrower than the page's ${page}px line and still has a width: ${column}px`);
-	return column;
+	const singleColumn = cssRules(printCss).filter((rule) => declaration(rule.body, "grid-template-columns") === "minmax(0, 1fr)");
+	for (const selector of [".invoice-payment .payment-list", ".payment-list .payment-term"]) {
+		assert.ok(
+			singleColumn.some((rule) => rule.selectors.includes(selector)),
+			`print.css gives ${selector} a single full-width column, so a printed term stacks its value under its label`,
+		);
+	}
+	const stacked = cssRules(printCss).filter((rule) => rule.selectors.includes(".payment-list .payment-term dd") && declaration(rule.body, "grid-column") === "1 / -1");
+	assert.ok(stacked.length > 0, "print.css gives a printed payment term's value the row's whole width, so the column it is laid out on is the page's own content line");
+	const rail = cssRules(invoiceCss).filter(
+		(rule) => rule.selectors.some((selector) => selector.startsWith(".payment-term dt")) && ["width", "min-width", "max-width", "flex-basis"].some((property) => declaration(rule.body, property) !== undefined),
+	);
+	assert.deepEqual(rail.map((rule) => rule.selectors.join(", ")), [], "invoice.css gives the payment term's label no stated width, so no rail is subtracted from the line a printed value is laid out on");
+	const intrinsic = cssRules(invoiceCss).filter((rule) => String(declaration(rule.body, "grid-template-columns") ?? "").startsWith("max-content "));
+	assert.ok(intrinsic.length > 0, "invoice.css sizes the payment terms' shared label column from the labels themselves — a max-content track — rather than from a stated length");
+	return page;
 }
 
 /** How many monospace characters a printed value set at `points` fits in the column it is laid out in: that column's width in CSS pixels against one character's advance, which is the em bound converted to pixels at the point size. */
