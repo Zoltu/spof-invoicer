@@ -332,7 +332,7 @@ export const INVOICE_LABELS: InvoiceLabels = Object.freeze({
 	paysTo: "Pays to",
 	paymentLink: "Payment link",
 	dates: "Dates",
-	paidTitle: "Payment received",
+	paidTitle: "Payment details",
 	paidHash: "Transaction hash",
 	paidDate: "Recorded",
 });

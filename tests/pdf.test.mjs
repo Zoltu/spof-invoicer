@@ -295,7 +295,7 @@ test("a paid invoice draws the record's figures in place of the payment details"
 	const pages = buildInvoicePages(view, METRICS);
 	assert.equal(pages.length, 1);
 	const text = textOps(pages[0]).join("\n");
-	for (const fragment of ["PAID", "PAYMENT RECEIVED", "TRANSACTION HASH", hash, "RECORDED", "3 Oct 2026"]) {
+	for (const fragment of ["PAID", "PAYMENT DETAILS", "TRANSACTION HASH", hash, "RECORDED", "3 Oct 2026"]) {
 		assert.ok(text.includes(fragment), "the paid layout is missing " + JSON.stringify(fragment));
 	}
 	// The "unverified" guard below forbids the page-only note in the export, as decision 3 requires.
@@ -325,7 +325,7 @@ test("a paid invoice's record moves whole onto its own page when the invoice fil
 	const view = buildInvoiceViewModel(invoice, "2026-10-03");
 	const pages = buildInvoicePages(view, METRICS);
 	assert.ok(pages.length > 1, "the long invoice paginates");
-	const holders = pages.filter((page) => textOps(page).join("\n").includes("PAYMENT RECEIVED"));
+	const holders = pages.filter((page) => textOps(page).join("\n").includes("PAYMENT DETAILS"));
 	assert.equal(holders.length, 1, "the paid section is drawn on exactly one page");
 	const text = textOps(holders[0]).join("\n");
 	assert.ok(text.includes(hash), "the record's hash travels with the section");

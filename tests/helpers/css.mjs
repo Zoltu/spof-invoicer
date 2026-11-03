@@ -130,7 +130,7 @@ export function printedLinePx(printCss) {
 /**
  * The width of the column a printed payment value is laid out on, in CSS pixels: the page's own content line less the label rail and the column gap the invoice stylesheet gives `.payment-term`.
  * The print twin is a block inside that term's own value column, so this — not the page's whole line — is the width the print ladder is sized against; a rung sized against the line overflows the column, and `white-space: nowrap` then runs the tail of an address past the paper's margin.
- * The widest rail and gap any statement of the term gives are used, because the narrower rail a width query states only widens the column, and the narrowest column is the one a rung must hold the value in.
+ * The widest rail and gap any statement of the term gives are used, so the narrowest column a rung must hold the value in is the one the page draws.
  */
 export function printedValueColumnPx(printCss, invoiceCss) {
 	const page = printedLinePx(printCss);

@@ -435,16 +435,21 @@
 
 .payment-term {
 	display: grid;
-	grid-template-columns: 7rem 1fr;
+	grid-template-columns: 10rem 1fr;
 	gap: 0.5rem;
 	align-items: baseline;
 }
 
+/*
+ * The label is held on one line, and the rail `.payment-term` states is wide enough for the widest label the section spells: `TRANSACTION HASH` measures about 148px at 0.75rem with its 0.1em tracking, so the rail states 10rem (160px) with a small safety margin.
+ * Every row of one payment list therefore reads its labels in one column.
+ */
 .payment-term dt {
 	font-family: var(--inv-sans);
 	font-size: 0.75rem;
 	text-transform: uppercase;
 	letter-spacing: 0.1em;
+	white-space: nowrap;
 	color: var(--inv-muted);
 }
 
@@ -547,7 +552,7 @@
 
 /*
  * The stacked phase of a payment term: the label gives up the rail it shares with the value on one row, so the value takes the row's whole width, which is the geometry the stacked rungs are measured against.
- * The narrower rail the `640px` breakpoint states below is outranked by the phase's own class, which is the point: once a script has chosen the phase, the phase decides the row's columns.
+ * The rail the `640px` breakpoint states below is outranked by the phase's own class, which is the point: once a script has chosen the phase, the phase decides the row's columns.
  * The residual rung states the same columns, because it is the one state the row certainly scrolls: it is reached only after both phases' rungs have been measured and none held the value, so restoring the rail under it would draw the value in a column narrower than the ones the search already refused it in and leave the painted cue as the only thing between a clipped address and a payer reading it as whole.
  */
 .payment-term.fit-stacked-12,
@@ -715,7 +720,16 @@
 		gap: 1rem;
 	}
 
+	/*
+	 * At this width every payment term stacks: the label spans the row, and the value takes the row's whole width under it rather than the narrow remainder a 10rem rail would leave.
+	 * The rail stays a length rather than `1fr`, so the first track every rule states remains the width a printed value's column is derived from.
+	 */
 	.payment-term {
-		grid-template-columns: 5.5rem 1fr;
+		grid-template-columns: 10rem 1fr;
+	}
+
+	.payment-term dt,
+	.payment-term dd {
+		grid-column: 1 / -1;
 	}
 }

@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { appliedDeclaration, cssRules, declaration, ruleBody } from "./helpers/css.mjs";
+import { appliedDeclaration, cssRules, declaration, pxLength, ruleBody } from "./helpers/css.mjs";
 import { installInteractiveDocument } from "./helpers/dom.mjs";
 import { fakeProbe } from "./helpers/layout-probe.mjs";
 import { XMR_PAYEE, ZEC_PAYEE, ZEC_TEX_PAYEE } from "./helpers/payee-vectors.mjs";
@@ -1086,10 +1086,13 @@ test("the create view rendered with no release slot at all still returns an elem
 const MONO_ADVANCE_EM = 0.62;
 
 /**
- * The room a copyable value has in the create screen's preview at the two window widths `app.css` lays the page out for, in CSS pixels: the 60rem `#app` container less its 1.25rem side padding, less the payment term's 7rem label rail and 0.5rem column gap, less the copy control drawn beside the value, which the stylesheet sizes to its own text rather than to a figure this suite could read.
+ * The room a copyable value has in the create screen's preview at the two window widths `app.css` lays the page out for, in CSS pixels.
+ * At desktop it is the 60rem (960px) `#app` container less its 1.25rem side padding (40px), less the payment term's 10rem label rail (160px) and 0.5rem column gap (8px), less the 3.5rem (56px) the copy control and its gap occupy: 960 - 40 - 160 - 8 - 56 = 696.
+ * At the 320px phone width it is the 320px viewport less `#app`'s 0.75rem side padding (24px), less the same 56px copy overhead: 320 - 24 - 56 = 240.
+ * The rail and gap are not subtracted at the phone width because `.payment-term` stacks there: the value takes the row's whole width under its label.
  * Both figures are stated rather than measured, because the suites drive a fake DOM with no CSS: what they model is the column the preview gives a value, and the fit below is the search that column's geometry earns.
  */
-const PREVIEW_VALUE_BOX = { desktop: 730, phone: 114 };
+const PREVIEW_VALUE_BOX = { desktop: 696, phone: 240 };
 
 /**
  * A mainnet Monero integrated address — the 106-character form the validator accepts — built the way `wallet/monero-address.ts` reads one: the `0x13` mainnet prefix, a 77-byte body, and the four-byte Keccak-256 checksum over everything before them, in Monero's block-padded base58.
@@ -1679,7 +1682,7 @@ test("no payer- or payee-facing surface cautions that a valid address may be unp
 	assert.ok(read.includes(ZEC_TEX_PAYEE), "and the payee's own spelling, as the document draws it");
 	assert.ok(read.includes(UNSUPPORTED_WALLET_MESSAGE), "and the hand-off sentence, which names where a wallet-less invoice is paid and cautions nothing");
 	assert.match(read, /Payment link/, "and the terms a payer copies from");
-	assert.ok(read.includes("Payment received"), "the sweep reads the paid section's title, which never claims a verified settlement");
+	assert.ok(read.includes("Payment details"), "the sweep reads the paid section's title, which never claims a verified settlement");
 	assert.ok(read.includes(UNVERIFIED_PAYMENT_NOTE), "and the page-only unverified note");
 	assert.ok(read.includes("Mark invoice as paid"), "and the control that opens the mark-paid dialog");
 	assert.ok(read.includes("Record a payment on this invoice"), "and the dialog's own accessible name, which is not the sentence on the control behind it");
@@ -1717,7 +1720,7 @@ test("the wallet-support guard catches the cautions it exists to catch", () => {
 		payoutAddressGuidance(ASSET_REGISTRY.xmr),
 		"Invoice #INV-2026-0042 is due on 28 Oct 2026.",
 		UNVERIFIED_PAYMENT_NOTE,
-		"Payment received",
+		"Payment details",
 		"Transaction hash",
 		"Recorded",
 		"There are two ways to pass this paid invoice on. Either one is your own copy to keep, and you can save the invoice as a PDF for your record.",
@@ -2280,5 +2283,16 @@ test("every notice fits within the 300-character size boundary", () => {
 	];
 	for (const notice of notices) {
 		assert.ok(notice.length <= NOTICE_MAX, `Notice exceeds ${NOTICE_MAX} characters (${notice.length}): ${notice}`);
+	}
+});
+
+test("the payment term's label is held on one line in a rail wide enough for its widest phrase", () => {
+	const invoiceCss = readFileSync(join(root, "app/stylesheets/invoice.css"), "utf8");
+	assert.equal(declaration(ruleBody(invoiceCss, ".payment-term dt"), "white-space"), "nowrap", "the term's label is held on one line, so the phrase cannot break at its space");
+	const rails = cssRules(invoiceCss).filter((rule) => rule.selectors.length === 1 && rule.selectors[0] === ".payment-term" && declaration(rule.body, "grid-template-columns") !== undefined);
+	assert.ok(rails.length >= 2, "invoice.css states the term's rail at the base width and again at the ≤640px breakpoint");
+	for (const rule of rails) {
+		const stated = String(declaration(rule.body, "grid-template-columns")).trim().split(/\s+/)[0];
+		assert.ok(pxLength(stated, ".payment-term grid-template-columns") >= 10 * 16, `every statement of the term's rail is at least ten rem, so the widest label the section spells stays one phrase: ${stated}`);
 	}
 });

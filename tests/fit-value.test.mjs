@@ -375,7 +375,7 @@ test("the print ladder's break points follow print.css's own page geometry and t
 	// The lengths this app's pages actually carry: a Sapling address is 78 characters, which the 8pt rung's column holds, and a Monero integrated address is 106, which the 6pt floor holds.
 	const wrapRung = FIT_RUNGS.print[FIT_RUNGS.print.length - 1].rung;
 	assert.equal(printFitRung("x".repeat(78)), expectedPrintRung(PRINT_CSS, INVOICE_CSS, FIT_RUNGS, 78), "a 78-character Sapling address stays at the size the column earns");
-	assert.notEqual(printFitRung("x".repeat(106)), wrapRung, "and a 106-character Monero integrated address fits the print floor rather than wrapping");
+	assert.equal(printFitRung("x".repeat(106)), wrapRung, "at the wider label rail the 6pt floor's column holds fewer characters, so a 106-character Monero integrated address wraps rather than shrinking past the floor; every printed line is marked, so no character is lost");
 	assert.equal(printFitRung("x".repeat(136)), wrapRung, "only a value past the floor wraps rather than shrinking further, so a value no rung can hold reaches paper whole rather than as a prefix");
 	assert.equal(printFitRung("x".repeat(311)), wrapRung, "as does the widest address the Zcash validator accepts");
 	assert.equal(printFitRung(""), "print-fit-1", "an empty value needs no shrinking");

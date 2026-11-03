@@ -1585,13 +1585,13 @@ test("an invoice created in the form is marked paid without rewriting its link, 
 		assert.equal(layout.length, opened.getPageCount(), "the layout paginates exactly as the exported file does");
 		const layoutText = layout.flatMap((page) => page.ops.filter((op) => op.kind === "text").map((op) => op.text));
 		assert.ok(layoutText.includes(canonicalHash), "the layout behind those bytes carries the hash");
-		assert.ok(layoutText.includes("PAYMENT RECEIVED"), "and states the record as the payer's report");
+		assert.ok(layoutText.includes("PAYMENT DETAILS"), "and states the record as the payer's report");
 		assert.equal(layoutText.join("\n").includes(UNVERIFIED_PAYMENT_NOTE), false, "the layout carries no unverified note");
 		assert.equal(moduleFills(layout[0]).length, 0, "no QR symbol is drawn in the export");
 		const runs = await pdfShownRuns(bytes);
 		const shown = runs.join("\n");
 		assert.equal(runs.filter((run) => run === canonicalHash).length, 1, "the artifact carries the hash as exactly one text run");
-		assert.ok(shown.includes("PAYMENT RECEIVED"), "the artifact states the record's section");
+		assert.ok(shown.includes("PAYMENT DETAILS"), "the artifact states the record's section");
 		assert.equal(shown.includes(UNVERIFIED_PAYMENT_NOTE), false, "the artifact carries no unverified note");
 		assert.equal(shown.toLowerCase().includes("unverified"), false, "no wording of the page-only note reaches the PDF");
 

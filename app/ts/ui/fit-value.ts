@@ -4,7 +4,7 @@
  * A payment value is a string a wallet takes verbatim — a payee address, an amount, a payment link — so it may never be wrapped, truncated, or respaced to fit, and the only lever its box has is the font size it is set at; the receipt's transaction hash is fitted the same way, because it is a string the payer reads character by character and copies out.
  * The app has two ladders — a screen ladder the browser measures a value against, and a print ladder the printed page draws a value on — and this module owns both and the search along each; {@link fitValue} keeps a value's screen rung current as its box resizes.
  * The screen ladder's rungs belong to two phases, and the search walks the phases in the ladder's own order, trying each phase's rungs largest first: every inline rung down to its 10px floor is tried before the first, larger stacked rung, so a value keeps the inline row whenever any inline rung at or above the floor holds it.
- * The inline phase is the row a value shares with its label, and with the copy control beside it wherever the surface gives that value one: on the invoice's payment terms for every verbatim value, and on a payment panel term for the amount and the recipient, while its asset name and network label carry none. Below the `640px` breakpoint `app.css` gives every panel term a line of its own whatever rung a fit writes, so an inline rung there sets the font size of a value the row already gives the panel's whole width. The row each phase is measured in is the stylesheet's to draw; this module only orders the two.
+ * The inline phase is the row a value shares with its label, and with the copy control beside it wherever the surface gives that value one: on the invoice's payment terms for every verbatim value, and on a payment panel term for the amount and the recipient, while its asset name and network label carry none. Below the `640px` breakpoint `app.css` gives every panel term a line of its own whatever rung a fit writes, and `invoice.css` stacks every invoice term the same way, so an inline rung there sets the font size of a value the row already gives its whole width. The row each phase is measured in is the stylesheet's to draw; this module only orders the two.
  * {@link FIT_RUNGS} is the one published statement of both ladders: every screen rung's name, size, and phase, and every print rung's name and whether it wraps, with the point size each sized rung's rule states.
  * The screen search prices a phase from one measurement taken at that phase's largest rung, and writes a rung only after a measurement of the value with that rung in place, so an engine whose glyph advances do not follow its font size cannot settle on a rung its own measurement overflows: the proportional reading only proposes a candidate, a candidate whose measurement refuses it steps down to the next smaller rung of its phase and is measured in turn, and the residual rung is where a phase holding no measured rung leaves the search.
  * The screen ladder's rungs are stated once per surface in the stylesheet that draws that surface — `invoice.css` for the payment section's values, `app.css` for the payment panel's — and the print ladder's rungs in `print.css`.
@@ -44,8 +44,8 @@ import type { Release } from "./release.js";
 /** The width of the printed page's content line in CSS pixels: the seven inches `print.css`'s `@page` block leaves between its margins, at the 96 CSS pixels an inch the page assumes. */
 const PAGE_CONTENT_WIDTH_PX = 7 * 96;
 
-/** The width of a printed payment term's label rail in CSS pixels: the seven rem `invoice.css` gives `.payment-term`'s first column, at the 16 CSS pixels the page's root font size stands for. */
-const PRINT_LABEL_RAIL_PX = 7 * 16;
+/** The width of a printed payment term's label rail in CSS pixels: the ten rem `invoice.css` gives `.payment-term`'s first column, at the 16 CSS pixels the page's root font size stands for. */
+const PRINT_LABEL_RAIL_PX = 10 * 16;
 
 /** The gap between a printed payment term's two columns in CSS pixels: the half rem `invoice.css` states for `.payment-term`. */
 const PRINT_ROW_GAP_PX = 0.5 * 16;
@@ -54,7 +54,7 @@ const PRINT_ROW_GAP_PX = 0.5 * 16;
  * The width of the column a printed payment value is laid out on, in CSS pixels: the page's content line less the label's rail and the row's gap.
  *
  * The print twin is a block inside the term's own value column, so the page's whole line is not the width it has: a twin sized against that line would set a value larger than its column holds on the page these margins draw, which is a printed value continuing past the width the rung was priced for.
- * The rail stated here is the widest `invoice.css` gives a printed term, so this is the narrowest the value's column is drawn at: the `640px` block at the foot of that stylesheet only narrows the rail, which widens the column.
+ * The rail stated here is the widest `invoice.css` gives a printed term, so this is the narrowest the value's column is drawn at: the `640px` block at the foot of that stylesheet states the same rail, so the printed column keeps that width.
  * `tests/fit-value.test.mjs` derives the same figure from `print.css`'s own page block and `invoice.css`'s own term rule, so a changed margin, rail, or gap fails a test rather than leaving a comment behind.
  */
 const PRINT_VALUE_WIDTH_PX = PAGE_CONTENT_WIDTH_PX - PRINT_LABEL_RAIL_PX - PRINT_ROW_GAP_PX;

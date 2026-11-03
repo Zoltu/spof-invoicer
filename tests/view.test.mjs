@@ -214,7 +214,7 @@ test("a paid invoice draws the record's own section in place of the payment deta
 			[
 				["h1", "Invoice"],
 				["h2", "Notes and terms"],
-				["h2", "Payment received"],
+				["h2", "Payment details"],
 			],
 			"the outline names the paid record section",
 		);
@@ -1399,7 +1399,7 @@ test("a printed payment value is the whole value, sized by its length and wrappe
 		);
 		assert.deepEqual(printRungs(printed[0]), ["print-fit-wrap"], "the 311-character address is past the print floor and wraps");
 		assert.deepEqual(printRungs(printed[2]), ["print-fit-wrap"], "as is the 404-character link that carries it");
-		assert.deepEqual(printRungs(printed[1]), ["print-fit-2"], "while the 79-character amount is past what the 9pt rung's column holds, so it takes the 8pt rung the same geometry earns for it");
+		assert.deepEqual(printRungs(printed[1]), [expectedPrintRung(printCss, invoiceCss, FIT_RUNGS, [...amount].length)], "while the 79-character amount takes the rung the narrower printed column's own geometry earns for it");
 		const evm = renderInvoiceView(invoiceFor(), { ...VIEW_OPTIONS, notice: noticeRecorder() });
 		const evmTwins = findAll(evm, (node) => hasClass(node, "payment-value-print"));
 		assert.deepEqual(
@@ -1474,12 +1474,12 @@ test("the values no wallet takes verbatim wrap rather than scroll, so none can b
 		...ASSETS.map((asset) => `${asset.name} (${asset.symbol})`.length),
 		...SUPPORTED_CHAIN_IDS.map((chainId) => networkLabel(chainId).length),
 	);
-	// The value column at the narrowest viewport the page is laid out for (320px): the document column less the ≤640px rule's 5.5rem label rail and 0.5rem gap. At the value face of 0.9375rem a UI sans averages well under half an em per character over these labels, so the column fits many more than the widest label's characters.
-	const valueColumnPx = 256 - 88 - 8;
+	// The value column at the narrowest viewport the page is laid out for (320px): the 256px document column, because at ≤640px the payment term stacks and its label spans the row, so the value takes that whole column rather than the remainder a label rail leaves. The widest non-verbatim value still fits it at the value face's half-em average.
+	const valueColumnPx = 256;
 	const perCharPx = 0.9375 * ROOT_FONT_PX * 0.5;
 	assert.ok(
 		widest * perCharPx <= valueColumnPx,
-		`the widest non-verbatim value is ${widest} characters, which fits the ${valueColumnPx}px column at the value face's half-em average`,
+		`the widest non-verbatim value is ${widest} characters, which fits the ${valueColumnPx}px stacked column at the value face's half-em average`,
 	);
 
 	// The mechanism that makes a clipped tail impossible is the wrap, not the estimate above: every plain value takes the wrapping state of the value box, and that state draws its own lines rather than keeping a scroll container.
