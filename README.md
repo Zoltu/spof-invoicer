@@ -52,9 +52,9 @@ IPFS is a network that serves files from many computers rather than one company.
 If you do not know what IPFS is, use the hosted link below; it opens like any other website.
 The long code starting `bafybei…` names the same content in all three, so the copy you are served can be checked against it.
 
-- **Most people:** <https://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.zoltu.io/> works in any browser, because a public gateway serves it for you; that gateway is run by someone else and could change the files before serving them, so trust it only as far as you trust its operator.
-- **Already use IPFS:** <ipfs://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4> opens the same app through your own IPFS software.
-- **Run your own IPFS node:** <http://bafybeic2zbzrhdemxr7c5vfnvshwo4qfap7uolqyot3qlqhusxage4pmv4.ipfs.localhost:8080/> serves the app from your own computer.
+- **Most people:** <https://bafybeibadadj2aivnz5yuwgkpncwud4lyzw5523skzsrz6w5ua5nxzz47q.ipfs.zoltu.io/> works in any browser, because a public gateway serves it for you; that gateway is run by someone else and could change the files before serving them, so trust it only as far as you trust its operator.
+- **Already use IPFS:** <ipfs://bafybeibadadj2aivnz5yuwgkpncwud4lyzw5523skzsrz6w5ua5nxzz47q> opens the same app through your own IPFS software.
+- **Run your own IPFS node:** <http://bafybeibadadj2aivnz5yuwgkpncwud4lyzw5523skzsrz6w5ua5nxzz47q.ipfs.localhost:8080/> serves the app from your own computer.
 
 Whichever link you pick, the app needs a website whose pages you trust with the invoice: the invoice travels in the part of the link after the `#`, and any other page on the same website as the app would be trusted with it.
 A shared gateway gives the app an address of its own, but not a website of its own: it serves the app beside every other site it hosts, and its operator decides what that address returns, so with that link you trust that operator, just as the warning beside the hosted link says.
